@@ -1,0 +1,35 @@
+# 의존성
+node_modules/
+
+# 데이터베이스 (테스트 계정 정보 포함 → 절대 커밋 금지)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# API 키 (절대 커밋 금지)
+gemini_key.txt
+deepseek_key.txt
+.env
+.env.*
+
+# OS / 편집기
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Office 임시 잠금 파일
+~$*
+*.tmp
+
+# 로그
+*.log
+
+# slidep 캐시/중간 산출물
+**/.slidep/
+**/.cache/
+
+# 발표자료 이전 버전(최종 v5, 상세 v2 만 보관)
+docs/중간발표-10월26일/중간발표-8분-v3.pptx
+docs/중간발표-10월26일/중간발표-8분-v4.pptx

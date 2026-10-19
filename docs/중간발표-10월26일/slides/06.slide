@@ -1,0 +1,27 @@
+<Slide style={{ width:'1280px', height:'720px', padding:'44px', background:'#FFFFFF', fontFamily:'sans-serif' }}>
+  <Box style={{ width:'100%', height:'126px', justifyContent:'center' }}>
+    <Text style={{ fontSize:13, fontWeight:'bold', color:'#185FA5', letterSpacing:1.6 }}>01 · 기획</Text>
+    <Text style={{ fontSize:40, fontWeight:'bold', color:'#0B2136', marginTop:10, lineHeight:1.1 }}>재화(셀) 흐름 — 획득처와 소비처</Text>
+    <Text style={{ fontSize:18, color:'#64748B', marginTop:8 }}>획득처를 "수업이 있는 날"에서 "매일"로</Text>
+  </Box>
+  <Box style={{ width:'100%', height:'1px', background:'#E3EAF2' }} />
+  <Box style={{ width:'100%', height:'456px', marginTop:'18px' }}>
+
+    <Box style={{ width:'100%', height:'456px', flexDirection:'row', gap:22 }}>
+      <Box style={{ width:712, height:456, background:'#FFFCF5', borderRadius:16, padding:8, alignItems:'center', justifyContent:'center' }}>
+        <Image src="assets/cell.png" style={{ width:696, height:440, objectFit:'contain' }} />
+      </Box>
+      <Box style={{ flex:1, justifyContent:'center', gap:14 }}>
+        <Text style={{ fontSize:24, fontWeight:'bold', color:'#A06A00' }}>획득 6곳 · 소비 5곳</Text>
+        <Text style={{ fontSize:17, color:'#33475B', lineHeight:1.7 }}>가입 · 로봇 완성 · 매일 과제 · 미니게임 · 스트릭 · <b>수업 출석</b></Text>
+        <Text style={{ fontSize:17, color:'#33475B', lineHeight:1.7 }}>소비: 부품 · 장식 · 스킨 · 조각 교환</Text>
+        <Box style={{ height:1, background:'#E3EAF2' }} />
+        <Text style={{ fontSize:15, color:'#A32D2D', lineHeight:1.6 }}>조각 교환은 정가 기준 — 가격표가 유지됩니다</Text>
+      </Box>
+    </Box>
+  </Box>
+  <Box style={{ width:'100%', height:'28px', marginTop:14, flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
+    <Text style={{ fontSize:12, color:'#94A3B8' }}>㈜도로 × 한양대 ERICA IC-PBL · 루미(RooMi)</Text>
+    <Text style={{ fontSize:12, color:'#94A3B8' }}>6 / 13</Text>
+  </Box>
+</Slide>
