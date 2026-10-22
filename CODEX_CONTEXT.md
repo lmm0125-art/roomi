@@ -278,12 +278,12 @@ two bugs were previously caused by hardcoded `+50` / stale balances.
 | W3 strategy | done | ✅ |
 | W4–5 feature spec + 3 diagrams | done | ✅ (+ 2 ER diagrams) |
 | W6–7 skeleton | done | ✅ |
-| **W8–11 core loop** | in progress at midterm | ✅ **finished in W6 (≈3 weeks ahead)** |
+| **W8–11 core loop** | in progress at midterm | ✅ **finished in W6, before the W8–11 window** |
 | W12 internal test | — | 🟡 14 self-review rounds done (V2–V15) |
 | W13 effect measurement | — | 🔴 no data |
 | W14–15 final deck | — | 🟡 deck ready, 1 rehearsal |
 
-Midterm (10/26) requirement is 기획 / DB설계 / 데모 — already satisfied; demo is replaced by
+Midterm is W8 (10/26); requirement is 기획 / DB설계 / 데모 — already satisfied; demo is replaced by
 screenshots (user decision: no live 3D demo at midterm).
 
 ---
