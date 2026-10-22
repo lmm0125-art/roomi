@@ -987,6 +987,59 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   const smile = BABYLON.MeshBuilder.CreateTube('smile',{path:sPts, radius:0.013, tessellation:12, cap:BABYLON.Mesh.CAP_ALL},scene);
   smile.material = eyeMat; smile.metadata = {robot:true}; smile.parent = parent; smile.applyFog = false;
 
+  // ── 디테일 패스: 목·어깨·손·발·가슴 패널·귀 (기본 doro 템플릿) ──
+  //   기존엔 머리/몸통 캡슐 2개 + 막대 팔다리뿐이라 '점토 인형'처럼 보였다.
+  //   색은 사용자가 고른 팔레트(c)에서 파생만 시킨다(임의 색 금지).
+  const mixHex = (hex, k) => BABYLON.Color3.FromHexString(hex).scale(k).toHexString();
+  if (template === 'doro') {
+    const neckMat  = mat(mixHex(c.body, 0.80));
+    const trimMat  = mat(mixHex(c.body, 1.10));
+    const jointMat = mat(mixHex(c.arms, 0.92));
+
+    // 목: 머리와 몸 사이를 이어 '두 덩어리'가 아니라 한 몸으로 읽히게
+    const neck = add(BABYLON.MeshBuilder.CreateCylinder('neck', {height:0.16, diameterTop:0.34, diameterBottom:0.40, tessellation:24}, scene), neckMat);
+    neck.position.y = 1.52;
+
+    // 어깨 관절 + 손 (팔 끝을 둥글게 마감)
+    [-1, 1].forEach(function(side){
+      const sh = add(BABYLON.MeshBuilder.CreateSphere('shoulder'+side, {diameter:0.28, segments:20}, scene), jointMat);
+      sh.position.set(side*0.55, 1.24, 0);
+      const hand = add(BABYLON.MeshBuilder.CreateSphere('hand'+side, {diameter:0.30, segments:20}, scene), armMat);
+      hand.position.set(side*0.70, armY - armLen/2 - 0.02, 0);
+      hand.scaling.set(1, 0.92, 1);
+    });
+
+    // 발: 다리 끝에 앞으로 나온 둥근 발 — 접지감
+    [-1, 1].forEach(function(side){
+      const foot = add(BABYLON.MeshBuilder.CreateBox('foot'+side, {width:0.30, height:0.14, depth:0.40}, scene), legMat);
+      foot.position.set(side*0.28, 0.07, 0.06);
+      const toe = add(BABYLON.MeshBuilder.CreateSphere('toe'+side, {diameter:0.30, segments:18}, scene), legMat);
+      toe.position.set(side*0.28, 0.09, 0.25); toe.scaling.set(1, 0.5, 1);
+    });
+
+    // 가슴 패널: 작은 원판 + 발광 점 (로봇다운 '기계' 디테일)
+    const chestZ = bodyRx * Math.sqrt(Math.max(0.02, 1 - ((1.00 - bodyCy) / bodyRy) ** 2));
+    const plate = add(BABYLON.MeshBuilder.CreateCylinder('chest', {height:0.05, diameter:0.46, tessellation:28}, scene), trimMat);
+    plate.rotation.x = Math.PI/2; plate.position.set(0, 1.00, chestZ - 0.01);
+    const ring = add(BABYLON.MeshBuilder.CreateTorus('chestRing', {diameter:0.40, thickness:0.035, tessellation:28}, scene), neckMat);
+    ring.rotation.x = Math.PI/2; ring.position.set(0, 1.00, chestZ + 0.012);
+    const dot = add(BABYLON.MeshBuilder.CreateSphere('chestDot', {diameter:0.11, segments:14}, scene), glowMat);
+    dot.position.set(0, 1.00, chestZ + 0.035);
+
+    // 귀: 옆면 작은 원판 (안테나 색을 재사용해 팔레트 일관성 유지)
+    [-1, 1].forEach(function(side){
+      const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:0.26, tessellation:22}, scene), antMat);
+      ear.rotation.z = Math.PI/2;
+      ear.position.set(side*(0.54 + 0.03), hy + 0.02, 0);
+    });
+
+    // 눈 하이라이트 보조 (작은 점 하나 더 → 유리알 느낌)
+    [-1, 1].forEach(function(side){
+      const h2 = add(BABYLON.MeshBuilder.CreateSphere('hi2'+side, {diameter:0.045, segments:10}, scene), hiMat);
+      h2.position.set(side*0.265, hy + 0.035, eZ + 0.04); h2.scaling.z = 0.2;
+    });
+  }
+
   // ★ V9 성장 단계 반영 — 아기(1) / 청소년(2) / 성체(3)
   //   라벨만 바뀌고 로봇은 그대로이던 문제를 고친다(회사 기대효과 ① '성장 경험').
   //    주의: model.scaling.y 는 updateIdle 의 '호흡'이 매 프레임 다시 쓴다.
