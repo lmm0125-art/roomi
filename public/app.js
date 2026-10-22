@@ -176,12 +176,12 @@ document.addEventListener('click', e=>{
 
 $('#btn-sfx').addEventListener('click', ()=>{
   const on = SFX.toggle();
-  $('#btn-sfx').textContent = on ? '🔊' : '🔇';
+  $('#btn-sfx').textContent = on ? '' : '';
   $('#btn-sfx').title = on ? '소리 끄기' : '소리 켜기';
 });
 (function initSfxIcon(){
   const b = $('#btn-sfx'); if(!b) return;
-  b.textContent = SFX.on ? '🔊' : '🔇';
+  b.textContent = SFX.on ? '' : '';
   b.title = SFX.on ? '소리 끄기' : '소리 켜기';
 })();
 
@@ -193,7 +193,7 @@ function setBalance(v){
   const prev = state._lastBalance;
   state._lastBalance = v;
   $('#cell-balance').textContent = v;
-  if(prev != null && v > prev) SFX.coin();
+  if(prev != null && v> prev) SFX.coin();
 }
 function bubble(text){ const b=$('#bubble'); b.textContent=text; b.classList.remove('hidden');
   clearTimeout(b._t); b._t=setTimeout(()=>b.classList.add('hidden'), 4500); }
@@ -270,10 +270,10 @@ function openRecolor(){
   if(card && !$('#recolor-note')){
     const n = document.createElement('p');
     n.id = 'recolor-note'; n.className = 'hint recolor-note';
-    n.textContent = '🎨 색칠 고치기 — 마음에 들면 아래 저장 버튼을 눌러요!';
+    n.textContent = ' 색칠 고치기 — 마음에 들면 아래 저장 버튼을 눌러요!';
     card.insertBefore(n, card.firstChild);
   }
-  $('#btn-done').textContent = '저장! 🎨';
+  $('#btn-done').textContent = '저장! ';
   show('create');
 }
 // 수정 모드 종료(원래 만들기 화면 상태로 되돌린다)
@@ -281,7 +281,7 @@ function exitRecolor(){
   state.recolor = false;
   const tp = $('#template-picker'); if(tp) tp.classList.remove('hidden');
   const n = $('#recolor-note'); if(n) n.remove();
-  $('#btn-done').textContent = '완성! ✨';
+  $('#btn-done').textContent = '완성! ';
 }
 async function submitRecolor(){
   try{
@@ -290,7 +290,7 @@ async function submitRecolor(){
     absorbRobotMe(jr);
     if(bjs.ready && state.robot) rebuildRobot(state.robot);
     exitRecolor();
-    bubble('🎨 색칠을 바꿨어요!');
+    bubble(' 색칠을 바꿨어요!');
     goNav('workshop');
   }catch(e){ alert(e.message); }
 }
@@ -310,7 +310,7 @@ async function regeneratePersonality(){
   try{
     const r = await api('/api/workshop/regenerate', {}, 30000);
     if(state.robot){ state.robot.personality = r.personality; state.robot.greeting = r.greeting; }
-    bubble(`✨ 새 성격: ${r.personality}`);
+    bubble(` 새 성격: ${r.personality}`);
     loadWorkshop();
     if(state.robot) renderMyroom();
   }catch(e){ alert(e.message); }
@@ -318,15 +318,15 @@ async function regeneratePersonality(){
 }
 async function askRobot(){
   const q = $('#ws-q').value.trim();
-  if(q.length < 2) return alert('무엇이 궁금한지 한 줄로 적어줄래?');
+  if(q.length <2) return alert('무엇이 궁금한지 한 줄로 적어줄래?');
   const b = $('#ws-ask-btn');
   b.disabled = true; b.textContent = '생각하는 중…';
   const ans = $('#ws-answer');
   ans.classList.remove('hidden');
-  ans.textContent = '🤖 ...';
+  ans.textContent = ' ...';
   try{
     const r = await api('/api/workshop/ask', { question:q }, 30000);
-    ans.innerHTML = `<b>🤖 로봇의 대답</b><br>${esc(r.answer)}`;
+    ans.innerHTML = `<b> 로봇의 대답</b><br>${esc(r.answer)}`;
     $('#ws-q').value = '';
     $('#ws-ask-left').textContent = `오늘 ${r.left}번 더 물어볼 수 있어요 (하루 5번)`;
     if(r.left <= 0) b.disabled = true;
@@ -345,7 +345,7 @@ $('#mail-claim-all').addEventListener('click', async ()=>{
     const r = await api('/api/mailbox/claim-all', {});
     if(!r.count) return bubble('받을 선물이 없어요');
     setBalance(r.balance);
-    bubble(`🎁 ${r.count}통에서 ${r.cell}셀${r.items.length?' + '+r.items.join(', '):''} 받았어요!`);
+    bubble(` ${r.count}통에서 ${r.cell}셀${r.items.length?' + '+r.items.join(', '):''} 받았어요!`);
     loadMailbox();
   }catch(e){ alert(e.message); }
 });
@@ -360,9 +360,9 @@ async function loadMailbox(){
   $('#mail-summary').textContent = claimable.length ? `받을 선물 ${claimable.length}개` : '받을 선물이 없어요';
   $('#mail-claim-all').disabled = claimable.length === 0;
   $('#mail-list').innerHTML = j.mails.length ? j.mails.map(m=>{
-    const gift = [m.cell?`🪙 ${m.cell}셀`:'', m.item?`🎁 ${esc(m.item)}`:''].filter(Boolean).join(' · ');
-    const state_ = m.claimed ? '<span class="done">✅ 받음</span>'
-      : (gift ? `<button class="btn primary sm" data-claim="${m.id}">🎁 받기</button>` : '<span class="read">읽음</span>');
+    const gift = [m.cell?` ${m.cell}셀`:'', m.item?` ${esc(m.item)}`:''].filter(Boolean).join(' · ');
+    const state_ = m.claimed ? '<span class="done"> 받음</span>'
+      : (gift ? `<button class="btn primary sm" data-claim="${m.id}"> 받기</button>` : '<span class="read">읽음</span>');
     return `<div class="mail ${m.claimed?'is-done':''}">
       <div class="mail-head"><b>${esc(m.title)}</b><span class="ts">${esc(String(m.ts||'').slice(0,16))}</span></div>
       ${m.body?`<div class="mail-body">${esc(m.body)}</div>`:''}
@@ -375,7 +375,7 @@ async function loadMailbox(){
     try{
       const r = await api('/api/mailbox/claim', { id: Number(b.dataset.claim) });
       setBalance(r.balance);
-      bubble(`🎁 ${r.cell?`+${r.cell}셀 `:''}${r.item?`[${r.item}] `:''}받았어요!`);
+      bubble(` ${r.cell?`+${r.cell}셀 `:''}${r.item?`[${r.item}] `:''}받았어요!`);
       loadMailbox();
     }catch(e){ alert(e.message); b.disabled = false; }
   }));
@@ -397,13 +397,13 @@ async function loadClassCard(){
   let j;
   try{ j = await api('/api/class/status'); }catch(e){ return; }
   if(j.attended){
-    box.innerHTML = `<span class="em">🏫</span>
+    box.innerHTML = `<span class="em"></span>
       <div class="cc-body"><b>이번 주 수업 출석 완료!</b>
       <span>${esc(j.weekLabel)} · +${j.reward}셀 받았어요</span></div>
-      <span class="cc-done">✅</span>`;
+      <span class="cc-done"></span>`;
     return;
   }
-  box.innerHTML = `<span class="em">🏫</span>
+  box.innerHTML = `<span class="em"></span>
     <div class="cc-body"><b>이번 주 수업 출석하기</b>
     <span>${esc(j.hint)}</span></div>
     <div class="cc-act">
@@ -418,8 +418,8 @@ async function loadClassCard(){
     try{
       const r = await api('/api/class/attend', { code });
       setBalance(r.balance);
-      if(r.growth && r.growth.leveledUp) bubble(`🎉 Lv.${r.growth.level} 달성!`);
-      setTimeout(()=> bubble(`🏫 수업 출석 완료! +${r.reward}셀`), 300);
+      if(r.growth && r.growth.leveledUp) bubble(` Lv.${r.growth.level} 달성!`);
+      setTimeout(()=> bubble(` 수업 출석 완료! +${r.reward}셀`), 300);
       loadClassCard();
       if(state.user) state.user.cell_balance = r.balance;
     }catch(e){ alert(e.message); b.disabled = false; b.textContent = `출석 (+100셀)`; }
@@ -459,7 +459,7 @@ $('#btn-start').addEventListener('click', async ()=>{
     localStorage.setItem(SK.uid, j.user.id);
     localStorage.setItem(SK.nick, nick);
     localStorage.setItem(SK.token, j.user.token);
-    if(j.streakBonus) setTimeout(()=> bubble(`🔥 ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 800);
+    if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 800);
     // ★ P0-4 오버플레이: 서버가 오늘의 누적 플레이 시간을 알려준다.
     //   한도를 넘었으면 마이룸으로 보내지 않고 보호자 확인 화면을 띄운다.
     //   (서버가 play_minutes 를 직접 세므로 브라우저에서 조작할 수 없다)
@@ -541,7 +541,7 @@ async function verifyParent(){
     await api('/api/parent/verify', { a:_gate.a, b:_gate.b, token:_gate.token, answer:ans });
     msg.textContent = ''; msg.style.color = '#2b8a3e';
     closeParentGate();
-    bubble('부모 승인 완료! 오늘도 조금 더 놀자 😊');
+    bubble('부모 승인 완료! 오늘도 조금 더 놀자 ');
     // 잠금 해제 → 계속 진행
     if($('#overplay').classList.contains('hidden') === false) $('#overplay').classList.add('hidden');
     state.overLimit = false;
@@ -598,7 +598,7 @@ let _durationReported = false;
 function reportDuration(){
   if(_durationReported) return;                     // ★ 한 세션 1회만 전송
   const sec = Math.round((Date.now() - _sessionStart) / 1000);
-  if(sec < 3) return;                               // 3초 미만은 실측 오류
+  if(sec <3) return;                               // 3초 미만은 실측 오류
   _durationReported = true;
   const payload = Math.min(sec, 7200);
   const tk = localStorage.getItem(SK.token);
@@ -661,18 +661,18 @@ $('#btn-done').addEventListener('click', async ()=>{
   if(!name) return alert('로봇 이름을 지어주세요!');
   if(Object.keys(state.palette).length===0) return alert('색칠을 한 번 해보세요!');
   const btn = $('#btn-done');
-  btn.disabled = true; btn.textContent = '🤖 AI가 성격을 만드는 중...';
+  btn.disabled = true; btn.textContent = ' AI가 성격을 만드는 중...';
   try{
     const j = await api('/api/robots',{ name, template:state.template, palette:state.palette}, 45000);
     // ★ P0-2 레벨업 표시(첫 로봇 완성 = 가장 강한 " 성장" 신호)
     const up = j.growth && j.growth.leveledUp;
     $('#modal-body').innerHTML = `
-      <h2>${esc(name)} 완성! 🎉</h2>
+      <h2>${esc(name)} 완성! </h2>
       <div style="margin:12px 0">${robotSVG(state.template, state.palette)}</div>
       <p><b style="color:var(--primary)">성격: ${esc(j.personality)}</b></p>
       <p class="desc">${esc(j.desc)}</p>
       <p class="desc">"${esc(j.greeting)}"</p>
-      <div class="reward">🪙 +${esc(j.reward.cell)} 셀 · 🎁 부품 [${esc(j.reward.part)}] 획득!${up?` · ⭐ Lv.${esc(j.growth.level)} 달성!`:''}</div>`;
+      <div class="reward"> +${esc(j.reward.cell)} 셀 ·  부품 [${esc(j.reward.part)}] 획득!${up?` ·  Lv.${esc(j.growth.level)} 달성!`:''}</div>`;
     $('#modal').classList.remove('hidden');
     state.robot = { name, template:state.template, palette:state.palette, personality:j.personality, greeting:j.greeting };
     // ★ P1-2 잔액은 서버가 준 실제 값을 사용(예전엔 +50 하드코딩이라 어긋났음)
@@ -683,7 +683,7 @@ $('#btn-done').addEventListener('click', async ()=>{
     // 부품이 방금 지급되었으니 보너스를 다시 계산한다(0 이면 정상 — 아직 부품이 없을 수도)
     try{ state.growth = await api('/api/growth/me'); }catch(e){}
   }catch(e){ alert(e.message); }
-  btn.disabled = false; btn.textContent = '완성! ✨';
+  btn.disabled = false; btn.textContent = '완성! ';
 });
 $('#modal-ok').addEventListener('click', async ()=>{
   $('#modal').classList.add('hidden');
@@ -714,8 +714,8 @@ function renderStreakCal(){
     cells.push(`<span class="sc-cell ${cls}"><b>${rew}</b><i>${mark}</i></span>`);
   }
   const head = g.streak
-    ? `🔥 <b>${esc(g.streak)}일</b> 연속${g.streakNextReward ? ` · 내일 <b>+${esc(g.streakNextReward)}셀</b>` : ''}`
-    : `🔥 오늘 시작! 내일 <b>+${esc(table[2]||0)}셀</b>`;
+    ? ` <b>${esc(g.streak)}일</b> 연속${g.streakNextReward ? ` · 내일 <b>+${esc(g.streakNextReward)}셀</b>` : ''}`
+    : ` 오늘 시작! 내일 <b>+${esc(table[2]||0)}셀</b>`;
   el.innerHTML = `<div class="sc-head">${head}</div><div class="sc-row">${cells.join('')}</div>`;
 }
 
@@ -727,7 +727,7 @@ async function refreshGrowth(){
   const now = state.growth.stage || 1;
   if(now !== prev && bjs.ready && state.robot){
     rebuildRobot(state.robot);
-    setTimeout(()=>bubble(`🌱 ${({1:'아기',2:'청소년',3:'성체'})[now]} 로 자랐어!`), 700);
+    setTimeout(()=>bubble(` ${({1:'아기',2:'청소년',3:'성체'})[now]} 로 자랐어!`), 700);
   }
   return state.growth;
 }
@@ -750,12 +750,12 @@ function renderMyroom(){
   // ★ P0-2 성장 표시(레벨/단계/스트릭) — "어제보다 나아졌다" 를 child's 눈으로 보이게
   const stageKo = { 1:'아기', 2:'청소년', 3:'성체' }[g.stage||1] || '아기';
   // ★ 부품 보너스 표시: 부품을 산 이유를 수치로 보여준다(내일 다시 켜게 만드는 핵심)
-  const bonusLine = g.partBonus ? `<span class="pbonus" title="보유 부품이 오늘 과제 보상을 올려줘요">⚙️ 과제 +${esc(g.partBonus)}셀</span>` : '';
+  const bonusLine = g.partBonus ? `<span class="pbonus" title="보유 부품이 오늘 과제 보상을 올려줘요"> 과제 +${esc(g.partBonus)}셀</span>` : '';
   const growthBar = g.level ? `
     <div class="growth">
       <span class="lv">Lv.${esc(g.level)}</span>
       <span class="stage">${esc(stageKo)}</span>
-      ${g.streak?`<span class="streak">🔥 ${esc(g.streak)}일 연속</span>`:''}
+      ${g.streak?`<span class="streak"> ${esc(g.streak)}일 연속</span>`:''}
       ${bonusLine}
       <div class="expbar"><i style="width:${Math.min(100, Math.round((g.exp||0)/(g.expNeeded||100)*100))}%"></i></div>
     </div>` : '';
@@ -770,7 +770,7 @@ function renderMyroom(){
   try{ renderSteps(); }catch(e){ console.error('[renderSteps]', e); }
   mountRoom3D(r);                 // 3D 우선, 실패 시 SVG 폴백
   bubble(r.greeting);
-  setTimeout(()=>{ if(bjs.ready) bubble('드래그=회전 · 휠=확대/축소 · 오른쪽 드래그=이동 🙆'); }, 4600);
+  setTimeout(()=>{ if(bjs.ready) bubble('드래그=회전 · 휠=확대/축소 · 오른쪽 드래그=이동 '); }, 4600);
 }
 
 // ============================================================
@@ -817,13 +817,13 @@ function effectiveColors(template, palette){
 
 // 상점 부품 → 이름/설명 매핑 (3D 클릭 설명 + 미리보기 설명에 사용)
 const PART_INFO = {
-  '안테나 리본': { emoji:'🎀', desc:'머리끝에 매달린 분홍 리본. 로봇이 한층 귀여워져요!' },
-  '로켓 부스터': { emoji:'🚀', desc:'등 뒤에 달린 추진기! "최고 속도"를 자랑해요.' },
-  '나사 장식':   { emoji:'🔩', desc:'몸판에 박힌 은색 나사 4개. 튼튼한 로봇 느낌!' },
-  '별 스티커':   { emoji:'⭐', desc:'방을 꾸미는 별 스티커예요 (로봇에 직접 입히진 않아요).' },
-  '선물 상자':   { emoji:'🎁', desc:'특별한 선물 상자예요 (장식품).' },
+  '안테나 리본': { emoji:'', desc:'머리끝에 매달린 분홍 리본. 로봇이 한층 귀여워져요!' },
+  '로켓 부스터': { emoji:'', desc:'등 뒤에 달린 추진기! "최고 속도"를 자랑해요.' },
+  '나사 장식':   { emoji:'', desc:'몸판에 박힌 은색 나사 4개. 튼튼한 로봇 느낌!' },
+  '별 스티커':   { emoji:'', desc:'방을 꾸미는 별 스티커예요 (로봇에 직접 입히진 않아요).' },
+  '선물 상자':   { emoji:'', desc:'특별한 선물 상자예요 (장식품).' },
 };
-const ITEM_EMOJI = {'안테나 리본':'🎀','로켓 부스터':'🚀','나사 장식':'🔩','별 스티커':'⭐','선물 상자':'🎁'};
+const ITEM_EMOJI = {'안테나 리본':'','로켓 부스터':'','나사 장식':'','별 스티커':'','선물 상자':''};
 
 // 미세 입자(점토 질감) 노멀맵 — 씬마다 1장만 만들고 모든 재질이 공유 (순색 플라스틱 느낌 제거)
 // 주의: 구/캡슐 메시에 일반 UV 로 붙이면 UV 늘림으로 세로 줄무늬가 생긴다
@@ -989,7 +989,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
 
   // ★ V9 성장 단계 반영 — 아기(1) / 청소년(2) / 성체(3)
   //   라벨만 바뀌고 로봇은 그대로이던 문제를 고친다(회사 기대효과 ① '성장 경험').
-  //   ⚠ 주의: model.scaling.y 는 updateIdle 의 '호흡'이 매 프레임 다시 쓴다.
+  //    주의: model.scaling.y 는 updateIdle 의 '호흡'이 매 프레임 다시 쓴다.
   //     두 곳이 같은 값을 쓰면 반드시 깨진다(root.position.y 에서 겪은 문제).
   //     → 배율 G.s 를 여기서 x/y/z 모두 초기화하고,
   //       updateIdle 은 growthScale 을 곱한 값으로 '호흡만' 더한다(합의된 단일 공식).
@@ -1023,7 +1023,7 @@ function updateIdle(refs, t, talk){
   if(!refs) return;
   if(refs.model) refs.model.scaling.y = (refs.growthScale||1) * (1 + Math.sin(t*1.6)*0.013);  // 호흡 × 성장배율
   const cycle = 4.2, p = (t % cycle)/cycle;                             // 3~4초 간격 깜빡임
-  const blink = p < 0.045 ? Math.abs(Math.sin(p/0.045*Math.PI)) : 0;
+  const blink = p <0.045 ? Math.abs(Math.sin(p/0.045*Math.PI)) : 0;
   const eyeS = 1 - 0.88*blink;
   if(refs.eyeL) refs.eyeL.scaling.y = eyeS;
   if(refs.eyeR) refs.eyeR.scaling.y = eyeS;
@@ -1255,7 +1255,7 @@ function jumpRobot(){
     const x = (Math.random()*2-1) * WALK.X;
     const z = WALK.ZB + Math.random()*(WALK.ZF - WALK.ZB);
     // ★ V17 도착 시 70% 확률로 카메라(+z)를 바라본다 → 화면에 얼굴이 보이는 시간이 길어진다.
-    walkTo([x, z], Math.random() < 0.7 ? 0 : Math.PI*0.5*(Math.random()<0.5?-1:1));
+    walkTo([x, z], Math.random() <0.7 ? 0 : Math.PI*0.5*(Math.random()<0.5?-1:1));
   }
   // 매 프레임 호출: 이동/회전 보간
   function updateWalk(dt){
@@ -1265,7 +1265,7 @@ function jumpRobot(){
     if(_walk.active){
       const dx = _walk.tx - r.position.x, dz = _walk.tz - r.position.z;
       const dist = Math.hypot(dx, dz);
-      if(dist < 0.08){
+      if(dist <0.08){
         _walk.active = false; _walk.walking = false;
         // 도착 후엔 바라보는 각도만 살짝 맞는다
         if(_walk.face) r.rotation.y = _walk.face;
@@ -1290,8 +1290,8 @@ function jumpRobot(){
   // 각도 보간(최단 경로로 회전)
   function angleLerp(cur, want, k){
     let d = want - cur;
-    while(d >  Math.PI) d -= Math.PI*2;
-    while(d < -Math.PI) d += Math.PI*2;
+    while(d>  Math.PI) d -= Math.PI*2;
+    while(d <-Math.PI) d += Math.PI*2;
     return cur + d*k;
   }
 
@@ -1523,6 +1523,38 @@ function buildRoomProps(scene, M){
     o.rotation.y=b[4]*0.5;
   });
   addBlobShadow(scene, 2.05, -3.35, 0.22, 0.4);
+
+  // ── 책상 + 의자 (왼쪽 앞, 빈 공간 채우기) ──
+  const dkWood = propMat(scene, 'dkWood', '#C08A5A', 0.06);
+  const dkLeg  = propMat(scene, 'dkLeg',  '#8A6239', 0.05);
+  const dkPad  = propMat(scene, 'dkPad',  '#5C6E86', 0.05);
+  const DX = 3.30, DZ = -0.05;
+  const deskTop = box('deskTop', 0.92, 0.09, 2.10, DX, 1.02, DZ, dkWood);
+  [[-0.38,-0.92],[-0.38,0.92],[0.38,-0.92],[0.38,0.92]].forEach(function(q,i){
+    box('deskLeg'+i, 0.09, 0.98, 0.09, DX+q[0], 0.49, DZ+q[1], dkLeg);
+  });
+  box('chairPad', 0.46, 0.05, 0.48, DX-0.70, 0.635, DZ, dkPad);
+  box('deskDrawer', 0.03, 0.22, 0.55, DX+0.44, 0.88, DZ+0.55, dkLeg);
+  // 노트북(열린 상태) — 방에 '공부하는 자리'가 생긴다
+  box('lapBase', 0.42, 0.03, 0.60, DX-0.10, 1.08, DZ-0.45, dkPad);
+  const lapScr = box('lapScr', 0.42, 0.38, 0.03, DX-0.10, 1.27, DZ-0.72, dkPad);
+  lapScr.rotation.x = -0.24;
+  cyl('mugDesk', {height:0.15, diameter:0.13, tessellation:14}, DX+0.02, 1.15, DZ+0.55, M.bulb);
+  // 의자
+  box('chairSeat', 0.54, 0.06, 0.56, DX-0.70, 0.58, DZ, dkWood);
+  box('chairBack', 0.06, 0.42, 0.50, DX-0.94, 0.82, DZ, dkWood);
+  [[-0.24,-0.24],[-0.24,0.24],[0.24,-0.24],[0.24,0.24]].forEach(function(q,i){
+    box('chairLeg'+i, 0.055, 0.56, 0.055, DX-0.70+q[0], 0.28, DZ+q[1], dkLeg);
+  });
+  addBlobShadow(scene, DX-0.35, DZ, 1.30, 0.30);
+
+  // ── 러그 술 (양쪽 긴 변) ──
+  const fringe = propMat(scene, 'fringe', '#EFE6D8', 0.08);
+  for (let i=0;i<11;i++){
+    const z = -1.42 + i*0.284;
+    box('frL'+i, 0.07, 0.012, 0.04, -1.98, 0.012, z, fringe);
+    box('frR'+i, 0.07, 0.012, 0.04,  1.98, 0.012, z, fringe);
+  }
 
   // ── 로봇 발밑 접촉 그림자(실제 그림자와 보완 → 더 단단한 접지감) ──
   // ★ 로봇이 걸어다니면 그림자도 따라가야 한다. 방에 고정해 두면
@@ -1788,15 +1820,15 @@ function autoTuneQuality(engine, scene){
       try{ scene.onAfterRenderObservable.remove(obs); }catch(e){}
       const fps = frames / Math.max(0.5, (performance.now() - t0) / 1000);
       bjs.fps = Math.round(fps);
-      if(fps >= 24) return;                             // 충분히 부드러우면 그대로 둔다
+      if(fps>= 24) return;                             // 충분히 부드러우면 그대로 둔다
       bjs.lowPerf = true;
       try{ engine.setHardwareScalingLevel(1.4); }catch(e){}                                    // 1차: 해상도만 ↓
-      if(fps < 18){
+      if(fps <18){
         try{ if(scene.__shadow){ scene.__shadow.dispose(); scene.__shadow = null; } }catch(e){}  // 2차: 그림자
         try{ if(bjs.pipeline){ bjs.pipeline.dispose(); bjs.pipeline = null; } }catch(e){}        // 3차: 후처리
         try{ scene.particleSystems.slice().forEach(p=>p.dispose()); }catch(e){}                 // 4차: 먼지
       }
-      console.log('[성능] FPS', Math.round(fps), '→ 저사양 모드(해상도' + (fps < 18 ? '·그림자·후처리·먼지' : '') + ' 해제)');
+      console.log('[성능] FPS', Math.round(fps), '→ 저사양 모드(해상도' + (fps <18 ? '·그림자·후처리·먼지' : '') + ' 해제)');
     }, 2500);
   }, 1200);
 }
@@ -1816,11 +1848,11 @@ function startBabylon(canvas, robot, fallback){
     const fitRoomCamera = ()=>{
       const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
       const ar = w / h;
-      const r = Math.max(5.6, Math.min(9.4, 6.1 + (1.35 - ar) * 2.6));
+      const r = Math.max(5.4, Math.min(9.0, 5.85 + (1.35 - ar) * 2.5));
       cam.radius = r;
       cam.lowerRadiusLimit = Math.max(4.0, r * 0.72);
       cam.upperRadiusLimit = r * 1.55;
-      cam.beta = ar < 0.9 ? 1.24 : 1.30;
+      cam.beta = ar <0.9 ? 1.24 : 1.30;
     };
     fitRoomCamera();
     // 줌 한계 설정 (휠로 확대/축소)
@@ -1961,12 +1993,12 @@ function renderQuests(){
     const title = esc(q.title);
     if(q.type==='ai_mission' && !done){
       const tp = (state.growth && state.growth.topic) || null;
-      const chip = tp ? `<div class="aim-topic">📚 이번 주 주제 · ${esc(tp.topic)}</div>` : '';
-      return `<div class="quest-item aim">${chip}<div style="margin-bottom:6px">⭐ ${title}</div>
+      const chip = tp ? `<div class="aim-topic"> 이번 주 주제 · ${esc(tp.topic)}</div>` : '';
+      return `<div class="quest-item aim">${chip}<div style="margin-bottom:6px"> ${title}</div>
         <textarea id="ai-answer" rows="2" maxlength="120" placeholder="로봇에게 이야기해주세요!"></textarea>
-        <button class="btn primary" id="ai-submit" data-qid="${q.id}" style="width:100%;margin-top:6px">답하기 🪙 +${q.reward}</button></div>`;
+        <button class="btn primary" id="ai-submit" data-qid="${q.id}" style="width:100%;margin-top:6px">답하기  +${q.reward}</button></div>`;
     }
-    return `<div class="quest-item ${done?'done':''}"><span>${done?'✅':'⬜'} ${title}</span><span>🪙 +${q.reward}</span></div>`;
+    return `<div class="quest-item ${done?'done':''}"><span>${done?'':''} ${title}</span><span> +${q.reward}</span></div>`;
   }).join('');
   const btn = $('#ai-submit');
   if(btn) btn.addEventListener('click', submitAiMission);
@@ -1975,14 +2007,14 @@ async function submitAiMission(){
   const btn = $('#ai-submit'); if(btn.disabled) return;
   const answer = ($('#ai-answer')?$('#ai-answer').value:'').trim();
   if(!answer) return alert('로봇에게 이야기를 적어주세요!');
-  btn.disabled = true; btn.textContent = '🤖 로봇이 듣는 중...';
+  btn.disabled = true; btn.textContent = ' 로봇이 듣는 중...';
   try{
     const r = await api('/api/quest/answer',{answer});
     state.user.cell_balance = r.balance; setBalance(r.balance);
     state.quests.done.push(String(btn.dataset.qid)); renderQuests();
     bubble(r.reaction);
-    setTimeout(()=>bubble(r.bonus? `🪙 +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : `🪙 +${r.reward}셀 획득!`), 4500);
-  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='답하기 🪙 +30'; }
+    setTimeout(()=>bubble(r.bonus? ` +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : ` +${r.reward}셀 획득!`), 4500);
+  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='답하기  +30'; }
 }
 // ★ P1-8 이중 클릭 방지: 요청 중 버튼을 잠가 LLM 을 두 번 소모하지 않게 한다
 $$('.interact-row .btn').forEach(b=>b.addEventListener('click', async ()=>{
@@ -1995,7 +2027,7 @@ $$('.interact-row .btn').forEach(b=>b.addEventListener('click', async ()=>{
     walkTo([0, -0.2], 0);
     bubble(j.line); jumpRobot();
     // ★ P1-1 일일 한도 초과 안내
-    if(j.limited) setTimeout(()=>bubble('오늘은 정말 많이 했어! 내일 또 놀자 😊'), 1200);
+    if(j.limited) setTimeout(()=>bubble('오늘은 정말 많이 했어! 내일 또 놀자 '), 1200);
     const q = state.quests.list.find(x=>x.type===act);
     const doneIds = (state.quests.done||[]).map(Number);
     if(q && !doneIds.includes(q.id)){
@@ -2005,10 +2037,10 @@ $$('.interact-row .btn').forEach(b=>b.addEventListener('click', async ()=>{
       // ★ P0-2 레벨업 시 성장 알림
       if(r.growth && r.growth.leveledUp){
         SFX.levelup();
-        setTimeout(()=>bubble(`⭐ 레벨 업! Lv.${r.growth.level} 달성!`), 500);
+        setTimeout(()=>bubble(` 레벨 업! Lv.${r.growth.level} 달성!`), 500);
         await refreshGrowth();     // ★ V9: 단계가 바뀌면 3D 가 눈앞에서 자란다
       }
-      setTimeout(()=>bubble(r.bonus? `🪙 +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : `🪙 +${r.reward}셀 획득!`), 500);
+      setTimeout(()=>bubble(r.bonus? ` +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : ` +${r.reward}셀 획득!`), 500);
     }
   }catch(e){ alert(e.message); }
   finally{ b.disabled = false; }
@@ -2047,8 +2079,8 @@ async function submitGameResult(kind, payload, btn){
     await refreshGrowth();     // ★ V9: 단계가 바뀌면 3D 가 눈앞에서 자란다
     const detail = r.ms != null ? `${r.ms}ms` : `${r.level}단계`;
     const stage = kind==='reaction' ? $('#reflex-stage') : $('#memory-stage');
-    if(stage) stage.innerHTML = `🎉 보상 받음!<br>🪙 +${r.reward}셀 · +${r.growth.exp}XP`;
-    bubble(`🎮 ${r.label} ${detail}! 🪙 +${r.reward}셀 +${r.growth.exp}XP`);
+    if(stage) stage.innerHTML = ` 보상 받음!<br> +${r.reward}셀 · +${r.growth.exp}XP`;
+    bubble(` ${r.label} ${detail}!  +${r.reward}셀 +${r.growth.exp}XP`);
     // 1.6초 뒤에 창을 스스로 닫아 다음 판으로 이어지게 한다
     setTimeout(()=>{
       closeGame(kind==='reaction' ? 'game-reflex' : 'game-memory');
@@ -2087,7 +2119,7 @@ function reflexArm(){
   btn.textContent = '기다리는 중…';
   const delay = 1200 + Math.random()*3200;
   _rxTimer = setTimeout(()=>{
-    stage.className = 'game-stage go'; stage.textContent = '🟢 지금!';
+    stage.className = 'game-stage go'; stage.textContent = ' 지금!';
     rx.armedAt = performance.now();
     btn.textContent = '지금 누르기!';
   }, delay);
@@ -2101,7 +2133,7 @@ function finishReflex(){
   btn.disabled = false; btn.textContent = '시작하기';
   if(rx.best == null){
     stage.className = 'game-stage';
-    stage.textContent = '아이번엔 한 번도 성공하지 못했어요 😢 다시 도전해 볼래요?';
+    stage.textContent = '아이번엔 한 번도 성공하지 못했어요  다시 도전해 볼래요?';
     return;
   }
   btn.disabled = true; btn.textContent = '결과 제출 중...';
@@ -2117,10 +2149,10 @@ function reflexClick(){
     clearTimeout(_rxTimer);
     // ★ 실수도 한 판만 버리고 다음 판으로 진행(게임 전체를 초기화하지 않는다)
     stage.className = 'game-stage next';
-    stage.textContent = '아직 빨간불이야! 😵 이 판은 넘어갈게요';
+    stage.textContent = '아직 빨간불이야!  이 판은 넘어갈게요';
     rx.skipped++; rx.tries++; $('#reflex-tries').textContent = `시도 ${rx.tries}/3`;
     btn.textContent = '계속하기'; btn.disabled = false;
-    if(rx.tries >= 3){ finishReflex(); return; }
+    if(rx.tries>= 3){ finishReflex(); return; }
     _rxNext = setTimeout(()=>{ if(rx.running) reflexArm(); }, 1000);
     return;
   }
@@ -2130,19 +2162,19 @@ function reflexClick(){
   // 서버도 99999ms 상한과 '너무 빨랐어' 하한 검증을 함께 쓰므로 이중 안전장치다.
   // ★ 이때 게임을 끝내지 않는다 — 한 판만 건너뛰고 다음 판으로 진행시킨다.
   //   (이전처럼 rx.running=false 로 두면 시도 횟수까지 초기화되어 아이가 좌절한다)
-  if(ms < 0 || ms > 9000){
+  if(ms <0 || ms> 9000){
     stage.className = 'game-stage next';
     stage.textContent = '아까 누른 것 같아! 이 판은 넘어갈게요';
     rx.skipped++; rx.tries++; $('#reflex-tries').textContent = `시도 ${rx.tries}/3`;
     btn.textContent = '계속하기'; btn.disabled = false;
-    if(rx.tries >= 3){ finishReflex(); return; }
+    if(rx.tries>= 3){ finishReflex(); return; }
     _rxNext = setTimeout(()=>{ if(rx.running) reflexArm(); }, 1000);
     return;
   }
   rx.tries++;
   $('#reflex-tries').textContent = `시도 ${rx.tries}/3`;
-  if(rx.best == null || ms < rx.best){ rx.best = ms; $('#reflex-best').textContent = `최고 ${ms}ms`; }
-  if(rx.tries >= 3){
+  if(rx.best == null || ms <rx.best){ rx.best = ms; $('#reflex-best').textContent = `최고 ${ms}ms`; }
+  if(rx.tries>= 3){
     finishReflex();
     return;
   }else{
@@ -2211,7 +2243,7 @@ function memShow(){
 //   색각 보조의 목적이 '색 못 보는 아이가 구분하는 것' 인데,
 //   같은 모양이 겹치면 그 아이에게 오히려 더 혼란 → 접근성 기능이 무의미해진다.
 //   그래서 12개(최대 칸 수)를 확보하고, 그래도 부족하면 칸 수 자체를 줄인다.
-const MEM_SHAPES = ['●','▲','■','◆','★','♥','▶','◀','◉','△','▽','✦'];
+const MEM_SHAPES = ['●','▲','■','◆','★','','▶','◀','◉','△','▽',''];
   // 칸마다 서로 다른 모양 배정(색과 같은 방식으로 섞는다)
   mm.shapeOf = mm.colorOf.map((_, i)=>MEM_SHAPES[i % MEM_SHAPES.length]);
   // 각 칸 안에 모양 span 을 넣는다. 'showing' 동안만 보이며, 입력 단계에서는 숨겨진다
@@ -2224,8 +2256,8 @@ const MEM_SHAPES = ['●','▲','■','◆','★','♥','▶','◀','◉','△',
   const pads = [...stage.querySelectorAll('.pad')];
   let k = 0;
   const step = ()=>{
-    if(k > 0){ const prev = pads[mm.seq[k-1]]; if(prev){ prev.style.background = ''; prev.classList.remove('lit'); } }
-    if(k >= mm.seq.length){
+    if(k> 0){ const prev = pads[mm.seq[k-1]]; if(prev){ prev.style.background = ''; prev.classList.remove('lit'); } }
+    if(k>= mm.seq.length){
       stage.classList.remove('showing');
       stage.classList.add('input');
       mm.input = [];
@@ -2246,7 +2278,7 @@ function memPick(i){
   //   정답 후 620ms 안에 연타하면 mm.input 이 길어져
   //   mm.seq[나머지] === undefined 비교가 항상 실패 → 방금 이긴 판이 실패로 바뀐다.
   //   아이들은 연타가 많으므로 반드시 막아야 한다.
-  if(mm.input.length >= mm.seq.length) return;
+  if(mm.input.length>= mm.seq.length) return;
   const pads = stage.querySelectorAll('.pad');
   // V5: 클릭한 칸은 색뿐 아니라 모양도 함께 보여준다(색각 보조)
   if(pads[i]){ pads[i].style.background = mm.colorOf[i]; pads[i].classList.add('lit'); }
@@ -2258,10 +2290,10 @@ function memPick(i){
     // 다음 판이 시작되기 전에 입력을 비운다(연타 대비)
     mm.input = [];
     mm.level++;
-    if(mm.level >= MEM_MAX_LEVEL){
+    if(mm.level>= MEM_MAX_LEVEL){
       mm.running = false;
       stage.classList.remove('input');
-      stage.innerHTML = '🎉 완성!';
+      stage.innerHTML = ' 완성!';
       $('#memory-level').textContent = `${MEM_MAX_LEVEL}단계 도달!`;
       $('#memory-go').textContent = '결과 제출 중...'; $('#memory-go').disabled = true;
       submitGameResult('memory', { level: MEM_MAX_LEVEL }, $('#memory-go'));
@@ -2285,10 +2317,10 @@ function memFail(i){
   const answer = mm.seq.map((_, k)=>
     `<i class="pad${k===i?' wrong':''} lit" style="background:${mm.colorOf[k]}"><b class="sym">${mm.shapeOf[k]||''}</b></i>`).join('');
   stage.innerHTML = answer +
-    `<div class="fail">앗! ${i+1}번째부터 달라요 😅<br>` +
+    `<div class="fail">앗! ${i+1}번째부터 달라요 <br>` +
     `도달 단계 ${mm.level} · 다음에 다시 도전해 볼래요?</div>`;
   $('#memory-go').textContent = '다시 도전'; $('#memory-go').disabled = false;
-  if(mm.level >= 3) submitGameResult('memory', { level: mm.level }, $('#memory-go'));
+  if(mm.level>= 3) submitGameResult('memory', { level: mm.level }, $('#memory-go'));
 }
 
 // 미니게임 버튼 연결
@@ -2362,13 +2394,13 @@ async function loadShop(){
     //   숨기지 않고 보여줘야 "주말에 다시 오자"는 예고가 된다.
     const locked = it.available === false;
     return `<div class="item-card ${t.cls}${owned?' owned':''}${locked?' locked':''}">
-      <div class="em">${ITEM_EMOJI[it.name]||'🛍'}</div>
-      ${owned?'<span class="owned-badge">보유 ✅</span>':''}
-      ${locked?'<span class="owned-badge weekend">🔒 주말 한정</span>':(repeatable?'<span class="owned-badge repeat">반복 구매 가능</span>':'')}
+      <div class="em">${ITEM_EMOJI[it.name]||''}</div>
+      ${owned?'<span class="owned-badge">보유 </span>':''}
+      ${locked?'<span class="owned-badge weekend"> 주말 한정</span>':(repeatable?'<span class="owned-badge repeat">반복 구매 가능</span>':'')}
       <span class="tier ${t.cls}">${t.label}</span>
       <div class="nm">${esc(it.name)}</div>
       <div class="kind">${esc(kind)}</div>
-      <div class="price">🪙 ${it.price}</div>
+      <div class="price"> ${it.price}</div>
       ${locked?'<div class="lock-hint">토·일요일에만 살 수 있어요</div>':''}
       <div class="btn-row">
         ${(it.type==='skin'||it.type==='shard'||locked)?'':`<button class="btn ghost" data-preview="${it.id}">미리보기</button>`}
@@ -2428,13 +2460,13 @@ function closePreview(){
 function openPreview(item){
   const robot = state.robot || { template:'doro', palette:{} };
   const info = PART_INFO[item.name];
-  $('#preview-title').textContent = `${ITEM_EMOJI[item.name]||'🛍'} ${item.name}`;
+  $('#preview-title').textContent = `${ITEM_EMOJI[item.name]||''} ${item.name}`;
   $('#preview-desc').textContent = info ? info.desc : (item.type==='decor' ? '방을 꾸미는 장식품이에요.' : '');
   const owned = state.parts.includes(item.name);
   const buy = $('#preview-buy');
   buy.dataset.buy = item.id;
-  if(owned){ buy.textContent='보유 중 ✅'; buy.disabled=true; }
-  else { buy.textContent=`구매하기 🪙 ${item.price}`; buy.disabled=false; }
+  if(owned){ buy.textContent='보유 중 '; buy.disabled=true; }
+  else { buy.textContent=`구매하기  ${item.price}`; buy.disabled=false; }
   $('#preview-modal').classList.remove('hidden');
   // 장식은 로봇 없이 상품만 크게 전시(무엇을 사는지 명확히)
   const solo = item.type==='decor';
@@ -2495,8 +2527,8 @@ function buildPreviewScene(canvas, robot, parts, solo){
       const ped = scene.getMeshByName('pedestal');
       if(isFloat && ped) ped.setEnabled(false);
       let lift = 0;
-      if(mny < 0.3) lift = 0.1 - mny;              // 바닥 장식 → 받침대 위
-      else if(mny > 0.6) lift = 0.42 - mny;          // 공중 장식(별) → 눈높이 중앙
+      if(mny <0.3) lift = 0.1 - mny;              // 바닥 장식 → 받침대 위
+      else if(mny> 0.6) lift = 0.42 - mny;          // 공중 장식(별) → 눈높이 중앙
       shown.forEach(m=>{ m.position.x -= ox; m.position.z -= oz; m.position.y += lift; });
       // 별 스티커는 납작한 다면체라 recenter 후 옆면이 카메라를 향할 수 있다 → 정면으로 회전
       const cy = (mny+mxy)/2 + lift;
@@ -2534,7 +2566,7 @@ $('#preview-modal').addEventListener('click', e=>{ if(e.target.id==='preview-mod
 $('#preview-buy').addEventListener('click', async ()=>{
   if($('#preview-buy').disabled) return;
   try{ await buyItem($('#preview-buy').dataset.buy);
-    $('#preview-buy').textContent='보유 중 ✅'; $('#preview-buy').disabled=true;
+    $('#preview-buy').textContent='보유 중 '; $('#preview-buy').disabled=true;
   }catch(e){ alert(e.message); }
 });
 
@@ -2549,7 +2581,7 @@ async function loadBoard(){
   $('#board-stats').innerHTML = `
     <div class="stat hi"><b>${esc(s.returnRate)}%</b><span>재접속률</span>
       <span class="tagline">누적 ${esc(s.activeDays)}일 중 ${esc(Math.max(0,s.activeDays-1))}일 재방문</span></div>
-    ${s.streak?`<div class="stat"><b>🔥 ${esc(s.streak)}일</b><span>현재 연속</span>
+    ${s.streak?`<div class="stat"><b> ${esc(s.streak)}일</b><span>현재 연속</span>
       <span class="tagline">최대 기록은 계속 쌓여요</span></div>`:''}
     <div class="stat"><b>Lv.${esc(s.level)}</b><span>현재 레벨</span>
       <span class="tagline">${esc(s.exp)}/${esc(s.expNeeded)} XP</span></div>
@@ -2602,7 +2634,7 @@ function renderSteps(){
   state.quests.list.forEach(q=>{ if(q.type==='ai_mission') st.push({k:'quest', t:'AI 과제', d:done.has(q.id)}); });
   st.push({k:'game', t:'미니게임', d:false});
   const cur = st.findIndex(x=>!x.d);
-  const tip = cur === -1 ? '오늘 할 일을 다 했어요! 🎉' : null;
+  const tip = cur === -1 ? '오늘 할 일을 다 했어요! ' : null;
   box.innerHTML = st.map((x,i)=>
     `<span class="st ${x.d?'done':(i===cur?'now':'')}">
        <span class="dot">${x.d?'✓':i+1}</span>${esc(x.t)}
@@ -2627,25 +2659,25 @@ function renderOwned(){
     // 수량이 2개 이상이면 배지로 표시한다(V2-10).
     // 소비품을 여러 번 사도 '몇 개나 갖고 있는지' 가 안 보이면
     // 두 번 결제된 사실을 아이가 알아채기 어렵다.
-    const qtyBadge = q > 1 ? `<span class="qty">×${q}</span>` : '';
-    return `<div class="own"><span class="em">${ITEM_EMOJI[o.n]||'🛍'}</span>
+    const qtyBadge = q> 1 ? `<span class="qty">×${q}</span>` : '';
+    return `<div class="own"><span class="em">${ITEM_EMOJI[o.n]||''}</span>
       <span class="nm">${esc(o.n)}</span><span class="kind">${esc(o.kind)}</span>${qtyBadge}</div>`;
   }).join('');
   // 부품 조각 교환 진행도 + 교환 UI(V2-1)
   // ★ V4: 부품마다 필요한 조각 수가 다르다(가격 비례).
   //   예전엔 '3개면 아무 부품이나 교환' 이라 로켓 부스터를 절반 값에 살 수 있었다.
   const sp = state.shardProgress;
-  if(sp && sp.have > 0){
+  if(sp && sp.have> 0){
     const targets = (state.shardTargets||[]);
     // 현재 조각 수로 교환 가능한 부품만 고른다
-    const affordable = targets.filter(t=>sp.have >= t.need);
+    const affordable = targets.filter(t=>sp.have>= t.need);
     box.insertAdjacentHTML('beforeend', `
       <div class="own shard-box">
-        <span class="em">🔄</span>
+        <span class="em"></span>
         <span class="nm">부품 조각 ${sp.have}개</span>
         <div class="ex-list">
           ${targets.length ? targets.map(t=>{
-            const ok = sp.have >= t.need;
+            const ok = sp.have>= t.need;
             return `<button class="ex-item ${ok?'':'off'}" data-ex="${t.id}" ${ok?'':'disabled'}>
               <span class="nm">${esc(t.name)}</span>
               <span class="cost">조각 ${t.need}개</span>
@@ -2660,7 +2692,7 @@ function renderOwned(){
     b.disabled = true;
     try{
       const r = await api('/api/shop/exchange', { partId:Number(b.dataset.ex) });
-      bubble(`🔄 조각 ${r.used}개로 [${r.part}] 을 만들었어!`);
+      bubble(` 조각 ${r.used}개로 [${r.part}] 을 만들었어!`);
       const jr = await api('/api/robots/me');
       absorbRobotMe(jr);
       await api('/api/shop/exchange-info').then(info=>{
@@ -2681,7 +2713,7 @@ function renderOwned(){
     ex.disabled = true; ex.textContent = '교환 중…';
     try{
       const r = await api('/api/shop/exchange', { partId: 0 });
-      bubble(`🔄 조각 ${r.used}개로 [${r.part}] 을 만들었어!`);
+      bubble(` 조각 ${r.used}개로 [${r.part}] 을 만들었어!`);
       const jr = await api('/api/robots/me');
       absorbRobotMe(jr);
       await loadShardTargets();
@@ -2751,12 +2783,12 @@ $('#btn-demo').addEventListener('click', async ()=>{
     const u2 = await api('/api/user', { nickname: r.nickname });
     state.user = u2.user; state.quests = u2.quests || state.quests;
     if(u2.user.token) localStorage.setItem(SK.token, u2.user.token);
-    if(j.streakBonus) setTimeout(()=> bubble(`🔥 ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 800);
+    if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 800);
     startPlayTimer();
     await enter();
-    setTimeout(()=> bubble('🎬 데모 계정 · 최근 7일 성장 기록을 준비했어요'), 1400);
+    setTimeout(()=> bubble(' 데모 계정 · 최근 7일 성장 기록을 준비했어요'), 1400);
   }catch(e){ alert(e.message); }
-  finally{ b.disabled = false; b.textContent = '🎬 데모 계정으로 바로 보기'; }
+  finally{ b.disabled = false; b.textContent = ' 데모 계정으로 바로 보기'; }
 });
 
 // ---------- 자랑하기 (3D 화면을 그림으로 저장) ----------
@@ -2777,7 +2809,7 @@ $('#btn-share').addEventListener('click', ()=>{
     $('#share-desc').textContent = `${r.personality || ''} · ${(state.parts || []).length}개 부품`;
     $('#share-modal').classList.remove('hidden');
     SFX.correct();
-  }catch(e){ console.error('[share]', e); alert('자랑 카드를 만들지 못했어요 😢'); }
+  }catch(e){ console.error('[share]', e); alert('자랑 카드를 만들지 못했어요 '); }
 });
 $('#share-close').addEventListener('click', ()=> $('#share-modal').classList.add('hidden'));
 $('#share-modal').addEventListener('click', e=>{ if(e.target.id==='share-modal') $('#share-modal').classList.add('hidden'); });
@@ -2799,8 +2831,8 @@ async function openRank(){
       return `<div class="rk-block"><h4>${emoji} ${title}</h4>${rows}${mine}</div>`;
     };
     $('#rank-body').innerHTML =
-      block('반사 속도', '⚡', r.reaction, s=>`${s}ms`) +
-      block('기억 순서', '🧠', r.memory, s=>`${s}단계`) +
+      block('반사 속도', '', r.reaction, s=>`${s}ms`) +
+      block('기억 순서', '', r.memory, s=>`${s}단계`) +
       `<div class="rk-note">${esc(r.note || '')}</div>`;
   }catch(e){ $('#rank-body').innerHTML = '<div class="none">랭킹을 불러오지 못했어요</div>'; }
 }
@@ -2811,9 +2843,9 @@ $('#rank-modal').addEventListener('click', e=>{ if(e.target.id==='rank-modal') $
 // ---------- 첫 실행 온보딩 ----------
 // 실제 DOROBUS 는 첫 로그인 5단계 가이드가 있다. 여기선 3단계로 같은 역할을 한다.
 const OB_STEPS = [
-  { emoji:'🤖', title:'로봇을 만들어요', desc:'마음에 드는 로봇을 고르고, 색을 칠하고, 이름을 지어주세요.' },
-  { emoji:'📅', title:'매일 과제로 셀을 모아요', desc:'간식 주기 · 칭찬하기 · AI 과제 — 하루 3가지! 연속으로 오면 보상이 커져요.' },
-  { emoji:'🎨', title:'부품으로 꾸며요', desc:'모은 셀로 부품을 사서 로봇과 마이룸을 꾸밀 수 있어요.' },
+  { emoji:'', title:'로봇을 만들어요', desc:'마음에 드는 로봇을 고르고, 색을 칠하고, 이름을 지어주세요.' },
+  { emoji:'', title:'매일 과제로 셀을 모아요', desc:'간식 주기 · 칭찬하기 · AI 과제 — 하루 3가지! 연속으로 오면 보상이 커져요.' },
+  { emoji:'', title:'부품으로 꾸며요', desc:'모은 셀로 부품을 사서 로봇과 마이룸을 꾸밀 수 있어요.' },
 ];
 let obIdx = 0;
 function renderOnboard(){
@@ -2822,14 +2854,14 @@ function renderOnboard(){
   $('#ob-title').textContent = s.title;
   $('#ob-desc').textContent = s.desc;
   $('#ob-dots').innerHTML = OB_STEPS.map((_,i)=>`<i class="${i===obIdx?'on':''}"></i>`).join('');
-  $('#ob-next').textContent = (obIdx === OB_STEPS.length - 1) ? '시작하기 🚀' : '다음';
+  $('#ob-next').textContent = (obIdx === OB_STEPS.length - 1) ? '시작하기 ' : '다음';
 }
 function closeOnboard(){
   $('#onboard').classList.add('hidden');
   try{ localStorage.setItem('roomi_onboard', '1'); }catch(e){}
 }
 $('#ob-next').addEventListener('click', ()=>{
-  if(obIdx < OB_STEPS.length - 1){ obIdx++; renderOnboard(); SFX.click(); }
+  if(obIdx <OB_STEPS.length - 1){ obIdx++; renderOnboard(); SFX.click(); }
   else { closeOnboard(); SFX.start(); }
 });
 $('#ob-skip').addEventListener('click', closeOnboard);
@@ -2847,7 +2879,7 @@ $('#ob-skip').addEventListener('click', closeOnboard);
       const j = await api('/api/user',{nickname:nick});
       state.user=j.user; state.quests=j.quests||{list:[],done:[]};
       if(j.user.token) localStorage.setItem(SK.token, j.user.token);
-      if(j.streakBonus) setTimeout(()=> bubble(`🔥 ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 1200);
+      if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 1200);
       // ★ 오버플레이 차단은 자동 로그인 경로에도 반드시 적용한다.
       //   여기를 빠뜨리면 새로고침만으로 시간 제한을 우회할 수 있다.
       if(j.play && j.play.overLimit){
