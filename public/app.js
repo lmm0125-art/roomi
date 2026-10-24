@@ -913,7 +913,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     head = add(BABYLON.MeshBuilder.CreateCapsule('head',{radius:0.54,height:1.15,tessellation:32,capSubdivisions:12},scene), headMat); head.position.y=2.27;
     body = add(BABYLON.MeshBuilder.CreateCapsule('body',{radius:0.5,height:1.2,tessellation:32,capSubdivisions:12},scene), bodyMat); body.position.y=0.95;
     frontZ=0.5; backZ=0.5; fz=0.5;
-    armX=0.63; armY=1.05; armTilt=0.17; armLen=0.55;
+    armX=0.50; armY=1.00; armTilt=0.22; armLen=0.55;
     bodyRx=0.5; bodyRy=0.6; bodyCy=0.95;
   } else if(template==='boxy'){
     head = add(BABYLON.MeshBuilder.CreateBox('head',{width:1.1,height:1.05,depth:0.95},scene), headMat); head.position.y=2.15;
@@ -1010,12 +1010,12 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     const neck = add(BABYLON.MeshBuilder.CreateCylinder('neck', {height:0.24, diameterTop:0.36, diameterBottom:0.46, tessellation:24}, scene), neckMat);
     neck.position.y = 1.585;
 
-    // 어깨 관절 + 손 (팔 끝을 둥글게 마감)
+    // 팔: 몸에서 바로 나오게(어깨 구체 제거) + 뿌리에 이음매 링
+    //   구체를 붙이면 '공을 붙인' 것처럼 보이고, 팔과의 사이에 틈이 생긴다.
+    const cuffMat = mat(mixHex(c.body, 0.82));
     [-1, 1].forEach(function(side){
-      const sh = add(BABYLON.MeshBuilder.CreateSphere('shoulder'+side, {diameter:0.28, segments:20}, scene), jointMat);
-      sh.position.set(side*0.55, 1.24, 0);
-      const hand = add(BABYLON.MeshBuilder.CreateSphere('hand'+side, {diameter:0.30, segments:20}, scene), armMat);
-      hand.position.set(side*0.70, armY - armLen/2 - 0.02, 0);
+      const hand = add(BABYLON.MeshBuilder.CreateSphere('hand'+side, {diameter:0.29, segments:20}, scene), armMat);
+      hand.position.set(side*(armX + Math.sin(armTilt)*(armLen/2)), armY - Math.cos(armTilt)*(armLen/2) - 0.01, 0);
       hand.scaling.set(1, 0.92, 1);
     });
 
