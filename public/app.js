@@ -938,7 +938,9 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   }
   const hy = head.position.y;
   // 안테나
-  const antRod = add(BABYLON.MeshBuilder.CreateCylinder('ant',{height:0.45,diameter:0.07,tessellation:20},scene), antMat); antRod.position.y = hy+0.62;
+  const antRod = add(BABYLON.MeshBuilder.CreateCylinder('ant',{height:0.45,diameterTop:0.045,diameterBottom:0.085,tessellation:20},scene), antMat); antRod.position.y = hy+0.62;
+  const antBase = add(BABYLON.MeshBuilder.CreateCylinder('antBase', {height:0.06, diameter:0.15, tessellation:16}, scene), mat(BABYLON.Color3.FromHexString(c.antenna).scale(0.85).toHexString()));
+  antBase.position.y = hy + 0.40;
   const glowMat = mat(c.antenna); glowMat.emissiveColor = BABYLON.Color3.FromHexString(c.antenna).scale(0.55); // 에너지 볼 빛
   const antBall = add(BABYLON.MeshBuilder.CreateSphere('antb',{diameter:0.2,segments:20},scene), glowMat); antBall.position.y = hy+0.92;
   // 팔: 몸에 붙은 캡슐 팔 (위쪽이 몸쪽으로 살짝 기울어짐) / boxy 는 어깨 축 바 유지
@@ -987,6 +989,14 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   const smile = BABYLON.MeshBuilder.CreateTube('smile',{path:sPts, radius:0.013, tessellation:12, cap:BABYLON.Mesh.CAP_ALL},scene);
   smile.material = eyeMat; smile.metadata = {robot:true}; smile.parent = parent; smile.applyFog = false;
 
+  if (template === 'doro') {
+    [-1, 1].forEach(function(side){
+      const rim = add(BABYLON.MeshBuilder.CreateTorus('eyeRim'+side, {diameter:0.26, thickness:0.022, tessellation:22}, scene), mat('#2A3A4B'));
+      rim.rotation.x = Math.PI/2;
+      rim.position.set(side*0.23, hy + 0.08, eZ + 0.012);
+    });
+  }
+
   // ── 디테일 패스: 목·어깨·손·발·가슴 패널·귀 (기본 doro 템플릿) ──
   //   기존엔 머리/몸통 캡슐 2개 + 막대 팔다리뿐이라 '점토 인형'처럼 보였다.
   //   색은 사용자가 고른 팔레트(c)에서 파생만 시킨다(임의 색 금지).
@@ -1019,20 +1029,23 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
       heel.scaling.set(0.92, 0.55, 0.9);
     });
 
-    // 가슴 패널: 작은 원판 + 발광 점 (로봇다운 '기계' 디테일)
+    // 가슴 해치: 베젤 → 어두운 화면 → 발광 점 (3단이라 '부품'처럼 읽힌다)
     const chestZ = bodyRx * Math.sqrt(Math.max(0.02, 1 - ((0.96 - bodyCy) / bodyRy) ** 2));
-    const plate = add(BABYLON.MeshBuilder.CreateCylinder('chest', {height:0.05, diameter:0.40, tessellation:28}, scene), trimMat);
-    plate.rotation.x = Math.PI/2; plate.position.set(0, 0.96, chestZ + 0.015);
-    const ring = add(BABYLON.MeshBuilder.CreateTorus('chestRing', {diameter:0.32, thickness:0.040, tessellation:28}, scene), mat(mixHex(c.body, 0.68)));
-    ring.rotation.x = Math.PI/2; ring.position.set(0, 0.96, chestZ + 0.045);
-    const dot = add(BABYLON.MeshBuilder.CreateSphere('chestDot', {diameter:0.13, segments:14}, scene), glowMat);
-    dot.position.set(0, 0.96, chestZ + 0.070);
+    const bezel = add(BABYLON.MeshBuilder.CreateSphere('chestBezel', {diameter:0.50, segments:26}, scene), trimMat);
+    bezel.position.set(0, 0.96, chestZ + 0.005); bezel.scaling.set(1.0, 0.80, 0.22);
+    const screen = add(BABYLON.MeshBuilder.CreateSphere('chestScreen', {diameter:0.34, segments:24}, scene), mat('#22303F'));
+    screen.position.set(0, 0.96, chestZ + 0.050); screen.scaling.set(1.0, 0.72, 0.14);
+    const dot = add(BABYLON.MeshBuilder.CreateSphere('chestDot', {diameter:0.10, segments:14}, scene), glowMat);
+    dot.position.set(0, 0.98, chestZ + 0.082);
 
     // 귀: 옆면 작은 원판 (안테나 색을 재사용해 팔레트 일관성 유지)
     [-1, 1].forEach(function(side){
-      const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.09, diameter:0.22, tessellation:22}, scene), jointMat);
+      const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:0.24, tessellation:22}, scene), jointMat);
       ear.rotation.z = Math.PI/2;
-      ear.position.set(side*0.535, hy - 0.10, 0);
+      ear.position.set(side*0.545, hy - 0.10, 0);
+      const earCap = add(BABYLON.MeshBuilder.CreateCylinder('earCap'+side, {height:0.11, diameter:0.13, tessellation:18}, scene), mat('#2A3A4B'));
+      earCap.rotation.z = Math.PI/2;
+      earCap.position.set(side*0.552, hy - 0.10, 0);
     });
 
     // 눈 하이라이트 보조 (작은 점 하나 더 → 유리알 느낌)
