@@ -906,6 +906,8 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   const hiMat=mat('#ffffff'); hiMat.emissiveColor=new BABYLON.Color3(1,1,1); // 눈 하이라이트는 항상 밝게
   const add=(mesh,material)=>{ mesh.material=material; mesh.metadata={robot:true}; mesh.parent=parent; mesh.applyFog=false; return mesh; }; // 안개는 바닥에만 적용(로봇 색 보존)
 
+  // 비율 규격(docs/캐릭터-비율-규격.md): 머리 1.05~1.15W · 팔 .45~.55H
+  // 팔 뿌리 x 는 0.50~0.60W(반폭) 안쪽 → 몸에 묻혀야 자연스럽다
   let head, body, frontZ, backZ, fz, armX, armY, armTilt, armLen, bodyRx, bodyRy, bodyCy;
   const outlineMeshes = []; // 잉크 외곽선은 박스에만
   if(template==='doro'){
@@ -920,13 +922,13 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     body = add(BABYLON.MeshBuilder.CreateBox('body',{width:0.95,height:1.25,depth:0.9},scene), bodyMat); body.position.y=0.95;
     outlineMeshes.push(head, body);
     frontZ=0.45; backZ=0.45; fz=0.43;
-    armX=0.70; armY=1.32; armTilt=0.04; armLen=0.6;
+    armX=0.52; armY=1.10; armTilt=0.10; armLen=0.66;
     bodyRx=0.475; bodyRy=0.625; bodyCy=0.95;
   } else if(template==='roundy'){
     head = add(BABYLON.MeshBuilder.CreateSphere('head',{diameter:1.20,segments:32},scene), headMat); head.position.y=2.06; head.scaling.y=0.95;
     body = add(BABYLON.MeshBuilder.CreateSphere('body',{diameter:1.15,segments:32},scene), bodyMat); body.position.y=0.92; body.scaling.set(1.05,0.9,1.05);
     frontZ=0.604; backZ=0.604; fz=0.55;
-    armX=0.72; armY=0.98; armTilt=0.15; armLen=0.55;
+    armX=0.62; armY=1.00; armTilt=0.16; armLen=0.55;
     bodyRx=0.604; bodyRy=0.5175; bodyCy=0.92;
   } else { // tally
     head = add(BABYLON.MeshBuilder.CreateSphere('head',{diameter:1.15,segments:32},scene), headMat); head.position.y=2.3;
