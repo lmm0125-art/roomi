@@ -923,7 +923,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     armX=0.70; armY=1.32; armTilt=0.04; armLen=0.6;
     bodyRx=0.475; bodyRy=0.625; bodyCy=0.95;
   } else if(template==='roundy'){
-    head = add(BABYLON.MeshBuilder.CreateSphere('head',{diameter:1.3,segments:32},scene), headMat); head.position.y=2.1; head.scaling.y=0.95;
+    head = add(BABYLON.MeshBuilder.CreateSphere('head',{diameter:1.20,segments:32},scene), headMat); head.position.y=2.06; head.scaling.y=0.95;
     body = add(BABYLON.MeshBuilder.CreateSphere('body',{diameter:1.15,segments:32},scene), bodyMat); body.position.y=0.92; body.scaling.set(1.05,0.9,1.05);
     frontZ=0.604; backZ=0.604; fz=0.55;
     armX=0.72; armY=0.98; armTilt=0.15; armLen=0.55;
@@ -948,19 +948,26 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     const axle = add(BABYLON.MeshBuilder.CreateCylinder('axle',{height:1.45,diameter:0.16,tessellation:20},scene), armMat);
     axle.rotation.z = Math.PI/2; axle.position.set(0,1.55,0);
   }
-  const armL = add(BABYLON.MeshBuilder.CreateCapsule('armL',{radius:0.12,height:armLen,tessellation:24,capSubdivisions:8},scene), armMat);
+  // boxy 는 각진 기둥, 나머지는 둥근 캡슐 (몸통 형태와 재질감을 맞춘다)
+  const armGeo = template === 'boxy'
+    ? n => { const b = BABYLON.MeshBuilder.CreateBox(n, {width:0.22, height:armLen, depth:0.22}, scene); return add(b, armMat); }
+    : n => { const c = BABYLON.MeshBuilder.CreateCapsule(n,{radius:0.12,height:armLen,tessellation:24,capSubdivisions:8},scene); return add(c, armMat); };
+  const armL = armGeo('armL');
   armL.position.set(-armX,armY,0); armL.rotation.z = -armTilt;
-  const armR = add(BABYLON.MeshBuilder.CreateCapsule('armR',{radius:0.12,height:armLen,tessellation:24,capSubdivisions:8},scene), armMat);
+  const armR = armGeo('armR');
   armR.position.set(armX,armY,0); armR.rotation.z = armTilt;
   // 다리: 캡슐 — 2D 의 둥근 다리처럼 지면까지 (별도 발 없음 = 박스+타원 어긋남 제거)
-  const legL = add(BABYLON.MeshBuilder.CreateCapsule('legL',{radius:0.13,height:0.34,tessellation:24,capSubdivisions:8},scene), legMat); legL.position.set(-0.27,0.30,0);
-  const legR = add(BABYLON.MeshBuilder.CreateCapsule('legR',{radius:0.13,height:0.34,tessellation:24,capSubdivisions:8},scene), legMat); legR.position.set(0.27,0.30,0);
+  const legGeo = template === 'boxy'
+    ? n => add(BABYLON.MeshBuilder.CreateBox(n, {width:0.20, height:0.34, depth:0.20}, scene), legMat)
+    : n => add(BABYLON.MeshBuilder.CreateCapsule(n,{radius:0.13,height:0.34,tessellation:24,capSubdivisions:8},scene), legMat);
+  const legL = legGeo('legL'); legL.position.set(-0.27,0.30,0);
+  const legR = legGeo('legR'); legR.position.set(0.27,0.30,0);
   // 얼굴: 머리 표면에 "붙인" 렌즈형 부품 — 옆에서 봐도 돌출되지 않게 z 축 납작 + 표면 안쪽 매립
   let surfZ; // 머리 중심 기준 (dx,dy) → 표면 z
   if(template==='boxy'){ surfZ = ()=>0.475; }
   else {
-    const hr = template==='roundy' ? 0.65 : template==='tally' ? 0.575 : 0.54; // x/z 반경
-    const hyr = template==='roundy' ? 0.6175 : hr;                             // y 반경
+    const hr = template==='roundy' ? 0.60 : template==='tally' ? 0.575 : 0.54; // x/z 반경
+    const hyr = template==='roundy' ? 0.570 : hr;                             // y 반경
     surfZ = (dx,dy)=> hr*Math.sqrt(Math.max(0.04, 1-(dx/hr)**2-(dy/hyr)**2));
   }
   const eyeD=0.22, chD=0.18;
@@ -989,63 +996,97 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   const smile = BABYLON.MeshBuilder.CreateTube('smile',{path:sPts, radius:0.013, tessellation:12, cap:BABYLON.Mesh.CAP_ALL},scene);
   smile.material = eyeMat; smile.metadata = {robot:true}; smile.parent = parent; smile.applyFog = false;
 
-  if (template === 'doro') {
-    [-1, 1].forEach(function(side){
-      const rim = add(BABYLON.MeshBuilder.CreateTorus('eyeRim'+side, {diameter:0.26, thickness:0.022, tessellation:22}, scene), mat('#2A3A4B'));
-      rim.rotation.x = Math.PI/2;
-      rim.position.set(side*0.23, hy + 0.08, eZ + 0.012);
-    });
-  }
-
-  // ── 디테일 패스: 목·어깨·손·발·가슴 패널·귀 (기본 doro 템플릿) ──
-  //   기존엔 머리/몸통 캡슐 2개 + 막대 팔다리뿐이라 '점토 인형'처럼 보였다.
-  //   색은 사용자가 고른 팔레트(c)에서 파생만 시킨다(임의 색 금지).
+  // ── 디테일 패스: 목·손·발·귀·눈테두리 ──
+  //   네 템플릿이 같은 규칙을 쓰고, 치수만 표에서 가져온다.
+  //   (doro 만 적용되던 시절엔 나머지 셋이 '막대 다리'로 남아 완성도가 달라 보였다)
   const mixHex = (hex, k) => BABYLON.Color3.FromHexString(hex).scale(k).toHexString();
-  if (template === 'doro') {
+  const P = {
+    doro:   { neck:{shape:'cyl', h:0.24, top:0.36, bot:0.46, y:1.585}, hand:0.29,
+              foot:{shape:'round', d:0.32, x:0.27, y:0.11, z:0.06, heel:0.24, hx:0.27, hz:-0.09},
+              ear:{shape:'cyl', d:0.24, x:0.545, y:-0.10}, rim:0.26 },
+    roundy: { neck:{shape:'cyl', h:0.20, top:0.30, bot:0.40, y:1.46}, hand:0.28,
+              foot:{shape:'round', d:0.30, x:0.30, y:0.105, z:0.05, heel:0.22, hx:0.30, hz:-0.08},
+              ear:{shape:'cyl', d:0.22, x:0.575, y:-0.08}, rim:0.26 },
+    boxy:   { neck:{shape:'box', w:0.52, h:0.18, d:0.46, y:1.60}, hand:0.28,
+              foot:{shape:'box', w:0.36, h:0.15, d:0.48, x:0.28, y:0.075, z:0.06},
+              ear:{shape:'box', w:0.06, h:0.26, d:0.26, x:0.57, y:-0.02}, rim:0 },
+    tally:  { neck:null, hand:0.24,
+              foot:{shape:'round', d:0.24, x:0.22, y:0.105, z:0.05, heel:0.18, hx:0.22, hz:-0.07},
+              ear:{shape:'cyl', d:0.18, x:0.46, y:-0.10}, rim:0.20 }
+  }[template] || null;
+
+  if (P) {
     const neckMat  = mat(mixHex(c.body, 0.80));
-    const trimMat  = mat(mixHex(c.body, 1.10));
     const jointMat = mat(mixHex(c.arms, 0.92));
+    const capMat   = mat('#2A3A4B');
 
-    // 목: 머리와 몸 사이를 이어 '두 덩어리'가 아니라 한 몸으로 읽히게
-    const neck = add(BABYLON.MeshBuilder.CreateCylinder('neck', {height:0.24, diameterTop:0.36, diameterBottom:0.46, tessellation:24}, scene), neckMat);
-    neck.position.y = 1.585;
+    // 목
+    if (P.neck) {
+      if (P.neck.shape === 'box') {
+        const nb = add(BABYLON.MeshBuilder.CreateBox('neck', {width:P.neck.w, height:P.neck.h, depth:P.neck.d}, scene), neckMat);
+        nb.position.y = P.neck.y;
+      } else {
+        const nc = add(BABYLON.MeshBuilder.CreateCylinder('neck', {height:P.neck.h, diameterTop:P.neck.top, diameterBottom:P.neck.bot, tessellation:24}, scene), neckMat);
+        nc.position.y = P.neck.y;
+      }
+    }
 
-    // 팔: 몸에서 바로 나오게(어깨 구체 제거) + 뿌리에 이음매 링
-    //   구체를 붙이면 '공을 붙인' 것처럼 보이고, 팔과의 사이에 틈이 생긴다.
-    const cuffMat = mat(mixHex(c.body, 0.82));
+    // 손 (팔 끝을 둥글게 마감)
     [-1, 1].forEach(function(side){
-      const hand = add(BABYLON.MeshBuilder.CreateSphere('hand'+side, {diameter:0.29, segments:20}, scene), armMat);
+      const hand = template === 'boxy'
+        ? add(BABYLON.MeshBuilder.CreateBox('hand'+side, {size:P.hand*0.92}, scene), armMat)
+        : add(BABYLON.MeshBuilder.CreateSphere('hand'+side, {diameter:P.hand, segments:20}, scene), armMat);
       hand.position.set(side*(armX + Math.sin(armTilt)*(armLen/2)), armY - Math.cos(armTilt)*(armLen/2) - 0.01, 0);
       hand.scaling.set(1, 0.92, 1);
     });
 
-    // 발: 다리 끝에 앞으로 나온 둥근 발 — 접지감
+    // 발
     [-1, 1].forEach(function(side){
-      const foot = add(BABYLON.MeshBuilder.CreateSphere('foot'+side, {diameter:0.32, segments:22}, scene), legMat);
-      foot.position.set(side*0.27, 0.11, 0.06);
-      foot.scaling.set(1.0, 0.62, 1.5);          // 납작하고 앞으로 긴 '신발' 실루엣
-      const heel = add(BABYLON.MeshBuilder.CreateSphere('heel'+side, {diameter:0.24, segments:16}, scene), legMat);
-      heel.position.set(side*0.27, 0.10, -0.09);
-      heel.scaling.set(0.92, 0.55, 0.9);
+      if (P.foot.shape === 'box') {
+        const fb = add(BABYLON.MeshBuilder.CreateBox('foot'+side, {width:P.foot.w, height:P.foot.h, depth:P.foot.d}, scene), legMat);
+        fb.position.set(side*P.foot.x, P.foot.y, P.foot.z);
+      } else {
+        const foot = add(BABYLON.MeshBuilder.CreateSphere('foot'+side, {diameter:P.foot.d, segments:22}, scene), legMat);
+        foot.position.set(side*P.foot.x, P.foot.y, P.foot.z);
+        foot.scaling.set(1.0, 0.62, 1.5);
+        const heel = add(BABYLON.MeshBuilder.CreateSphere('heel'+side, {diameter:P.foot.heel, segments:16}, scene), legMat);
+        heel.position.set(side*P.foot.hx, P.foot.y - 0.005, P.foot.hz);
+        heel.scaling.set(0.92, 0.55, 0.9);
+      }
     });
 
-
-    // 귀: 옆면 작은 원판 (안테나 색을 재사용해 팔레트 일관성 유지)
+    // 귀
     [-1, 1].forEach(function(side){
-      const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:0.24, tessellation:22}, scene), jointMat);
-      ear.rotation.z = Math.PI/2;
-      ear.position.set(side*0.545, hy - 0.10, 0);
-      const earCap = add(BABYLON.MeshBuilder.CreateCylinder('earCap'+side, {height:0.11, diameter:0.13, tessellation:18}, scene), mat('#2A3A4B'));
-      earCap.rotation.z = Math.PI/2;
-      earCap.position.set(side*0.552, hy - 0.10, 0);
+      const e = P.ear;
+      if (e.shape === 'box') {
+        const eb = add(BABYLON.MeshBuilder.CreateBox('ear'+side, {width:e.w, height:e.h, depth:e.d}, scene), jointMat);
+        eb.position.set(side*e.x, hy + e.y, 0);
+      } else {
+        const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:e.d, tessellation:22}, scene), jointMat);
+        ear.rotation.z = Math.PI/2;
+        ear.position.set(side*e.x, hy + e.y, 0);
+        const earCap = add(BABYLON.MeshBuilder.CreateCylinder('earCap'+side, {height:0.11, diameter:e.d*0.55, tessellation:18}, scene), capMat);
+        earCap.rotation.z = Math.PI/2;
+        earCap.position.set(side*(e.x + 0.007), hy + e.y, 0);
+      }
     });
 
-    // 눈 하이라이트 보조 (작은 점 하나 더 → 유리알 느낌)
+    // 눈 테두리 (평면 얼굴인 boxy 는 제외)
+    if (P.rim > 0) {
+      [-1, 1].forEach(function(side){
+        const rim = add(BABYLON.MeshBuilder.CreateTorus('eyeRim'+side, {diameter:P.rim, thickness:0.022, tessellation:22}, scene), capMat);
+        rim.rotation.x = Math.PI/2;
+        rim.position.set(side*0.23, hy + 0.08, eZ + 0.012);
+      });
+    }
+
+    // 눈 보조 하이라이트
     [-1, 1].forEach(function(side){
       const h2 = add(BABYLON.MeshBuilder.CreateSphere('hi2'+side, {diameter:0.045, segments:10}, scene), hiMat);
       h2.position.set(side*0.265, hy + 0.035, eZ + 0.04); h2.scaling.z = 0.2;
     });
   }
+
 
   // ★ V9 성장 단계 반영 — 아기(1) / 청소년(2) / 성체(3)
   //   라벨만 바뀌고 로봇은 그대로이던 문제를 고친다(회사 기대효과 ① '성장 경험').
@@ -1077,6 +1118,10 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
            growthScale: G.s,   // 호흡이 scaling.y 에 곱한다(성장 배율 보존)
            antBase: BABYLON.Color3.FromHexString(c.antenna).scale(0.55) };
 }
+
+// 디버그 훅: 네 템플릿을 한 장면에서 비교 렌더할 때만 사용 (동작 영향 없음)
+window.__buildRobotModel = buildRobotModel;
+window.__makeMatFactory = typeof makeMatFactory === "function" ? makeMatFactory : null;
 
 // 대기 모션: 호흡 · 깜빡임 · 안테나 발광 펄스 · 팔 미세 흔들 · 말할 때 입 벌리기
 function updateIdle(refs, t, talk){
