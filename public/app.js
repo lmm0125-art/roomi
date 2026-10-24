@@ -933,7 +933,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     body = add(BABYLON.MeshBuilder.CreateSphere('body',{diameter:0.9,segments:32},scene), bodyMat); body.position.y=0.95; body.scaling.set(1,1.5,1);
     const neck = add(BABYLON.MeshBuilder.CreateCylinder('neck',{height:0.24,diameter:0.24,tessellation:20},scene), legMat); neck.position.y=1.675;
     frontZ=0.45; backZ=0.45; fz=0.48;
-    armX=0.57; armY=1.15; armTilt=0.12; armLen=0.6;
+    armX=0.50; armY=1.12; armTilt=0.14; armLen=0.72;
     bodyRx=0.45; bodyRy=0.675; bodyCy=0.95;
   }
   const hy = head.position.y;
@@ -1009,7 +1009,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
               ear:{shape:'cyl', d:0.22, x:0.575, y:-0.08}, rim:0.26 },
     boxy:   { neck:{shape:'box', w:0.52, h:0.18, d:0.46, y:1.60}, hand:0.28,
               foot:{shape:'box', w:0.36, h:0.15, d:0.48, x:0.28, y:0.075, z:0.06},
-              ear:{shape:'box', w:0.06, h:0.26, d:0.26, x:0.57, y:-0.02}, rim:0 },
+              ear:{shape:'box', w:0.07, h:0.26, d:0.26, x:0.575, y:-0.02, dark:true}, rim:0 },
     tally:  { neck:null, hand:0.24,
               foot:{shape:'round', d:0.24, x:0.22, y:0.105, z:0.05, heel:0.18, hx:0.22, hz:-0.07},
               ear:{shape:'cyl', d:0.18, x:0.46, y:-0.10}, rim:0.20 }
@@ -1058,11 +1058,12 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     // 귀
     [-1, 1].forEach(function(side){
       const e = P.ear;
+      const earMat = e.dark ? neckMat : jointMat;
       if (e.shape === 'box') {
-        const eb = add(BABYLON.MeshBuilder.CreateBox('ear'+side, {width:e.w, height:e.h, depth:e.d}, scene), jointMat);
+        const eb = add(BABYLON.MeshBuilder.CreateBox('ear'+side, {width:e.w, height:e.h, depth:e.d}, scene), earMat);
         eb.position.set(side*e.x, hy + e.y, 0);
       } else {
-        const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:e.d, tessellation:22}, scene), jointMat);
+        const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:e.d, tessellation:22}, scene), earMat);
         ear.rotation.z = Math.PI/2;
         ear.position.set(side*e.x, hy + e.y, 0);
         const earCap = add(BABYLON.MeshBuilder.CreateCylinder('earCap'+side, {height:0.11, diameter:e.d*0.55, tessellation:18}, scene), capMat);
