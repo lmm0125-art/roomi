@@ -1029,14 +1029,6 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
       heel.scaling.set(0.92, 0.55, 0.9);
     });
 
-    // 가슴 해치: 베젤 → 어두운 화면 → 발광 점 (3단이라 '부품'처럼 읽힌다)
-    const chestZ = bodyRx * Math.sqrt(Math.max(0.02, 1 - ((0.96 - bodyCy) / bodyRy) ** 2));
-    const bezel = add(BABYLON.MeshBuilder.CreateSphere('chestBezel', {diameter:0.50, segments:26}, scene), trimMat);
-    bezel.position.set(0, 0.96, chestZ + 0.005); bezel.scaling.set(1.0, 0.80, 0.22);
-    const screen = add(BABYLON.MeshBuilder.CreateSphere('chestScreen', {diameter:0.34, segments:24}, scene), mat('#22303F'));
-    screen.position.set(0, 0.96, chestZ + 0.050); screen.scaling.set(1.0, 0.72, 0.14);
-    const dot = add(BABYLON.MeshBuilder.CreateSphere('chestDot', {diameter:0.10, segments:14}, scene), glowMat);
-    dot.position.set(0, 0.98, chestZ + 0.082);
 
     // 귀: 옆면 작은 원판 (안테나 색을 재사용해 팔레트 일관성 유지)
     [-1, 1].forEach(function(side){
@@ -1888,10 +1880,10 @@ function autoTuneQuality(engine, scene){
       try{ scene.onAfterRenderObservable.remove(obs); }catch(e){}
       const fps = frames / Math.max(0.5, (performance.now() - t0) / 1000);
       bjs.fps = Math.round(fps);
-      if(fps>= 24) return;                             // 충분히 부드러우면 그대로 둔다
+      if(fps>= 20) return;                             // 20fps 이상이면 화질 유지(24→20: 디테일 추가 후 과민 반응)
       bjs.lowPerf = true;
-      try{ engine.setHardwareScalingLevel(1.4); }catch(e){}                                    // 1차: 해상도만 ↓
-      if(fps <18){
+      try{ engine.setHardwareScalingLevel(1.25); }catch(e){}                                   // 1차: 해상도만 살짝 ↓
+      if(fps <16){
         try{ if(scene.__shadow){ scene.__shadow.dispose(); scene.__shadow = null; } }catch(e){}  // 2차: 그림자
         try{ if(bjs.pipeline){ bjs.pipeline.dispose(); bjs.pipeline = null; } }catch(e){}        // 3차: 후처리
         try{ scene.particleSystems.slice().forEach(p=>p.dispose()); }catch(e){}                 // 4차: 먼지
