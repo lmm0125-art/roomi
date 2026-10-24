@@ -414,3 +414,6 @@ a.btn{display:block;text-align:center;text-decoration:none}
 #btn-sfx,#btn-reset{width:auto;height:auto;padding:6px 9px;font-size:11.5px;line-height:1;
   flex:0 0 auto;white-space:nowrap;background:transparent;border:1px solid #e4e9f0;border-radius:6px;color:var(--sub)}
 #btn-sfx:hover,#btn-reset:hover{background:#f5f7fa;color:var(--ink)}
+
+/* 이모지 제거 후 남은 빈 자리 숨김 */
+.big-emoji:empty{display:none}

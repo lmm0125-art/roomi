@@ -176,7 +176,7 @@ document.addEventListener('click', e=>{
 
 $('#btn-sfx').addEventListener('click', ()=>{
   const on = SFX.toggle();
-  $('#btn-sfx').textContent = on ? '' : '';
+  $('#btn-sfx').textContent = on ? '소리' : '음소거';
   $('#btn-sfx').title = on ? '소리 끄기' : '소리 켜기';
 });
 (function initSfxIcon(){
@@ -910,7 +910,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   const outlineMeshes = []; // 잉크 외곽선은 박스에만
   if(template==='doro'){
     // 루미: 캡슐 2단 바디 — 2D 와 같은 "머리가 몸보다 살짝 큰" 큐트 비율
-    head = add(BABYLON.MeshBuilder.CreateCapsule('head',{radius:0.54,height:1.15,tessellation:32,capSubdivisions:12},scene), headMat); head.position.y=2.15;
+    head = add(BABYLON.MeshBuilder.CreateCapsule('head',{radius:0.54,height:1.15,tessellation:32,capSubdivisions:12},scene), headMat); head.position.y=2.27;
     body = add(BABYLON.MeshBuilder.CreateCapsule('body',{radius:0.5,height:1.2,tessellation:32,capSubdivisions:12},scene), bodyMat); body.position.y=0.95;
     frontZ=0.5; backZ=0.5; fz=0.5;
     armX=0.63; armY=1.05; armTilt=0.12; armLen=0.55;
@@ -997,8 +997,8 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     const jointMat = mat(mixHex(c.arms, 0.92));
 
     // 목: 머리와 몸 사이를 이어 '두 덩어리'가 아니라 한 몸으로 읽히게
-    const neck = add(BABYLON.MeshBuilder.CreateCylinder('neck', {height:0.16, diameterTop:0.34, diameterBottom:0.40, tessellation:24}, scene), neckMat);
-    neck.position.y = 1.52;
+    const neck = add(BABYLON.MeshBuilder.CreateCylinder('neck', {height:0.24, diameterTop:0.36, diameterBottom:0.46, tessellation:24}, scene), neckMat);
+    neck.position.y = 1.585;
 
     // 어깨 관절 + 손 (팔 끝을 둥글게 마감)
     [-1, 1].forEach(function(side){
@@ -1011,26 +1011,26 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
 
     // 발: 다리 끝에 앞으로 나온 둥근 발 — 접지감
     [-1, 1].forEach(function(side){
-      const foot = add(BABYLON.MeshBuilder.CreateBox('foot'+side, {width:0.30, height:0.14, depth:0.40}, scene), legMat);
-      foot.position.set(side*0.28, 0.07, 0.06);
-      const toe = add(BABYLON.MeshBuilder.CreateSphere('toe'+side, {diameter:0.30, segments:18}, scene), legMat);
-      toe.position.set(side*0.28, 0.09, 0.25); toe.scaling.set(1, 0.5, 1);
+      const foot = add(BABYLON.MeshBuilder.CreateBox('foot'+side, {width:0.27, height:0.13, depth:0.36}, scene), legMat);
+      foot.position.set(side*0.26, 0.065, 0.05);
+      const toe = add(BABYLON.MeshBuilder.CreateSphere('toe'+side, {diameter:0.26, segments:18}, scene), legMat);
+      toe.position.set(side*0.26, 0.085, 0.22); toe.scaling.set(1, 0.5, 1);
     });
 
     // 가슴 패널: 작은 원판 + 발광 점 (로봇다운 '기계' 디테일)
-    const chestZ = bodyRx * Math.sqrt(Math.max(0.02, 1 - ((1.00 - bodyCy) / bodyRy) ** 2));
-    const plate = add(BABYLON.MeshBuilder.CreateCylinder('chest', {height:0.05, diameter:0.46, tessellation:28}, scene), trimMat);
-    plate.rotation.x = Math.PI/2; plate.position.set(0, 1.00, chestZ - 0.01);
-    const ring = add(BABYLON.MeshBuilder.CreateTorus('chestRing', {diameter:0.40, thickness:0.035, tessellation:28}, scene), neckMat);
-    ring.rotation.x = Math.PI/2; ring.position.set(0, 1.00, chestZ + 0.012);
-    const dot = add(BABYLON.MeshBuilder.CreateSphere('chestDot', {diameter:0.11, segments:14}, scene), glowMat);
-    dot.position.set(0, 1.00, chestZ + 0.035);
+    const chestZ = bodyRx * Math.sqrt(Math.max(0.02, 1 - ((0.96 - bodyCy) / bodyRy) ** 2));
+    const plate = add(BABYLON.MeshBuilder.CreateCylinder('chest', {height:0.05, diameter:0.40, tessellation:28}, scene), trimMat);
+    plate.rotation.x = Math.PI/2; plate.position.set(0, 0.96, chestZ + 0.015);
+    const ring = add(BABYLON.MeshBuilder.CreateTorus('chestRing', {diameter:0.32, thickness:0.040, tessellation:28}, scene), mat(mixHex(c.body, 0.68)));
+    ring.rotation.x = Math.PI/2; ring.position.set(0, 0.96, chestZ + 0.045);
+    const dot = add(BABYLON.MeshBuilder.CreateSphere('chestDot', {diameter:0.13, segments:14}, scene), glowMat);
+    dot.position.set(0, 0.96, chestZ + 0.070);
 
     // 귀: 옆면 작은 원판 (안테나 색을 재사용해 팔레트 일관성 유지)
     [-1, 1].forEach(function(side){
-      const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.10, diameter:0.26, tessellation:22}, scene), antMat);
+      const ear = add(BABYLON.MeshBuilder.CreateCylinder('ear'+side, {height:0.09, diameter:0.22, tessellation:22}, scene), jointMat);
       ear.rotation.z = Math.PI/2;
-      ear.position.set(side*(0.54 + 0.03), hy + 0.02, 0);
+      ear.position.set(side*0.535, hy - 0.10, 0);
     });
 
     // 눈 하이라이트 보조 (작은 점 하나 더 → 유리알 느낌)
