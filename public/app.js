@@ -770,7 +770,7 @@ function renderMyroom(){
   try{ renderSteps(); }catch(e){ console.error('[renderSteps]', e); }
   mountRoom3D(r);                 // 3D 우선, 실패 시 SVG 폴백
   bubble(r.greeting);
-  setTimeout(()=>{ if(bjs.ready) bubble('드래그=회전 · 휠=확대/축소 · 오른쪽 드래그=이동 '); }, 4600);
+  setTimeout(()=>{ if(bjs.ready) bubble('드래그로 돌려 보고, 휠로 확대해 보세요'); }, 4600);
 }
 
 // ============================================================
@@ -913,7 +913,7 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     head = add(BABYLON.MeshBuilder.CreateCapsule('head',{radius:0.54,height:1.15,tessellation:32,capSubdivisions:12},scene), headMat); head.position.y=2.27;
     body = add(BABYLON.MeshBuilder.CreateCapsule('body',{radius:0.5,height:1.2,tessellation:32,capSubdivisions:12},scene), bodyMat); body.position.y=0.95;
     frontZ=0.5; backZ=0.5; fz=0.5;
-    armX=0.63; armY=1.05; armTilt=0.12; armLen=0.55;
+    armX=0.63; armY=1.05; armTilt=0.17; armLen=0.55;
     bodyRx=0.5; bodyRy=0.6; bodyCy=0.95;
   } else if(template==='boxy'){
     head = add(BABYLON.MeshBuilder.CreateBox('head',{width:1.1,height:1.05,depth:0.95},scene), headMat); head.position.y=2.15;
@@ -951,8 +951,8 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   const armR = add(BABYLON.MeshBuilder.CreateCapsule('armR',{radius:0.12,height:armLen,tessellation:24,capSubdivisions:8},scene), armMat);
   armR.position.set(armX,armY,0); armR.rotation.z = armTilt;
   // 다리: 캡슐 — 2D 의 둥근 다리처럼 지면까지 (별도 발 없음 = 박스+타원 어긋남 제거)
-  const legL = add(BABYLON.MeshBuilder.CreateCapsule('legL',{radius:0.14,height:0.44,tessellation:24,capSubdivisions:8},scene), legMat); legL.position.set(-0.28,0.22,0);
-  const legR = add(BABYLON.MeshBuilder.CreateCapsule('legR',{radius:0.14,height:0.44,tessellation:24,capSubdivisions:8},scene), legMat); legR.position.set(0.28,0.22,0);
+  const legL = add(BABYLON.MeshBuilder.CreateCapsule('legL',{radius:0.13,height:0.34,tessellation:24,capSubdivisions:8},scene), legMat); legL.position.set(-0.27,0.30,0);
+  const legR = add(BABYLON.MeshBuilder.CreateCapsule('legR',{radius:0.13,height:0.34,tessellation:24,capSubdivisions:8},scene), legMat); legR.position.set(0.27,0.30,0);
   // 얼굴: 머리 표면에 "붙인" 렌즈형 부품 — 옆에서 봐도 돌출되지 않게 z 축 납작 + 표면 안쪽 매립
   let surfZ; // 머리 중심 기준 (dx,dy) → 표면 z
   if(template==='boxy'){ surfZ = ()=>0.475; }
@@ -1011,10 +1011,12 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
 
     // 발: 다리 끝에 앞으로 나온 둥근 발 — 접지감
     [-1, 1].forEach(function(side){
-      const foot = add(BABYLON.MeshBuilder.CreateBox('foot'+side, {width:0.27, height:0.13, depth:0.36}, scene), legMat);
-      foot.position.set(side*0.26, 0.065, 0.05);
-      const toe = add(BABYLON.MeshBuilder.CreateSphere('toe'+side, {diameter:0.26, segments:18}, scene), legMat);
-      toe.position.set(side*0.26, 0.085, 0.22); toe.scaling.set(1, 0.5, 1);
+      const foot = add(BABYLON.MeshBuilder.CreateSphere('foot'+side, {diameter:0.32, segments:22}, scene), legMat);
+      foot.position.set(side*0.27, 0.11, 0.06);
+      foot.scaling.set(1.0, 0.62, 1.5);          // 납작하고 앞으로 긴 '신발' 실루엣
+      const heel = add(BABYLON.MeshBuilder.CreateSphere('heel'+side, {diameter:0.24, segments:16}, scene), legMat);
+      heel.position.set(side*0.27, 0.10, -0.09);
+      heel.scaling.set(0.92, 0.55, 0.9);
     });
 
     // 가슴 패널: 작은 원판 + 발광 점 (로봇다운 '기계' 디테일)
