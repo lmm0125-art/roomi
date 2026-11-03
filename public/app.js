@@ -7,8 +7,13 @@ const API = '';
 //   네트워크가 느릴 때 TypeError 가 날 수 있었다.
 let state = { user:null, robot:null, template:'roundy', palette:{}, color:'#e74c3c', recolor:false,
               quests:{ list:[], done:[] }, parts:[], decors:[], skins:[], shards:[],
-              itemQty:{}, shardProgress:null, shardTargets:[], overLimit:false, playMinutes:0,
-              growth:{ level:1, exp:0, expNeeded:100, stage:1, streak:0 } };
+              itemQty:{}, shardProgress:null, shardTargets:[], overLimit:false, playMinutes:0, overplayDismissed:false,
+              warned30:false, shopFilter:'all', voiceAuto:false, voiceChat:false, voiceWarned:false,
+              plan:null, planToastShown:false, lastPlanStep:null, nudgeOptIn:true,
+              goals:null, goalToastShown:false, prefs:null, friendsChatEnabled:true, memories:[],
+              reviewDue:0, reviewCards:[], reviewIndex:0,
+              growth:{ level:1, exp:0, expNeeded:100, stage:1, streak:0 },
+              room:null, chatMode:'chat', chatBusy:false, pz:null, shooter:null };
 
 const COLORABLE = ['antenna','head','body','arms','legs'];
 const PALETTE = ['#e74c3c','#ff8c42','#f1c40f','#ffd93d','#2ecc71','#8bc34a',
@@ -176,30 +181,197 @@ document.addEventListener('click', e=>{
 
 $('#btn-sfx').addEventListener('click', ()=>{
   const on = SFX.toggle();
-  $('#btn-sfx').textContent = on ? '소리' : '음소거';
+  $('#btn-sfx').textContent = on ? '🔊' : '🔇';
   $('#btn-sfx').title = on ? '소리 끄기' : '소리 켜기';
 });
 (function initSfxIcon(){
   const b = $('#btn-sfx'); if(!b) return;
-  b.textContent = SFX.on ? '' : '';
+  b.textContent = SFX.on ? '🔊' : '🔇';
   b.title = SFX.on ? '소리 끄기' : '소리 켜기';
 })();
 
-function show(id){ $$('.screen').forEach(e=>e.classList.add('hidden')); $('#screen-'+id).classList.remove('hidden');
-  $('#topbar').classList.toggle('hidden', id==='start'); }
+const SCREEN_META = {
+  start:['',''], create:['로봇 만들기','나만의 친구를 만들어요'],
+  myroom:['마이룸','로봇이 살아있는 나의 공간'],
+  games:['미니게임','버그 두더지 · 퍼즐 · 슈터'],
+  workshop:['공작소','다시 칠하고, 성격을 만들고, 물어보기'],
+  shop:['상점','부품과 스킨을 구경해요'],
+  mail:['우편함','선생님과 루미의 편지'],
+  friends:['친구','코드로 연결하고 서로 응원해요'],
+  board:['리포트','성장과 셀 기록']
+};
+function show(id){
+  $$('.screen').forEach(e=>e.classList.add('hidden'));
+  $('#screen-'+id).classList.remove('hidden');
+  const guest = id==='start';
+  $('#topbar')?.classList.toggle('hidden', guest);
+  $('#sidebar')?.classList.toggle('hidden', guest);
+  $('#content')?.classList.toggle('guest', guest);
+  $('#chat-fab')?.classList.toggle('hidden', guest);
+  if(guest) $('#chat-panel')?.classList.add('hidden');
+  const meta = SCREEN_META[id];
+  if(meta && !guest){
+    const t = $('#topbar-title'), s = $('#topbar-sub');
+    if(t) t.textContent = meta[0];
+    if(s) s.textContent = meta[1];
+  }
+  if(id==='games'){
+    // 요일별 추천 게임(주간 순환)
+    const rec = ['btn-mole','btn-puzzle','btn-shooter'][new Date().getDay() % 3];
+    $$('.mg-card').forEach(c=>c.classList.toggle('recommend', c.id===rec));
+  }
+  if(!guest) syncSidebar();
+}
 function setBalance(v){
   // ★ V11: 셀이 '늘어난' 순간에만 보상음을 낸다(단일 지점이라 모든 보상 경로를 잡는다).
   //   로딩·화면 전환처럼 값이 그대로일 때는 울리지 않는다.
   const prev = state._lastBalance;
   state._lastBalance = v;
   $('#cell-balance').textContent = v;
-  if(prev != null && v> prev) SFX.coin();
+  if(prev != null && v > prev){
+    SFX.coin();
+    cellGain(v - prev);
+  }
 }
-function bubble(text){ const b=$('#bubble'); b.textContent=text; b.classList.remove('hidden');
+// ★ 2026-10-30: 셀 획득 순간의 작은 축하 애니메이션(+N, 코인 파티클, 배지 팝)
+function cellGain(delta){
+  if(!(delta > 0)) return;
+  const badge = $('#cellbadge');
+  if(!badge) return;
+  const r = badge.getBoundingClientRect();
+  if(!r.width) return;
+  badge.classList.remove('pop'); void badge.offsetWidth; badge.classList.add('pop');
+  const x = r.left + r.width/2, y = r.top + r.height/2;
+  const float = document.createElement('div');
+  float.className = 'cell-gain'; float.textContent = `+${delta} 🪙`;
+  float.style.left = `${x}px`; float.style.top = `${y}px`;
+  document.body.appendChild(float);
+  setTimeout(()=>float.remove(), 1200);
+  for(let i=0;i<7;i++){
+    const c = document.createElement('span');
+    c.className = 'coin-fly'; c.textContent = '🪙';
+    const angle = (Math.PI*2*i)/7 + Math.random()*.5;
+    const dist = 32 + Math.random()*26;
+    c.style.left = `${x}px`; c.style.top = `${y}px`;
+    c.style.setProperty('--dx', `${Math.cos(angle)*dist}px`);
+    c.style.setProperty('--dy', `${Math.sin(angle)*dist}px`);
+    document.body.appendChild(c);
+    setTimeout(()=>c.remove(), 900);
+  }
+  if(navigator.vibrate){ try{ navigator.vibrate(15); }catch(e){} }
+}
+// ai=true 이면 DeepSeek 생성 문장임을 작게 표기
+function bubble(text, ai){
+  const b=$('#bubble'); b.textContent=text;
+  if(ai){
+    const c=document.createElement('span');
+    c.className='ai-credit bubble-credit';
+    c.innerHTML='Powered by <b>DeepSeek</b>';
+    b.appendChild(c);
+  }
+  b.classList.remove('hidden');
   clearTimeout(b._t); b._t=setTimeout(()=>b.classList.add('hidden'), 4500); }
-async function api(path, body, timeoutMs){
+// ★ 2026-10-28: 화면 어디서든 보이는 짧은 알림
+function toast(text, ms=3500){
+  const t=$('#toast'); if(!t) return;
+  t.textContent=text; t.classList.remove('hidden');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.add('hidden'), ms);
+}
+// ★ 2026-10-28: 답변 읽어주기(TTS)
+function koVoices(){
+  try{
+    return window.speechSynthesis.getVoices()
+      .filter(v=>String(v.lang||'').toLowerCase().startsWith('ko'));
+  }catch(e){ return []; }
+}
+function pickVoice(){
+  const vs = koVoices();
+  if(!vs.length) return null;
+  const saved = localStorage.getItem('roomi_voice_name');
+  if(saved){ const hit = vs.find(v=>v.name === saved); if(hit) return hit; }
+  const prefs = [/google/i, /sora/i, /yuna/i, /nara/i, /heami/i, /premium/i, /enhanced/i, /neural/i];
+  for(const p of prefs){ const hit = vs.find(v=>p.test(v.name)); if(hit) return hit; }
+  return vs[0];
+}
+function splitSpeech(text){
+  const clean = String(text||'')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'')
+    .replace(/\s+/g,' ').trim();
+  if(!clean) return [];
+  const parts = clean.replace(/([.!?。！？])\s*/g,'$1|').split('|').filter(Boolean);
+  const chunks = []; let buf = '';
+  for(const p of parts){
+    if((buf + ' ' + p).trim().length > 80){ if(buf) chunks.push(buf.trim()); buf = p; }
+    else buf = (buf ? buf + ' ' : '') + p;
+  }
+  if(buf.trim()) chunks.push(buf.trim());
+  return chunks;
+}
+let _speakSeq = 0;
+function speak(text, onend){
+  if(!('speechSynthesis' in window)) return toast('이 브라우저는 읽어주기를 지원하지 않아요.');
+  const seq = ++_speakSeq;
+  try{ window.speechSynthesis.cancel(); }catch(e){}
+  const chunks = splitSpeech(text);
+  if(!chunks.length) return;
+  const voice = pickVoice();
+  if(!voice && !state.voiceWarned){
+    state.voiceWarned = true;
+    toast('한국어 음성을 찾지 못했어요. 설정에서 목소리를 선택해 주세요.');
+  }
+  const rate = Math.min(1.15, Math.max(0.7, Number(localStorage.getItem('roomi_voice_rate')) || 0.9));
+  let i = 0;
+  const next = ()=>{
+    if(seq !== _speakSeq) return;
+    if(i >= chunks.length){ if(typeof onend === 'function') onend(); return; }
+    const u = new SpeechSynthesisUtterance(chunks[i++]);
+    u.lang = 'ko-KR';
+    if(voice) u.voice = voice;
+    u.rate = rate; u.pitch = 1.0; u.volume = 1;
+    u.onend = next;
+    u.onerror = (e)=>{
+      if(e && (e.error === 'interrupted' || e.error === 'canceled')) return;
+      next();
+    };
+    try{ window.speechSynthesis.speak(u); }catch(e){}
+  };
+  next();
+}
+async function loadVoiceOptions(){
+  const sel = $('#set-voice-name'); if(!sel) return;
+  const vs = koVoices();
+  const cur = localStorage.getItem('roomi_voice_name') || '';
+  const opts = ['<option value="">자동 (가장 선명한 한국어)</option>'];
+  for(const v of vs){
+    const name = String(v.name||'').replace(/"/g,'&quot;');
+    opts.push(`<option value="${name}" ${v.name===cur?'selected':''}>${esc(v.name)} (${esc(v.lang)})</option>`);
+  }
+  sel.innerHTML = opts.join('');
+  if(cur && !vs.some(v=>v.name===cur)) sel.value = '';
+}
+function syncVoiceChatBtn(){
+  const b = $('#chat-voice'); if(!b) return;
+  b.classList.toggle('on', !!state.voiceChat);
+  b.title = state.voiceChat ? '음성 대화 끄기' : '음성 대화 켜기';
+}
+function setVoiceChat(on){
+  state.voiceChat = !!on;
+  localStorage.setItem('roomi_voice_chat', on ? '1' : '0');
+  const cb = $('#set-voice-chat'); if(cb) cb.checked = !!on;
+  syncVoiceChatBtn();
+}
+function toggleVoiceChat(){
+  setVoiceChat(!state.voiceChat);
+  toast(state.voiceChat ? '🎧 음성 대화를 켰어. 말해 봐!' : '음성 대화를 껐어.');
+  if(state.voiceChat){
+    if($('#chat-panel').classList.contains('hidden')) chatOpen();
+    setTimeout(()=>startMic(true), 350);
+  }
+}
+async function api(path, body, timeoutMs, method){
   const o = { headers:{} };
   if(body){ o.method='POST'; o.headers['Content-Type']='application/json'; o.body=JSON.stringify(body); }
+  if(method) o.method = method;
   const tk = localStorage.getItem(SK.token); // 세션 토큰 — uid 위조 방지
   if(tk) o.headers['X-Token'] = tk;
   const ac = new AbortController(); o.signal = ac.signal;
@@ -289,6 +461,7 @@ async function submitRecolor(){
     const jr = await api('/api/robots/me');
     absorbRobotMe(jr);
     if(bjs.ready && state.robot) rebuildRobot(state.robot);
+    updateChatFab();          // 색칠한 로봇을 대화 버튼에도 즉시 반영
     exitRecolor();
     bubble(' 색칠을 바꿨어요!');
     goNav('workshop');
@@ -297,11 +470,13 @@ async function submitRecolor(){
 // 탭 전환을 코드에서도 쓸 수 있게 한 곳에 모은다(버튼 클릭과 동일 동작)
 function goNav(name){
   $$('.navbtn').forEach(x=>x.classList.toggle('on', x.dataset.nav===name));
+  $('#side-user')?.classList.toggle('on', name==='board');
   show(name);
   if(name==='shop') loadShop();
   if(name==='board') loadBoard();
   if(name==='workshop') loadWorkshop();
   if(name==='mail') loadMailbox();
+  if(name==='friends') loadFriends();
   if(name==='myroom' && state.robot) renderMyroom();
 }
 async function regeneratePersonality(){
@@ -326,7 +501,8 @@ async function askRobot(){
   ans.textContent = ' ...';
   try{
     const r = await api('/api/workshop/ask', { question:q }, 30000);
-    ans.innerHTML = `<b> 로봇의 대답</b><br>${esc(r.answer)}`;
+    ans.innerHTML = `<b> 로봇의 대답</b><br>${esc(r.answer)}` +
+      `<div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>`;
     $('#ws-q').value = '';
     $('#ws-ask-left').textContent = `오늘 ${r.left}번 더 물어볼 수 있어요 (하루 5번)`;
     if(r.left <= 0) b.disabled = true;
@@ -456,6 +632,7 @@ $('#btn-start').addEventListener('click', async ()=>{
   try{
     const j = await api('/api/user',{nickname:nick});
     state.user = j.user; state.quests = j.quests;
+    if(j.revive && j.revive.available) setTimeout(()=>showRevive(j.revive), 900);
     localStorage.setItem(SK.uid, j.user.id);
     localStorage.setItem(SK.nick, nick);
     localStorage.setItem(SK.token, j.user.token);
@@ -463,7 +640,7 @@ $('#btn-start').addEventListener('click', async ()=>{
     // ★ P0-4 오버플레이: 서버가 오늘의 누적 플레이 시간을 알려준다.
     //   한도를 넘었으면 마이룸으로 보내지 않고 보호자 확인 화면을 띄운다.
     //   (서버가 play_minutes 를 직접 세므로 브라우저에서 조작할 수 없다)
-    if(j.play && j.play.overLimit){
+    if(j.play && j.play.overLimit && !state.overplayDismissed){
       showOverplay({ minutes: j.play.minutes });
       return;
     }
@@ -545,6 +722,7 @@ async function verifyParent(){
     // 잠금 해제 → 계속 진행
     if($('#overplay').classList.contains('hidden') === false) $('#overplay').classList.add('hidden');
     state.overLimit = false;
+    state.overplayDismissed = false;
     startPlayTimer();
   }catch(e){
     msg.textContent = e.message || '정답이 아니에요.';
@@ -555,6 +733,8 @@ async function verifyParent(){
 }
 // 시간 초과 안내를 띄운다
 function showOverplay(info){
+  // ★ 2026-10-28: 한 세션에서 한 번만. '내일 다시' 후 재로그인해도 같은 세션에서는 반복하지 않는다.
+  if(state.overplayDismissed) return;
   state.overLimit = true; state.playMinutes = info.minutes || 0;
   stopPlayTimer();
   const st = $('#overplay-stat');
@@ -572,7 +752,12 @@ function startPlayTimer(){
     if(!state.user) return;
     try{
       const r = await api('/api/visit/playtime', { seconds:60 }, 8000);
-      if(r && r.over) showOverplay({ minutes: r.playMinutes });
+      // ★ 2026-10-28: 30분에 한 번 미리 알려준다(차단 전 예고).
+      if(r && !r.over && r.playMinutes >= 30 && !state.warned30){
+        state.warned30 = true;
+        toast('⏰ 30분 넘었어요! 10분 뒤엔 쉬어가요.');
+      }
+      if(r && r.over && !state.overLimit) showOverplay({ minutes: r.playMinutes });
     }catch(e){ /* 네트워크 실패는 무시 — 다음 주기에 다시 보낸다 */ }
   }, 60000);
 }
@@ -763,13 +948,22 @@ function renderMyroom(){
   const decorLine = state.decors.length
     ? `<div class="owned-decor">보유 장식: ${state.decors.map(d=>esc(d)).join(' · ')}</div>` : '';
   $('#robot-info').innerHTML = `<b>${esc(r.name)}</b> · 성격 <b>${esc(r.personality)}</b><br><span style="color:var(--sub);font-size:13px">"${esc(r.greeting)}"</span>${growthBar}${decorLine}`;
+  const hudLv = $('#hud-lv'); if(hudLv) hudLv.textContent = `Lv.${g.level||1}`;
+  const hudSt = $('#hud-streak'); if(hudSt) hudSt.textContent = `🔥${g.streak||0}`;
+  const tl = $('#top-level'); if(tl) tl.textContent = `Lv.${g.level||1}`;
+  const ts = $('#top-streak'); if(ts) ts.textContent = `🔥${g.streak||0}`;
+  updateChatFab();
   renderQuests(); setBalance(state.user.cell_balance);
   try{ renderStreakCal(); }catch(e){ console.error('[renderStreakCal]', e); }
   try{ renderTopic(); }catch(e){ console.error('[renderTopic]', e); }
   // 오늘의 진행 단계 표시 — 다른 렌더링이 실패해도 이건 반드시 뜨도록 try 로 감싼다
   try{ renderSteps(); }catch(e){ console.error('[renderSteps]', e); }
   mountRoom3D(r);                 // 3D 우선, 실패 시 SVG 폴백
-  bubble(r.greeting);
+  loadRoomState();                // ★ 2026-10-27: 이해도 → 방 조명/책장
+  loadPlan();                     // ★ 2026-10-28: AI가 짠 오늘의 학습 계획
+  loadGoals();                    // ★ 2026-10-28: 이번 주 목표
+  setTimeout(()=>loadRoomState(), 1500);  // 3D 씬이 준비된 뒤 조명 한 번 더 반영
+  bubble(r.greeting, true);
   setTimeout(()=>{ if(bjs.ready) bubble('드래그로 돌려 보고, 휠로 확대해 보세요'); }, 4600);
 }
 
@@ -902,7 +1096,8 @@ function curStage(){ return (state.growth && state.growth.stage) || 1; }
 function buildRobotModel(scene, parent, c, template, extraParts, matFactory, stage){
   const mat = matFactory || makeMatFactory(scene, false);
   const headMat=mat(c.head), bodyMat=mat(c.body), antMat=mat(c.antenna), armMat=mat(c.arms), legMat=mat(c.legs);
-  const eyeMat=mat('#25324a'), cheekMat=mat('#f7b2c1');
+  const eyeMat=mat('#25324a');
+  const cheekMat=mat('#f7b2c1');
   const hiMat=mat('#ffffff'); hiMat.emissiveColor=new BABYLON.Color3(1,1,1); // 눈 하이라이트는 항상 밝게
   const add=(mesh,material)=>{ mesh.material=material; mesh.metadata={robot:true}; mesh.parent=parent; mesh.applyFog=false; return mesh; }; // 안개는 바닥에만 적용(로봇 색 보존)
 
@@ -1090,6 +1285,13 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     });
   }
 
+  // ★ 2026-10-31: 얼굴 부품을 머리 표면 위로 올린다.
+  //   기존엔 캡슐/구 표면 계산값이 조금 안쪽이라 눈이 반달처럼 묻혔다.
+  const FACE_SHIFT = template === 'boxy' ? 0.015 : 0.07;
+  [eyeL,eyeR,hiL,hiR,chL,chR].forEach(m=>{ if(m) m.position.z += FACE_SHIFT; });
+  if(smile) smile.position.z += FACE_SHIFT;
+  scene.meshes.filter(m=>/^(eyeRim|hi2)/.test(m.name)).forEach(m=>{ m.position.z += FACE_SHIFT; });
+
 
   // ★ V9 성장 단계 반영 — 아기(1) / 청소년(2) / 성체(3)
   //   라벨만 바뀌고 로봇은 그대로이던 문제를 고친다(회사 기대효과 ① '성장 경험').
@@ -1111,6 +1313,69 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   // 몸통 표면 z — 부품이 몸 크기와 무관하게 항상 표면에 붙도록
   const bodySurfZ = (x,dy)=> template==='boxy' ? 0.45
     : bodyRx*Math.sqrt(Math.max(0.02, 1-(dy/bodyRy)**2-(x/bodyRx)**2));
+
+  // ── 디테일 패스 2: 글래스 바이저 · 가슴 코어 · 관절 링 · 손발 마감 ──
+  const mixHex2 = (hex,k)=>BABYLON.Color3.FromHexString(hex).scale(k).toHexString();
+  const headFrontZ = template==='boxy' ? 0.475 : template==='roundy' ? 0.60 : template==='tally' ? 0.575 : 0.54;
+  const rimMat = mat(mixHex2(c.antenna,0.92));
+  const jointMat = mat(mixHex2(c.arms,0.55));
+  if(jointMat && jointMat.metallic !== undefined){ jointMat.metallic = 0.55; jointMat.roughness = 0.32; }
+
+  // 이마 센서만 작게 (얼굴을 가리지 않게)
+  const sensorMat = mat(c.antenna);
+  sensorMat.emissiveColor = BABYLON.Color3.FromHexString(c.antenna).scale(0.72);
+  const sensor = add(BABYLON.MeshBuilder.CreateSphere('foreheadSensor',{diameter:0.055,segments:14},scene), sensorMat);
+  sensor.position.set(0, hy+0.45, headFrontZ-0.025);
+  const visor = null;
+
+  // 가슴 코어
+  const coreY = template==='tally' ? 1.18 : 1.02;
+  const coreZ = bodySurfZ(0, coreY - body.position.y) + 0.025;
+  const coreRing = add(BABYLON.MeshBuilder.CreateTorus('coreRing',{diameter:0.27,thickness:0.035,tessellation:24},scene),
+    mat(mixHex2(c.head,0.90)));
+  coreRing.rotation.x = Math.PI/2; coreRing.position.set(0, coreY, coreZ);
+  const coreMat = mat(c.antenna);
+  coreMat.emissiveColor = BABYLON.Color3.FromHexString(c.antenna).scale(0.70);
+  const core = add(BABYLON.MeshBuilder.CreateSphere('core',{diameter:0.15,segments:20},scene), coreMat);
+  core.position.set(0, coreY, coreZ + 0.012);
+
+  // 관절 링 · 손가락 · 발끝 · 귀 링
+  const handY = armY - Math.cos(armTilt)*(armLen/2) - 0.01;
+  [-1,1].forEach(side=>{
+    const shoulder = add(BABYLON.MeshBuilder.CreateSphere('shoulder'+side,{diameter:0.22,segments:20},scene), jointMat);
+    shoulder.position.set(side*armX, armY + armLen*0.5, 0);
+    const elbow = add(BABYLON.MeshBuilder.CreateTorus('elbow'+side,{diameter:0.25,thickness:0.032,tessellation:20},scene), jointMat);
+    elbow.position.set(side*armX, armY, 0);
+    const wrist = add(BABYLON.MeshBuilder.CreateTorus('wrist'+side,{diameter:0.21,thickness:0.026,tessellation:18},scene), jointMat);
+    wrist.position.set(side*(armX + Math.sin(armTilt)*(armLen/2)), handY+0.07, 0);
+    const thumb = add(BABYLON.MeshBuilder.CreateCapsule('thumb'+side,{radius:0.045,height:0.14,tessellation:14,capSubdivisions:6},scene), armMat);
+    thumb.position.set(side*(armX + Math.sin(armTilt)*(armLen/2)) + side*0.07, handY+0.035, 0.055);
+    thumb.rotation.z = side*0.85;
+    const hip = add(BABYLON.MeshBuilder.CreateSphere('hip'+side,{diameter:0.22,segments:18},scene), jointMat);
+    hip.position.set(side*0.27, 0.55, 0);
+    const knee = add(BABYLON.MeshBuilder.CreateTorus('knee'+side,{diameter:0.24,thickness:0.028,tessellation:18},scene), jointMat);
+    knee.position.set(side*0.27, 0.23, 0);
+    const toe = add(BABYLON.MeshBuilder.CreateSphere('toe'+side,{diameter:0.18,segments:16},scene), rimMat);
+    toe.position.set(side*0.27, 0.10, 0.19); toe.scaling.set(1.15,0.5,1.35);
+  });
+
+  // 귀 링 + 머리 나사
+  if(P && P.ear && P.ear.d){
+    [-1,1].forEach(side=>{
+      const ring = add(BABYLON.MeshBuilder.CreateTorus('earRing'+side,{diameter:P.ear.d*0.92,thickness:0.022,tessellation:18},scene), rimMat);
+      ring.rotation.y = Math.PI/2; ring.position.set(side*P.ear.x, hy + P.ear.y, 0);
+    });
+  }
+  [-1,1].forEach(side=>{
+    const screw = add(BABYLON.MeshBuilder.CreateCylinder('screw'+side,{height:0.02,diameter:0.055,tessellation:12},scene), jointMat);
+    screw.rotation.x = Math.PI/2;
+    screw.position.set(side*0.27, body.position.y+0.30, bodySurfZ(side*0.27,0.30)+0.012);
+  });
+
+  // 안테나 헤일로
+  const antHalo = add(BABYLON.MeshBuilder.CreateTorus('antHalo',{diameter:0.30,thickness:0.018,tessellation:22},scene), rimMat);
+  antHalo.position.set(0, antBall.position.y, 0); antHalo.rotation.x = 0.16;
+
   attachParts(scene, parent, (extraParts||state.parts),
     { topY: hy+1.02, bodyY: body.position.y, frontZ, backZ, bodyRx, bodyRy, bodyCy, bodySurfZ }, matFactory);
   // 카툰 잉크 외곽선 (박스만)
@@ -1118,6 +1383,8 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   // 대기 모션용 참조 반환 (마이룸/미리보기 공용)
   return { model: parent, eyeL, eyeR, antBall, mouth: smile,
            armL, armR, baseArmL: -armTilt, baseArmR: armTilt,
+           core, coreBase: BABYLON.Color3.FromHexString(c.antenna).scale(0.70),
+           antHalo, visor,
            growthScale: G.s,   // 호흡이 scaling.y 에 곱한다(성장 배율 보존)
            antBase: BABYLON.Color3.FromHexString(c.antenna).scale(0.55) };
 }
@@ -1137,6 +1404,10 @@ function updateIdle(refs, t, talk){
   if(refs.eyeR) refs.eyeR.scaling.y = eyeS;
   if(refs.antBall && refs.antBall.material)                              // 안테나 에너지 펄스
     refs.antBall.material.emissiveColor = refs.antBase.scale(0.42 + 0.26*Math.sin(t*3));
+  if(refs.core && refs.core.material && refs.coreBase){
+    refs.core.material.emissiveColor = refs.coreBase.scale(0.55 + 0.30*Math.sin(t*2.6));
+  }
+  if(refs.antHalo) refs.antHalo.rotation.z = Math.sin(t*0.65)*0.14;
   if(refs.armL) refs.armL.rotation.z = refs.baseArmL + Math.sin(t*1.1)*0.05;
   if(refs.armR) refs.armR.rotation.z = refs.baseArmR - Math.sin(t*1.1)*0.05;
   if(refs.mouth){ refs.mouth.scaling.y = 1 + talk*0.95; refs.mouth.scaling.x = 1 + talk*0.22; }
@@ -1408,7 +1679,11 @@ function rebuildRobot(robot){
   boosterFlames = null;   // 아래에서 dispose 되므로 참조를 먼저 끊는다(잔여 참조 방지)
   bjs.model.getChildMeshes(false).forEach(m=>{ if(m.material) m.material.dispose(); m.dispose(); });
   bjs.refs = buildRobotModel(bjs.scene, bjs.model, effectiveColors(robot.template, robot.palette), robot.template, null, bjs.matFactory, curStage());
-  if(bjs.scene.__shadow) bjs.scene.__shadow.getShadowMap().renderList = bjs.model.getChildMeshes(false);
+  if(bjs.scene.__shadow){
+    const list = bjs.model.getChildMeshes(false);
+    bjs.scene.meshes.forEach(m=>{ if(m.castShadow) list.push(m); });
+    bjs.scene.__shadow.getShadowMap().renderList = list;
+  }
 }
 
 // ★ 장식 구매 후 방을 다시 만든다.
@@ -1556,9 +1831,9 @@ function addDustMotes(scene){
 // 실내 소품: 책장 / 화분 / 스탠드 조명 / 액자 / 벽시계 / 삼각 플래그 / 블록
 function buildRoomProps(scene, M){
   const box=function(n,w,h,d,x,y,z,m){ const b=BABYLON.MeshBuilder.CreateBox(n,{width:w,height:h,depth:d},scene);
-    b.position.set(x,y,z); b.material=m; b.isPickable=false; b.receiveShadows=true; return b; };
+    b.position.set(x,y,z); b.material=m; b.isPickable=false; b.receiveShadows=true; b.castShadow=true; return b; };
   const cyl=function(n,o,x,y,z,m){ const c=BABYLON.MeshBuilder.CreateCylinder(n,o,scene);
-    c.position.set(x,y,z); c.material=m; c.isPickable=false; c.receiveShadows=true; return c; };
+    c.position.set(x,y,z); c.material=m; c.isPickable=false; c.receiveShadows=true; c.castShadow=true; return c; };
 
   // ── 책장(오른쪽) ──
   const sx=4.35, sz=-4.2;
@@ -1615,6 +1890,16 @@ function buildRoomProps(scene, M){
   const ch1=box('clockH1',0.045,0.2,0.03, 2.55,2.81,-4.81, M.metalDark); ch1.rotation.z=0.5;
   const ch2=box('clockH2',0.04,0.26,0.03, 2.61,2.70,-4.81, M.metalDark); ch2.rotation.z=-0.7;
 
+  // 벽 구름 데칼(침대 위) — 빈 벽을 부드럽게 채운다
+  const cloudMat = propMat(scene,'cloudMat','#ffffff',0.20);
+  [[-3.95,2.52,0.95],[-2.85,2.90,0.62]].forEach(function(c,ci){
+    for(let k=0;k<3;k++){
+      const p=BABYLON.MeshBuilder.CreateSphere('cloud'+ci+'_'+k,{diameter:0.30*(1-k*0.16),segments:16},scene);
+      p.position.set(c[0]+(k-1)*0.20*c[2], c[1]+(k===1?0.09:0), -4.92);
+      p.scaling.set(1.7,0.62,0.22); p.material=cloudMat; p.isPickable=false;
+    }
+  });
+
   // ── 삼각 플래그(빵빵이) ──
   box('cord',10.8,0.035,0.035, 0,2.95,-4.85, M.cord);
   for(let i=0;i<9;i++){
@@ -1655,6 +1940,88 @@ function buildRoomProps(scene, M){
     box('chairLeg'+i, 0.055, 0.56, 0.055, DX-0.70+q[0], 0.28, DZ+q[1], dkLeg);
   });
   addBlobShadow(scene, DX-0.35, DZ, 1.30, 0.30);
+
+  // ── 침대(왼쪽 벽) ── 아이 방의 중심 소품
+  const bdWood = propMat(scene,'bdWood','#c99a6b',0.04);
+  const bdMatt = propMat(scene,'bdMatt','#f6ead9',0.06);
+  const bdBlanket = propMat(scene,'bdBlanket','#9bcfee',0.05);
+  const bdPillow = propMat(scene,'bdPillow','#fff7ec',0.08);
+  const BX=-3.72, BZ=-1.10;
+  box('bedBase',1.58,0.38,2.18, BX,0.19,BZ, bdWood);
+  box('bedMattress',1.46,0.24,2.02, BX,0.48,BZ, bdMatt);
+  box('bedHead',1.58,0.82,0.12, BX,0.61,BZ-1.05, bdWood);
+  box('bedFoot',1.58,0.36,0.10, BX,0.40,BZ+1.06, bdWood);
+  [[-0.67,-0.88],[-0.67,0.88],[0.67,-0.88],[0.67,0.88]].forEach(function(q,i){
+    box('bedLeg'+i,0.10,0.30,0.10, BX+q[0],0.15,BZ+q[1], bdWood);
+  });
+  box('bedPillow1',0.55,0.14,0.34, BX-0.32,0.63,BZ-0.72, bdPillow);
+  box('bedPillow2',0.52,0.13,0.32, BX+0.28,0.625,BZ-0.70, bdPillow);
+  const blanket=box('bedBlanket',1.28,0.07,1.10, BX,0.63,BZ+0.30, bdBlanket);
+  box('bedFold',1.30,0.035,0.20, BX,0.675,BZ-0.28, bdBlanket);
+  // 베개 위 작은 별 쿠션
+  const starC = propMat(scene,'bdStar','#ffd36e',0.22);
+  const star = BABYLON.MeshBuilder.CreateSphere('bedStar',{diameter:0.26,segments:18},scene);
+  star.position.set(BX+0.02,0.77,BZ-0.72); star.scaling.set(1,0.55,1); star.material=starC; star.isPickable=false;
+  addBlobShadow(scene, BX, BZ, 1.18, 0.42);
+
+  // 침대 옆 협탁 + 작은 스탠드 + 책
+  const nsX=-2.55, nsZ=-2.18;
+  box('nightstand',0.44,0.48,0.44, nsX,0.24,nsZ, bdWood);
+  box('nightBook',0.22,0.05,0.16, nsX-0.06,0.505,nsZ+0.02, propMat(scene,'nsBook','#9bcfee',0.12));
+  const nlBase=cyl('nightLampBase',{height:0.06,diameter:0.20,tessellation:18}, nsX+0.06,0.51,nsZ-0.10, M.metal);
+  cyl('nightLampPole',{height:0.24,diameter:0.035,tessellation:10}, nsX+0.06,0.64,nsZ-0.10, M.metal);
+  const nlShade=BABYLON.MeshBuilder.CreateCylinder('nightShade',{height:0.18,diameterTop:0.12,diameterBottom:0.26,tessellation:18},scene);
+  nlShade.position.set(nsX+0.06,0.83,nsZ-0.10); nlShade.material=M.shade; nlShade.isPickable=false;
+  const nlBulb=BABYLON.MeshBuilder.CreateSphere('nightBulb',{diameter:0.09,segments:14},scene);
+  nlBulb.position.set(nsX+0.06,0.74,nsZ-0.10); nlBulb.material=M.bulb; nlBulb.isPickable=false;
+
+  // 침대 위 벽 액자(해/언덕)
+  box('bedFrame',1.02,0.74,0.06, BX,2.92,-4.93, M.frame);
+  box('bedArt',0.86,0.58,0.04, BX,2.92,-4.89, propMat(scene,'bedArt','#d9efff',0.18));
+  const artSun=BABYLON.MeshBuilder.CreateSphere('artSun',{diameter:0.18,segments:16},scene);
+  artSun.position.set(BX-0.18,3.05,-4.86); artSun.scaling.set(1,1,0.18); artSun.material=propMat(scene,'artSun','#ffd36e',0.4); artSun.isPickable=false;
+  const artHill=BABYLON.MeshBuilder.CreateSphere('artHill',{diameter:0.52,segments:16},scene);
+  artHill.position.set(BX+0.14,2.72,-4.86); artHill.scaling.set(1.7,0.55,0.18); artHill.material=propMat(scene,'artHill','#9ad9b0',0.18); artHill.isPickable=false;
+
+  // ── 커튼 + 커튼봉 ──
+  const curtainMat = propMat(scene,'curtain','#dceaf7',0.03);
+  const rod = cyl('curtainRod',{height:2.75,diameter:0.055,tessellation:14}, -3.20,4.02,-4.74, M.metal);
+  rod.rotation.z = Math.PI/2;
+  [-4.53,-1.87].forEach(function(cx,ci){
+    for(let k=0;k<3;k++){
+      const c = cyl('curtain'+ci+'_'+k,{height:2.18,diameter:0.14,tessellation:14}, cx+(k-1)*0.11,2.86,-4.71, curtainMat);
+      c.scaling.z = 0.55;
+    }
+  });
+
+  // ── 펜던트 조명 ──
+  const pendMat = propMat(scene,'pendMat','#e8cfae',0.05);
+  cyl('pendCord',{height:3.75,diameter:0.03,tessellation:8}, 1.85,7.05,-2.10, M.cord);
+  cyl('pendRose',{height:0.06,diameter:0.26,tessellation:18}, 1.85,8.86,-2.10, M.metal);
+  const pendShade = BABYLON.MeshBuilder.CreateCylinder('pendShade',{height:0.42,diameterTop:0.16,diameterBottom:0.74,tessellation:26},scene);
+  pendShade.position.set(1.85,5.05,-2.10); pendShade.material=pendMat; pendShade.isPickable=false;
+  const pendBulb = BABYLON.MeshBuilder.CreateSphere('pendBulb',{diameter:0.18,segments:18},scene);
+  pendBulb.position.set(1.85,4.88,-2.10); pendBulb.material=M.bulb; pendBulb.isPickable=false;
+  try{
+    const pl = new BABYLON.PointLight('pendantLight', new BABYLON.Vector3(1.85,4.8,-2.10), scene);
+    pl.diffuse = new BABYLON.Color3(1.0,0.86,0.68); pl.intensity = 0.40; pl.range = 6.8;
+  }catch(e){}
+
+  // ── 벽 전구 줄(따뜻한 포인트) ──
+  const strPts=[];
+  for(let i=0;i<=26;i++){
+    const t=i/26;
+    strPts.push(new BABYLON.Vector3(-4.75+t*9.5, 3.58-Math.sin(t*Math.PI)*0.20, -4.80));
+  }
+  const strCord = BABYLON.MeshBuilder.CreateTube('strCord',{path:strPts,radius:0.012,tessellation:6},scene);
+  strCord.material = propMat(scene,'strCord','#b9c2cf',0.02); strCord.isPickable=false;
+  const strBulbMat = propMat(scene,'strBulb','#ffd9a0',1.0);
+  for(let i=0;i<14;i++){
+    const t=(i+0.5)/14;
+    const b=BABYLON.MeshBuilder.CreateSphere('strBulb'+i,{diameter:0.115,segments:12},scene);
+    b.position.set(-4.75+t*9.5, 3.58-Math.sin(t*Math.PI)*0.20-0.09, -4.78);
+    b.material=strBulbMat; b.isPickable=false;
+  }
 
   // ── 러그 술 (양쪽 긴 변) ──
   const fringe = propMat(scene, 'fringe', '#EFE6D8', 0.08);
@@ -1747,7 +2114,7 @@ function createRoomBase(scene, opt){
   opt = opt||{};
   scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
   scene.fogColor = new BABYLON.Color3(0.863,0.918,0.988); // 하늘색과 동일 → 바닥 가장자리가 수평선처럼 흐려짐
-  scene.fogDensity = 0.016;   // ★ V17 0.03→0.016: 원경 벽이 뿌옇게 뜨던 문제
+  scene.fogDensity = 0.008;   // ★ V18 0.016→0.008: 방 안이 뿌옇게 뜨던 문제
 
   // 광원은 중성 흰색에 가깝게 (색 왜곡 방지 — 아이가 고른 색이 그대로 보이도록)
   const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
@@ -1776,11 +2143,13 @@ function createRoomBase(scene, opt){
   const wallMat=flat(new BABYLON.StandardMaterial('wallM',scene)); wallMat.diffuseColor=new BABYLON.Color3(0.94,0.96,0.995);
   wallMat.emissiveColor=new BABYLON.Color3(0.10,0.11,0.13);   // 옆벽 어두운 부위 보정
   wallMat.backFaceCulling=false;
+  wallMat.twoSidedLighting=true;   // ★ 평면 뒷면도 빛을 받도록 (벽이 검게 죽던 원인)
   const wainMat=flat(new BABYLON.StandardMaterial('wainM',scene)); wainMat.diffuseColor=new BABYLON.Color3(0.82,0.885,0.965);
   wainMat.emissiveColor=new BABYLON.Color3(0.08,0.09,0.11);
   wainMat.backFaceCulling=false;
+  wainMat.twoSidedLighting=true;
   const baseMat=flat(new BABYLON.StandardMaterial('baseM',scene)); baseMat.diffuseColor=new BABYLON.Color3(1,1,1);
-  baseMat.backFaceCulling=false;
+  baseMat.backFaceCulling=false; baseMat.twoSidedLighting=true;
   const plane=function(n,w,h,x,y,z,m){ const p=BABYLON.MeshBuilder.CreatePlane(n,{width:w,height:h},scene);
     p.position.set(x,y,z); p.material=m; p.isPickable=false; p.receiveShadows=true; return p; };
   const wcx=(WIN.x0+WIN.x1)/2, wcy=(WIN.y0+WIN.y1)/2, ww=WIN.x1-WIN.x0, wh=WIN.y1-WIN.y0;
@@ -1801,7 +2170,8 @@ function createRoomBase(scene, opt){
   skirt('skR',18,0.07,  HW-0.05,2, Math.PI/2); }
   // 천장(위쪽 빈 공간을 막아 시선이 자연스럽게 닫히도록)
   const ceilMat=flat(new BABYLON.StandardMaterial('ceilM',scene)); ceilMat.diffuseColor=new BABYLON.Color3(0.98,0.985,1);
-  ceilMat.backFaceCulling=false;
+  ceilMat.backFaceCulling=false; ceilMat.twoSidedLighting=true;
+  ceilMat.emissiveColor=new BABYLON.Color3(0.05,0.055,0.06);   // 천장이 새까맣게 죽지 않도록
   if(!opt.bare){ const ceil=BABYLON.MeshBuilder.CreateGround('ceiling',{width:HW*2.4,height:20,subdivisions:1},scene);
   ceil.position.set(0, WH-0.02, 2); ceil.rotation.x=Math.PI;   // 아래를 향하도록 뒤집음
   ceil.material=ceilMat; ceil.isPickable=false;
@@ -1814,7 +2184,7 @@ function createRoomBase(scene, opt){
 
   // ── 창(틀 + 십자 창살 + 창대 + 창밖 풍경) ──
   const frameMat=flat(new BABYLON.StandardMaterial('frmM',scene)); frameMat.diffuseColor=new BABYLON.Color3(1,1,1);
-  frameMat.backFaceCulling=false;
+  frameMat.backFaceCulling=false; frameMat.twoSidedLighting=true;
   const fbox=function(n,w,h,d,x,y,z){ const b=BABYLON.MeshBuilder.CreateBox(n,{width:w,height:h,depth:d},scene);
     b.position.set(x,y,z); b.material=frameMat; b.isPickable=false; return b; };
   if(!opt.bare){
@@ -1826,10 +2196,11 @@ function createRoomBase(scene, opt){
   fbox('wfH',ww,0.08,0.10, wcx,wcy,-HD+0.04);
   fbox('sill',ww+0.4,0.09,0.34, wcx,WIN.y0-0.14,-HD+0.16);
   const skyMat=new BABYLON.StandardMaterial('skyM',scene);
-  skyMat.diffuseTexture=texSky(scene); skyMat.emissiveColor=new BABYLON.Color3(0.9,0.9,0.9);
+  skyMat.diffuseTexture=texSky(scene); skyMat.emissiveColor=new BABYLON.Color3(0.66,0.66,0.68);
   skyMat.specularColor=new BABYLON.Color3(0,0,0); skyMat.disableLighting=true; skyMat.backFaceCulling=false;
   const sky=BABYLON.MeshBuilder.CreatePlane('skyView',{width:10,height:7},scene);
   sky.position.set(wcx+0.5, wcy+0.6, -HD-3.0); sky.material=skyMat; sky.isPickable=false; sky.applyFog=false;
+  scene.__skyMesh = sky;
   }
 
   // ── 창빛 기둥(additive 위장 볼륨광, 공기감 표현) ──
@@ -1843,7 +2214,7 @@ function createRoomBase(scene, opt){
   const bm=new BABYLON.StandardMaterial('beamM',scene);
   bm.emissiveColor=new BABYLON.Color3(1,0.98,0.92); bm.diffuseColor=new BABYLON.Color3(0,0,0);
   bm.specularColor=new BABYLON.Color3(0,0,0); bm.disableLighting=true; bm.backFaceCulling=false;
-  bm.alpha=0.06; bm.alphaMode=BABYLON.Engine.ALPHA_ADD;   // ★ V17 0.09→0.06 (창가가 하얗게 뜨던 문제)
+  bm.alpha=0.032; bm.alphaMode=BABYLON.Engine.ALPHA_ADD;   // ★ V18 0.06→0.032 (창가 백화 완화)
   beam.material=bm; beam.isPickable=false; beam.applyFog=false;
   if(opt.bare) beam.dispose();
 
@@ -1906,7 +2277,9 @@ function applyShadow(scene, dir, meshRoot){
     sh.darkness = 0.34; sh.bias = 0.002; sh.normalBias = 0.02;
     scene.__shadow = sh;
   }
-  scene.__shadow.getShadowMap().renderList = meshRoot.getChildMeshes(false);
+  const casters = meshRoot.getChildMeshes(false);
+  try{ scene.meshes.forEach(m=>{ if(m.castShadow && m.isEnabled && m.isEnabled()) casters.push(m); }); }catch(e){}
+  scene.__shadow.getShadowMap().renderList = casters;
 }
 
 // ★ V11 저사양 기기 자동 조정 — 학교 태블릿·크롬북에서도 끊기지 않게.
@@ -1934,6 +2307,8 @@ function autoTuneQuality(engine, scene){
       if(fps <16){
         try{ if(scene.__shadow){ scene.__shadow.dispose(); scene.__shadow = null; } }catch(e){}  // 2차: 그림자
         try{ if(bjs.pipeline){ bjs.pipeline.dispose(); bjs.pipeline = null; } }catch(e){}        // 3차: 후처리
+        try{ if(bjs.glow){ bjs.glow.dispose(); bjs.glow = null; } }catch(e){}                   // 3-B: Glow
+        try{ if(bjs.ssao){ bjs.ssao.dispose(); bjs.ssao = null; } }catch(e){}                   // 3-C: SSAO
         try{ scene.particleSystems.slice().forEach(p=>p.dispose()); }catch(e){}                 // 4차: 먼지
       }
       console.log('[성능] FPS', Math.round(fps), '→ 저사양 모드(해상도' + (fps <18 ? '·그림자·후처리·먼지' : '') + ' 해제)');
@@ -1946,6 +2321,14 @@ function startBabylon(canvas, robot, fallback){
   bjs._starting = true;
   try{
     const engine = new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true, adaptToDeviceRatio:true});
+    // ★ V18: 방이 숨겨진 상태에서 엔진이 만들어지면 캔버스가 300×150 으로 굳는다.
+    //   크기가 바뀔 때마다(탭 전환·화면 전환·창 크기) 다시 맞춘다.
+    try{
+      if(window.ResizeObserver){
+        const ro = new ResizeObserver(()=>{ try{ engine.resize(); }catch(e){} });
+        ro.observe(canvas);
+      }
+    }catch(e){}
     const scene = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.863,0.918,0.988,1); // #dceafc
 
@@ -1956,11 +2339,11 @@ function startBabylon(canvas, robot, fallback){
     const fitRoomCamera = ()=>{
       const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
       const ar = w / h;
-      const r = Math.max(5.4, Math.min(9.0, 5.85 + (1.35 - ar) * 2.5));
+      const r = Math.max(5.15, Math.min(8.8, 5.55 + (1.35 - ar) * 2.4));
       cam.radius = r;
       cam.lowerRadiusLimit = Math.max(4.0, r * 0.72);
       cam.upperRadiusLimit = r * 1.55;
-      cam.beta = ar <0.9 ? 1.24 : 1.30;
+      cam.beta = ar <0.9 ? 1.20 : 1.26;
     };
     fitRoomCamera();
     // 줌 한계 설정 (휠로 확대/축소)
@@ -1976,6 +2359,28 @@ function startBabylon(canvas, robot, fallback){
     // 조명·바닥·러그·안개 (미리보기 창과 공용)
     // ★ decors 전달 → 구매한 장식이 방 안에 실제 3D 오브젝트로 놓인다
     const { dir, hemi } = createRoomBase(scene, { decors: state.decors||[] });
+    // ★ 2026-10-31: 발광 파츠(눈/코어/안테나/전구)를 부드럽게 번지게 하는 Glow
+    let roomGlow = null;
+    try{
+      if(BABYLON.GlowLayer){
+        roomGlow = new BABYLON.GlowLayer('glow', scene, {mainTextureFixedSize:512, blurKernelSize:32});
+        roomGlow.intensity = 0.24;
+        if(scene.__skyMesh) roomGlow.addExcludedMesh(scene.__skyMesh);
+      }
+    }catch(e){}
+
+    // ★ 2026-10-31: 접촉 음영(SSAO)으로 가구/로봇의 깊이를 살린다.
+    let roomSSAO = null;
+    try{
+      if(BABYLON.SSAO2RenderingPipeline && engine.webGLVersion > 1){
+        roomSSAO = new BABYLON.SSAO2RenderingPipeline('ssao', scene,
+          { ssaoRatio:0.5, blurRatio:0.5 }, [cam]);
+        roomSSAO.radius = 1.05;
+        roomSSAO.totalStrength = 0.95;
+        roomSSAO.samples = 16;
+        roomSSAO.expensiveBlur = false;
+      }
+    }catch(e){}
 
     const root = new BABYLON.TransformNode('robotRoot', scene);
     root.rotation.y = 0;   // ★ V17 시작 자세는 카메라 정면
@@ -1987,7 +2392,7 @@ function startBabylon(canvas, robot, fallback){
     //   원래는 자꾸 때 _starting 이 사라져서, 환경 텍스처 로딩(~2.5초) 동안
     //   마이룸이 다시 호출되면 가드를 통과해 같은 canvas 에 두 번째 Engine 이 생겼다
     //   (렌더 루프 2개, 호흡 2배, wanderTimer 누수).
-    bjs = { engine, scene, root, bob, model, canvas, cam, ready:false, _t:0, wanderTimer:null, _starting:true };
+    bjs = { engine, scene, root, bob, model, canvas, cam, glow:roomGlow, ssao:roomSSAO, ready:false, _t:0, wanderTimer:null, _starting:true };
 
     // PBR 환경광 로드(최대 2.5초) → 성공 시 점토 질감, 실패 시 Standard 로봇 생성
     tryLoadEnvironment(scene).then(ok=>{
@@ -2002,9 +2407,10 @@ function startBabylon(canvas, robot, fallback){
           const pipe = new BABYLON.DefaultRenderingPipeline('dpr', true, scene, [cam]);
           bjs.pipeline = pipe;   // ★ V11 저사양 모드에서 해제할 수 있게 보관
           pipe.fxaaEnabled = true;
-          pipe.imageProcessing.toneMappingEnabled = false;
-          pipe.imageProcessing.exposure = 1.0;
-          pipe.imageProcessing.contrast = 1.0;
+          pipe.imageProcessing.toneMappingEnabled = true;
+          try{ pipe.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES; }catch(e){}
+          pipe.imageProcessing.exposure = 1.06;
+          pipe.imageProcessing.contrast = 1.04;
           pipe.imageProcessing.vignetteEnabled = true;
           pipe.imageProcessing.vignetteWeight = 1.1;
           pipe.imageProcessing.vignetteStretch = 0.4;
@@ -2120,12 +2526,12 @@ async function submitAiMission(){
     const r = await api('/api/quest/answer',{answer});
     state.user.cell_balance = r.balance; setBalance(r.balance);
     state.quests.done.push(String(btn.dataset.qid)); renderQuests();
-    bubble(r.reaction);
+    bubble(r.reaction, true);
     setTimeout(()=>bubble(r.bonus? ` +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : ` +${r.reward}셀 획득!`), 4500);
   }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='답하기  +30'; }
 }
 // ★ P1-8 이중 클릭 방지: 요청 중 버튼을 잠가 LLM 을 두 번 소모하지 않게 한다
-$$('.interact-row .btn').forEach(b=>b.addEventListener('click', async ()=>{
+$$('.interact-row .btn, .room-dock [data-act]').forEach(b=>b.addEventListener('click', async ()=>{
   if(b.disabled) return;
   const act = b.dataset.act;
   b.disabled = true;
@@ -2133,7 +2539,7 @@ $$('.interact-row .btn').forEach(b=>b.addEventListener('click', async ()=>{
     const j = await api('/api/interact',{situation:act});
     // ★ 반응하기 전에 로봇이 카메라 쪽으로 걸어와야 '같이 놀는' 느낌이 난다
     walkTo([0, -0.2], 0);
-    bubble(j.line); jumpRobot();
+    bubble(j.line, true); jumpRobot();
     // ★ P1-1 일일 한도 초과 안내
     if(j.limited) setTimeout(()=>bubble('오늘은 정말 많이 했어! 내일 또 놀자 '), 1200);
     const q = state.quests.list.find(x=>x.type===act);
@@ -2169,6 +2575,12 @@ function closeGame(id){
   //   rx.running 이 true 로 남으면 다음에 다시 열었을 때
   //   "진행 중" 인 척하며 타이머만 도는 유령 상태가 된다.
   rx.running = false; mm.running = false;
+  // ★ 2026-10-27: 슈터는 rAF 루프라 닫을 때 반드시 취소한다.
+  if(id==='game-shooter') stopShooter();
+  // ★ 2026-10-28: 두더지도 interval 을 반드시 정리한다.
+  if(id==='game-mole') stopMole();
+  // ★ 2026-10-29: 친구 채팅 폴링 정리 + 읽음 배지 갱신
+  if(id==='friend-chat'){ stopFriendChat(); loadFriends(); }
   // 버튼 복구(다음 실행에서 '계속하기' 등으로 굳지 않도록)
   const rg = $('#reflex-go'); if(rg){ rg.disabled = false; }
   const mg = $('#memory-go'); if(mg){ mg.disabled = false; }
@@ -2185,18 +2597,23 @@ async function submitGameResult(kind, payload, btn){
     state.user.cell_balance = r.balance; setBalance(r.balance);
     if(r.growth) state.growth = { ...state.growth, ...r.growth, partBonus: state.growth.partBonus||0 };
     await refreshGrowth();     // ★ V9: 단계가 바뀌면 3D 가 눈앞에서 자란다
-    const detail = r.ms != null ? `${r.ms}ms` : `${r.level}단계`;
-    const stage = kind==='reaction' ? $('#reflex-stage') : $('#memory-stage');
-    if(stage) stage.innerHTML = ` 보상 받음!<br> +${r.reward}셀 · +${r.growth.exp}XP`;
-    bubble(` ${r.label} ${detail}!  +${r.reward}셀 +${r.growth.exp}XP`);
+    const detail = r.ms != null ? `${r.ms}ms`
+                 : (r.level != null ? `${r.level}단계`
+                 : (r.score != null ? `${r.score}점` : '완료'));
+    const stageMap = { reaction:'#reflex-stage', memory:'#memory-stage', shooter:'#sh-overlay', puzzle:'#pz-hint', mole:'#mole-overlay' };
+    const modalMap = { reaction:'game-reflex', memory:'game-memory', shooter:'game-shooter', puzzle:'game-puzzle', mole:'game-mole' };
+    const stage = $(stageMap[kind] || '#reflex-stage');
+    if(stage) stage.innerHTML = `🎉 보상 받음!<br>+${r.reward}셀 · +${r.growth.exp}XP`;
+    bubble(`${r.label} ${detail}! +${r.reward}셀 +${r.growth.exp}XP`);
     // 1.6초 뒤에 창을 스스로 닫아 다음 판으로 이어지게 한다
     setTimeout(()=>{
-      closeGame(kind==='reaction' ? 'game-reflex' : 'game-memory');
+      closeGame(modalMap[kind] || 'game-reflex');
       if(state.robot) renderMyroom();
     }, 1600);
   }catch(e){
     // 실패: 사유를 화면에 분명히 남기고 버튼을 되살린다(재시도 가능)
-    const stage = kind==='reaction' ? $('#reflex-stage') : $('#memory-stage');
+    const stageMap = { reaction:'#reflex-stage', memory:'#memory-stage', shooter:'#sh-overlay', puzzle:'#pz-hint', mole:'#mole-overlay' };
+    const stage = $(stageMap[kind] || '#reflex-stage');
     if(stage) stage.innerHTML = `<span style="color:#c92a2a">${esc(e.message)}</span>`;
     bubble(e.message);
     if(btnRef){
@@ -2432,8 +2849,8 @@ function memFail(i){
 }
 
 // 미니게임 버튼 연결
-$("#btn-reflex").addEventListener("click", openReflex);
-$("#btn-memory").addEventListener("click", openMemory);
+$("#btn-shooter")?.addEventListener("click", openShooter);
+$("#btn-puzzle")?.addEventListener("click", openPuzzle);
 $("#reflex-go").addEventListener("click", ()=>{
   const stage = $('#reflex-stage'), btn = $('#reflex-go');
   if(!rx.running){
@@ -2472,6 +2889,8 @@ $("#overplay-parent").addEventListener("click", openParentGate);
 $("#overplay-ok").addEventListener("click", ()=>{
   // 오늘은 여기서 끝내되, 데이터는 지우지 않는다(내일 이어서 놀 수 있게)
   stopPlayTimer();
+  state.overplayDismissed = true;
+  state.overLimit = true;
   $('#overplay').classList.add('hidden');
   show('start');
 });
@@ -2485,11 +2904,12 @@ $$('.modal').forEach(m=>{
   if(m.id === 'preview-modal' || m.id === 'modal') return;   // 기존 모달은 별도 처리
   m.addEventListener('click', e=>{ if(e.target === m) closeGame(m.id); });
 });
-document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); } });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); closeGame("game-shooter"); closeGame("game-puzzle"); closeGame("game-mole"); } });
 // ---------- 상점 ----------
 const ITEM_KIND = { part:'로봇 부품', decor:'방 장식', skin:'색칠 스킨', shard:'부품 조각' };
 async function loadShop(){
-  const items = await api('/api/items');
+  const allItems = await api('/api/items');
+  const items = state.shopFilter === 'all' ? allItems : allItems.filter(it=>it.type === state.shopFilter);
   // 등급: 가격대별 표시(아이에게 "레벨"처럼 보이게) + 보유 여부 배지
   const tier = p => p>=100 ? { label:'EPIC', cls:'t-epic' } : p>=70 ? { label:'RARE', cls:'t-rare' } : { label:'NORMAL', cls:'t-normal' };
   $('#shop-list').innerHTML = items.map(it=>{
@@ -2709,21 +3129,27 @@ async function loadBoard(){
       <span class="tagline">재화 유입</span></div>
     <div class="stat"><b>-${esc(Math.abs(s.txOut))}</b><span>사용한 셀</span>
       <span class="tagline">재화 유출</span></div>`;
-  // 최근 7일 접속 추이(막대 그래프)
+  // 최근 7일 접속 추이(막대 그래프) — 기록 없는 날도 0으로 채워 7칸을 유지한다
   const daily = j.daily || [];
-  const maxV = Math.max(1, ...daily.map(d=>d.visits));
-  $('#board-trend').innerHTML = daily.length
-    ? daily.map(d=>{
-        const h = Math.round(d.visits / maxV * 62) + 3;
-        const min = Math.round((d.secs||0)/60);
-        const wd = ['일','월','화','수','목','금','토'][(new Date(d.d).getDay())];
-        return `<div class="col" title="${esc(d.d)} · ${min}분 체류">
-          <span class="cnt">${esc(d.visits)}</span>
-          <div class="bar${d.visits?'':' empty'}" style="height:${h}px"></div>
-          <span class="lbl">${esc(String(new Date(d.d).getDate()))}일(${wd})</span>
-        </div>`;
-      }).join('')
-    : '<div class="trend-empty">아직 접속 기록이 없어요.</div>';
+  const byDay = Object.fromEntries(daily.map(d=>[d.d, d]));
+  const days = [];
+  const baseKst = new Date(Date.now() + 9*3600*1000);
+  for(let i=6;i>=0;i--){
+    const dt = new Date(baseKst); dt.setUTCDate(dt.getUTCDate() - i);
+    const key = dt.toISOString().slice(0,10);
+    days.push(byDay[key] || { d:key, visits:0, secs:0 });
+  }
+  const maxV = Math.max(1, ...days.map(d=>d.visits));
+  $('#board-trend').innerHTML = days.map(d=>{
+    const h = Math.round(d.visits / maxV * 62) + 3;
+    const min = Math.round((d.secs||0)/60);
+    const wd = ['일','월','화','수','목','금','토'][(new Date(d.d+'T00:00:00+09:00').getDay())];
+    return `<div class="col" title="${esc(d.d)} · ${min}분 체류">
+      <span class="cnt">${esc(d.visits)}</span>
+      <div class="bar${d.visits?'':' empty'}" style="height:${h}px"></div>
+      <span class="lbl">${esc(String(new Date(d.d+'T00:00:00+09:00').getDate()))}일(${wd})</span>
+    </div>`;
+  }).join('');
   $('#tx-table tbody').innerHTML = j.txs.map(t=>
     `<tr><td>${esc(srcMap[t.source]||t.source)}</td>
      <td class="${t.amount>=0?'plus':'minus'}">${t.amount>=0?'+':''}${esc(t.amount)}</td>
@@ -2894,7 +3320,7 @@ $('#btn-demo').addEventListener('click', async ()=>{
     if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 800);
     startPlayTimer();
     await enter();
-    setTimeout(()=> bubble(' 데모 계정 · 최근 7일 성장 기록을 준비했어요'), 1400);
+    setTimeout(()=> bubble('지난 7일 기록을 불러왔어. 오늘은 뭐부터 할까?'), 1400);
   }catch(e){ alert(e.message); }
   finally{ b.disabled = false; b.textContent = ' 데모 계정으로 바로 보기'; }
 });
@@ -2928,7 +3354,7 @@ async function openRank(){
   $('#rank-modal').classList.remove('hidden');
   $('#rank-body').innerHTML = '<div class="none">불러오는 중…</div>';
   try{
-    const r = await api('/api/rank/daily');
+    const [r, w] = await Promise.all([api('/api/rank/daily'), api('/api/rank/weekly').catch(()=>null)]);
     const block = (title, emoji, data, fmt)=>{
       const rows = (data.rows || []).map(x=>
         `<div class="rk-row${x.me?' me':''}"><b>${x.rank}</b><span class="rk-name">${esc(x.name)}</span><span class="rk-score">${esc(fmt(x.score))}</span></div>`
@@ -2938,9 +3364,16 @@ async function openRank(){
         : `<div class="rk-mine">오늘은 아직 안 했어요 — 도전해 볼까요?</div>`;
       return `<div class="rk-block"><h4>${emoji} ${title}</h4>${rows}${mine}</div>`;
     };
+    const week = (rows, title, emoji)=>{
+      const list = (rows || []).map(x=>
+        `<div class="rk-row"><b>${x.rank}</b><span class="rk-name">${esc(x.name)}</span><span class="rk-score">${x.score}점</span></div>`
+      ).join('') || '<div class="none">아직 기록이 없어요</div>';
+      return `<div class="rk-block"><h4>${emoji} ${title} · 주간</h4>${list}</div>`;
+    };
     $('#rank-body').innerHTML =
-      block('반사 속도', '', r.reaction, s=>`${s}ms`) +
-      block('기억 순서', '', r.memory, s=>`${s}단계`) +
+      block('버그 두더지', '🐞', r.mole, s=>`${s}점`) +
+      block('버그 슈터', '🚀', r.shooter, s=>`${s}점`) +
+      (w ? week(w.mole, '버그 두더지', '🐞') + week(w.shooter, '버그 슈터', '🚀') : '') +
       `<div class="rk-note">${esc(r.note || '')}</div>`;
   }catch(e){ $('#rank-body').innerHTML = '<div class="none">랭킹을 불러오지 못했어요</div>'; }
 }
@@ -2986,11 +3419,12 @@ $('#ob-skip').addEventListener('click', closeOnboard);
     try{
       const j = await api('/api/user',{nickname:nick});
       state.user=j.user; state.quests=j.quests||{list:[],done:[]};
+      if(j.revive && j.revive.available) setTimeout(()=>showRevive(j.revive), 900);
       if(j.user.token) localStorage.setItem(SK.token, j.user.token);
       if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 1200);
       // ★ 오버플레이 차단은 자동 로그인 경로에도 반드시 적용한다.
       //   여기를 빠뜨리면 새로고침만으로 시간 제한을 우회할 수 있다.
-      if(j.play && j.play.overLimit){
+      if(j.play && j.play.overLimit && !state.overplayDismissed){
         show('start');
         showOverplay({ minutes: j.play.minutes });
         return;
@@ -3001,3 +3435,1329 @@ $('#ob-skip').addEventListener('click', closeOnboard);
   }
   show('start');
 })();
+
+// ============================================================
+// ★ 2026-10-27 — 방 학습 상태 / 루미 대화 / 버그 슈터 / 오늘의 퍼즐
+// ============================================================
+
+// ---- 방 조명/책장: 이해도가 오르면 방이 밝아진다 ----
+async function loadRoomState(){
+  try{
+    const r = await api('/api/room/state');
+    state.room = r;
+    const el = $('#room-learning');
+    if(el){
+      const lit = r.lit > 0.05 ? ` · 💡 방이 ${Math.round(r.lit*100)}% 밝아졌어요` : ' · 💡 학습하면 방이 밝아져요';
+      const bookRow = Array.from({length:12},(_,i)=>`<span class="${i<r.books?'on':''}">📕</span>`).join('');
+      el.innerHTML = `📚 이해도 <b>${r.understanding}</b> · 책 <b>${r.books}</b>권${lit}<div class="room-books">${bookRow}</div>`;
+    }
+    const hb = $('#hud-books'); if(hb) hb.textContent = `📚${r.books||0}`;
+    if(bjs.scene){
+      const hemi = bjs.scene.getLightByName('h');
+      if(hemi) hemi.intensity = 0.35 + (r.lit||0) * 0.65;
+    }
+  }catch(e){ /* 조용히 무시 — 방 렌더를 막지 않는다 */ }
+}
+
+// ---- 친구 시스템 (2026-10-29) ----
+async function loadFriends(){
+  const list = $('#friend-list');
+  if(!list) return;
+  try{
+    const r = await api('/api/friends');
+    $('#friend-code').textContent = r.code || '------';
+    $('#friend-count').textContent = `${(r.friends||[]).length}명`;
+    const requests = r.requests || [];
+    $('#friend-requests').innerHTML = requests.length ? requests.map(q=>`
+      <div class="friend-item">
+        <div class="friend-info"><b>${esc(displayName(q.nickname))}</b><span>Lv.${q.level||1}</span></div>
+        <div class="friend-actions">
+          <button class="btn primary" data-faccept="${q.id}">수락</button>
+          <button class="btn ghost" data-fdecline="${q.id}">거절</button>
+        </div>
+      </div>`).join('') : '<div class="hint">받은 요청이 없어요.</div>';
+    const friends = r.friends || [];
+    state.friends = friends;
+    state.friendsChatEnabled = r.chatEnabled !== false;
+    const chatNote = $('#friend-chat-note');
+    if(chatNote) chatNote.textContent = state.friendsChatEnabled
+      ? '친구와 텍스트로 대화할 수 있어요. 개인정보/링크/전화번호는 보내지 마세요.'
+      : '보호자가 친구 채팅을 꺼 두었어요. 응원은 보낼 수 있어요.';
+    const offNote = r.chatEnabled === false
+      ? '<div class="hint" style="margin-bottom:8px">보호자가 친구 채팅을 꺼 두었어요.</div>' : '';
+    list.innerHTML = offNote + (friends.length ? friends.map(f=>{
+      const tpl = (f.robot && f.robot.template) || 'doro';
+      const pal = (f.robot && f.robot.palette) || {};
+      const svg = robotSVG(tpl, effectiveColors(tpl, pal));
+      const chatBtn = state.friendsChatEnabled
+        ? `<button class="btn primary" data-fchat="${f.id}">채팅</button>` : '';
+      return `<div class="friend-item">
+        <div class="friend-avatar">${svg}</div>
+        <div class="friend-info"><b>${esc(displayName(f.nickname))}${f.unread?`<span class="friend-unread">${f.unread}</span>`:''}</b><span>Lv.${f.level} · 🔥${f.streak}</span></div>
+        <div class="friend-actions">
+          ${chatBtn}
+          <button class="btn ghost" data-fcheer="${f.friendshipId}" ${f.cheeredToday?'disabled':''}>${f.cheeredToday?'응원 완료':'응원'}</button>
+          <button class="btn ghost" data-fremove="${f.friendshipId}">삭제</button>
+        </div>
+      </div>`;
+    }).join('') : '<div class="hint">아직 친구가 없어요. 위 코드로 친구를 추가해 보세요!</div>');
+    $$('#friend-requests [data-faccept]').forEach(b=>b.addEventListener('click', ()=>friendAction('/api/friends/accept', b.dataset.faccept, '친구가 됐어요!')));
+    $$('#friend-requests [data-fdecline]').forEach(b=>b.addEventListener('click', ()=>friendAction('/api/friends/decline', b.dataset.fdecline, '요청을 거절했어요.')));
+    $$('#friend-list [data-fchat]').forEach(b=>b.addEventListener('click', ()=>openFriendChat(Number(b.dataset.fchat))));
+    $$('#friend-list [data-fcheer]').forEach(b=>b.addEventListener('click', ()=>friendAction('/api/friends/cheer', b.dataset.fcheer, '응원을 보냈어요!')));
+    $$('#friend-list [data-fremove]').forEach(b=>b.addEventListener('click', ()=>{
+      if(confirm('친구를 삭제할까요?')) friendAction('/api/friends/remove', b.dataset.fremove, '친구를 삭제했어요.');
+    }));
+  }catch(e){
+    list.innerHTML = `<div class="hint">${esc(e.message)}</div>`;
+  }
+}
+async function friendAction(path, id, msg){
+  try{
+    const r = await api(path, { id });
+    toast(msg + (r && r.nickname ? ` (${displayName(r.nickname)})` : ''));
+    loadFriends();
+  }catch(e){ toast(e.message); }
+}
+async function addFriendByCode(){
+  const input = $('#friend-code-input');
+  const code = ((input && input.value) || '').trim().toUpperCase();
+  if(!code) return toast('친구 코드를 입력해 주세요');
+  try{
+    const r = await api('/api/friends/request', { code });
+    toast(r.auto ? `${displayName(r.nickname)}님과 친구가 됐어요!` : `${displayName(r.nickname)}님에게 요청을 보냈어요`);
+    if(input) input.value = '';
+    loadFriends();
+  }catch(e){ toast(e.message); }
+}
+
+// ---- 친구 채팅 (2026-10-29) ----
+let _fcTimer = null, _fcFriend = null;
+async function openFriendChat(fid){
+  if(state.friendsChatEnabled === false) return toast('보호자가 친구 채팅을 꺼 두었어요');
+  const f = (state.friends||[]).find(x=>x.id === fid);
+  if(!f) return;
+  _fcFriend = fid;
+  $('#friend-chat').classList.remove('hidden');
+  $('#fc-name').textContent = displayName(f.nickname);
+  const tpl = (f.robot && f.robot.template) || 'doro';
+  const pal = (f.robot && f.robot.palette) || {};
+  $('#fc-avatar').innerHTML = robotSVG(tpl, effectiveColors(tpl, pal));
+  await loadFriendChat(fid, false);
+  clearInterval(_fcTimer);
+  _fcTimer = setInterval(()=>{
+    if($('#friend-chat').classList.contains('hidden')){ stopFriendChat(); return; }
+    loadFriendChat(fid, true);
+  }, 5000);
+}
+async function loadFriendChat(fid, quiet){
+  try{
+    const r = await api(`/api/friends/chat?friendId=${fid}`);
+    if(!quiet && r.friend) $('#fc-name').textContent = displayName(r.friend.nickname);
+    const log = $('#fc-log');
+    log.innerHTML = (r.messages||[]).map(m=>{
+      const mine = m.from_user === state.user.id;
+      const t = (m.created_at||'').slice(11,16);
+      return `<div class="fc-msg ${mine?'me':''}"><span>${esc(m.body)}</span><small>${t}</small></div>`;
+    }).join('') || '<div class="hint" style="text-align:center;padding:20px">첫 메시지를 보내 보세요!</div>';
+    log.scrollTop = log.scrollHeight;
+  }catch(e){ if(!quiet) toast(e.message); }
+}
+function stopFriendChat(){
+  if(_fcTimer){ clearInterval(_fcTimer); _fcTimer = null; }
+  _fcFriend = null;
+}
+async function sendFriendChat(){
+  const input = $('#fc-text');
+  const msg = ((input && input.value) || '').trim();
+  if(!msg || !_fcFriend) return;
+  try{
+    await api('/api/friends/chat', { friendId:_fcFriend, message:msg });
+    if(input) input.value = '';
+    loadFriendChat(_fcFriend, true);
+  }catch(e){ toast(e.message); }
+}
+async function reportFriend(){
+  if(!_fcFriend) return;
+  if(!confirm('신고할까요? 선생님이 확인해요.')) return;
+  try{
+    await api('/api/friends/report', { friendId:_fcFriend, reason:'불편한 말/행동' });
+    toast('신고했어요. 선생님이 확인할게요.');
+  }catch(e){ toast(e.message); }
+}
+async function blockFriend(){
+  if(!_fcFriend) return;
+  if(!confirm('차단하면 친구가 삭제되고 다시 요청할 수 없어요. 차단할까요?')) return;
+  try{
+    await api('/api/friends/block', { friendId:_fcFriend });
+    toast('차단했어요.');
+    closeGame('friend-chat');
+  }catch(e){ toast(e.message); }
+}
+
+// ---- AI가 짜 주는 오늘의 학습 계획 (2026-10-28) ----
+async function loadPlan(){
+  const box = $('#plan-list');
+  if(box && !state.plan) box.innerHTML = '<div class="hint">루미가 계획을 짜고 있어요…</div>';
+  try{
+    const r = await api('/api/plan/today');
+    state.plan = r;
+    renderPlan();
+    if($('#chat-panel') && !$('#chat-panel').classList.contains('hidden')) renderChatChips();
+    // 오후 4시 이후, 아직 시작 전이면 한 번만 살짝 알려준다.
+    if(!state.planToastShown && state.nudgeOptIn && !r.allDone && (r.done||0) === 0 && new Date().getHours() >= 16){
+      state.planToastShown = true;
+      setTimeout(()=>toast('오늘의 학습 계획이 준비됐어! 1단계부터 시작해 볼까?'), 2500);
+    }
+  }catch(e){
+    if(box) box.innerHTML = '<div class="hint">계획을 불러오지 못했어요.</div>';
+  }
+}
+function renderPlan(){
+  const r = state.plan, box = $('#plan-list');
+  if(!box || !r || !r.plan) return;
+  const steps = r.plan.steps || [];
+  box.innerHTML = steps.map(s=>`
+    <div class="plan-step ${s.done?'done':''}">
+      <input type="checkbox" class="plan-check" data-plan-done="${s.id}" ${s.done?'checked':''} title="완료">
+      <div class="plan-body"><b>${esc(s.title)}</b><span>${esc(s.desc||'')} · ${s.minutes}분</span></div>
+      <button class="btn primary" data-plan-start="${s.id}">${s.done?'완료':'시작'}</button>
+    </div>`).join('');
+  const src = $('#plan-source'); if(src) src.textContent = r.source === 'ai' ? '루미' : '기본';
+  const prog = $('#plan-progress'); if(prog) prog.textContent = `${r.done||0}/${steps.length} 완료`;
+  $$('#plan-list [data-plan-done]').forEach(cb=>cb.addEventListener('change', ()=>togglePlanStep(cb.dataset.planDone, cb.checked)));
+  $$('#plan-list [data-plan-start]').forEach(b=>b.addEventListener('click', ()=>startPlanStep(b.dataset.planStart)));
+}
+async function togglePlanStep(id, done){
+  try{
+    const r = await api('/api/plan/step', { stepId:id, done });
+    state.plan = r;
+    renderPlan();
+    if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
+    if(r.reward) toast(`🎉 오늘의 계획 완료! +${r.reward}셀`);
+  }catch(e){ toast(e.message); }
+}
+async function startPlanStep(id){
+  const s = state.plan && state.plan.plan && state.plan.plan.steps.find(x=>x.id === id);
+  if(!s) return;
+  state.lastPlanStep = id;
+  if(s.type === 'puzzle'){ openPuzzle(); return; }
+  if(s.type === 'game'){ goNav('games'); return; }
+  await chatOpen();
+  chatModeSet('learn');
+  const input = $('#chat-text');
+  if(input) input.value = s.message || `${s.title} 같이 볼까?`;
+  sendChat(false);
+}
+
+// ---- 주간 목표 + 학습 설정 (2026-10-28) ----
+async function loadGoals(){
+  const box = $('#goals-list');
+  if(box && !state.goals) box.innerHTML = '<div class="hint">이번 주 목표를 준비하고 있어요…</div>';
+  try{
+    const r = await api('/api/goals/week');
+    state.goals = r;
+    renderGoals();
+    if(!state.goalToastShown && r.allDone){ state.goalToastShown = true; toast('🎉 이번 주 목표를 모두 달성했어!'); }
+  }catch(e){
+    if(box) box.innerHTML = '<div class="hint">목표를 불러오지 못했어요.</div>';
+  }
+}
+function renderGoals(){
+  const r = state.goals, box = $('#goals-list');
+  if(!box || !r) return;
+  const rows = (r.goals||[]).map(g=>{
+    const pct = Math.round((g.progress / Math.max(1, g.target)) * 100);
+    return `<div class="goal-row ${g.done?'done':''}">
+      <div class="goal-top"><b>${esc(g.title)}</b><span>${g.progress}/${g.target}${esc(g.unit||'')}</span></div>
+      <div class="goal-bar"><i style="width:${Math.min(100,pct)}%"></i></div>
+    </div>`;
+  }).join('');
+  let extra = '<div class="goal-teaser">3개 모두 달성하면 +30셀</div>';
+  if(r.allDone && !r.claimed) extra = '<button id="goal-claim" class="btn primary goal-claim">🎁 주간 보상 +30셀</button>';
+  else if(r.claimed) extra = '<div class="goal-done">🎉 이번 주 목표 달성! 보상 받았어요</div>';
+  box.innerHTML = rows + extra;
+  const src = $('#goals-source'); if(src) src.textContent = r.source === 'ai' ? '루미' : '기본';
+  const prog = $('#goals-progress'); if(prog) prog.textContent = `${r.done||0}/${(r.goals||[]).length} 달성`;
+  $('#goal-claim')?.addEventListener('click', claimGoals);
+}
+async function claimGoals(){
+  try{
+    const r = await api('/api/goals/claim', {});
+    if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
+    toast(r.already ? '이미 보상을 받았어요' : `🎉 주간 보상 +${r.reward}셀!`);
+    loadGoals();
+  }catch(e){ toast(e.message); }
+}
+async function openPrefs(){
+  $('#prefs-modal').classList.remove('hidden');
+  try{
+    const p = await api('/api/prefs');
+    state.prefs = p;
+    renderPrefs();
+  }catch(e){ toast(e.message); }
+}
+function renderPrefs(){
+  const p = state.prefs || { minutes:10, time:'afternoon', subjects:[], difficulty:'normal' };
+  $$('#pref-minutes button').forEach(b=>b.classList.toggle('on', Number(b.dataset.min) === Number(p.minutes)));
+  $$('#pref-time button').forEach(b=>b.classList.toggle('on', b.dataset.time === p.time));
+  $$('#pref-diff button').forEach(b=>b.classList.toggle('on', b.dataset.diff === p.difficulty));
+  $$('#pref-subjects button').forEach(b=>b.classList.toggle('on', (p.subjects||[]).includes(b.dataset.subject)));
+}
+async function savePrefs(){
+  const p = state.prefs; if(!p) return;
+  try{
+    const r = await api('/api/prefs', { minutes:p.minutes, time:p.time, subjects:p.subjects||[], difficulty:p.difficulty });
+    state.prefs = r;
+    $('#prefs-modal').classList.add('hidden');
+    state.plan = null; state.goals = null;
+    toast('학습 설정을 저장했어요. 계획을 다시 짤게요!');
+    loadPlan(); loadGoals();
+  }catch(e){ toast(e.message); }
+}
+
+// ---- AI 전용 기억 (2026-10-31) ----
+const MEM_LABELS = { fact:'사실', preference:'선호', learning:'학습', goal:'목표', event:'일정' };
+async function refreshMemoryChips(){
+  try{
+    const r = await api('/api/memory');
+    state.memories = r.memories || [];
+    renderChatChips();
+  }catch(e){}
+}
+async function refreshReviewChip(){
+  try{
+    const r = await api('/api/review/due');
+    state.reviewDue = r.count || 0;
+    if(r.cards) state.reviewCards = r.cards;
+    renderChatChips();
+  }catch(e){}
+}
+async function openReview(){
+  try{
+    const r = await api('/api/review/due');
+    const cards = r.cards || [];
+    if(!cards.length) return toast('지금 복습할 문제가 없어요');
+    state.reviewCards = cards;
+    state.reviewIndex = 0;
+    $('#review-modal').classList.remove('hidden');
+    renderReview();
+  }catch(e){ toast(e.message); }
+}
+function renderReview(){
+  const c = state.reviewCards[state.reviewIndex];
+  if(!c){ $('#review-modal').classList.add('hidden'); return; }
+  $('#review-topic').textContent = c.topic ? `${c.topic} · ${c.wrongCount}번 틀림` : `${c.wrongCount}번 틀린 문제`;
+  $('#review-question').textContent = c.question;
+  $('#review-options').innerHTML = (c.options||[]).map((o,i)=>
+    `<button class="review-opt" data-opt="${i}">${esc(o)}</button>`).join('');
+  $('#review-feedback').className = 'review-feedback';
+  $('#review-feedback').textContent = '';
+  $('#review-next').disabled = true;
+  $$('#review-options [data-opt]').forEach(b=>b.addEventListener('click', ()=>answerReview(Number(b.dataset.opt))));
+}
+async function answerReview(choice){
+  const c = state.reviewCards[state.reviewIndex];
+  if(!c) return;
+  try{
+    const r = await api('/api/review/answer', { id:c.id, choice });
+    if(r.correct){
+      $$('#review-options .review-opt').forEach(b=>{
+        b.disabled = true;
+        if(Number(b.dataset.opt) === Number(choice)) b.classList.add('correct');
+      });
+      $('#review-feedback').className = 'review-feedback ok';
+      $('#review-feedback').textContent = `정답! +${r.reward||5}셀${r.explain ? ' · ' + r.explain : ''}`;
+      if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
+      $('#review-next').disabled = false;
+    } else {
+      const b = $(`#review-options [data-opt="${choice}"]`);
+      if(b) b.classList.add('wrong');
+      $('#review-feedback').className = 'review-feedback bad';
+      $('#review-feedback').textContent = '💡 ' + (r.hint || '한 번 더 생각해 보자.');
+    }
+  }catch(e){ toast(e.message); }
+}
+function nextReview(){
+  state.reviewIndex++;
+  if(state.reviewIndex >= state.reviewCards.length){
+    $('#review-modal').classList.add('hidden');
+    refreshReviewChip();
+    return;
+  }
+  renderReview();
+}
+async function loadMemories(){
+  $('#memory-modal').classList.remove('hidden');
+  const box = $('#memory-list');
+  box.innerHTML = '<div class="hint">불러오는 중…</div>';
+  try{
+    const r = await api('/api/memory');
+    state.memories = r.memories || [];
+    renderMemories();
+  }catch(e){ box.innerHTML = `<div class="hint">${esc(e.message)}</div>`; }
+}
+function renderMemories(){
+  const box = $('#memory-list');
+  const list = state.memories || [];
+  if(!list.length){
+    box.innerHTML = '<div class="hint" style="text-align:center;padding:20px">아직 기억이 없어요. 대화를 하면 루미가 기억해요.</div>';
+    return;
+  }
+  box.innerHTML = list.map(m=>`
+    <div class="mem-item">
+      <span class="mem-kind ${esc(m.kind)}">${MEM_LABELS[m.kind]||esc(m.kind)}</span>
+      <div class="mem-body"><b>${esc(m.value)}</b><span>${esc(m.key)} · ${Math.round((Number(m.confidence)||0)*100)}%</span></div>
+      <button class="mem-del" data-mem-del="${m.id}" title="삭제">✕</button>
+    </div>`).join('');
+  $$('#memory-list [data-mem-del]').forEach(b=>b.addEventListener('click', ()=>deleteMemory(Number(b.dataset.memDel))));
+}
+async function deleteMemory(id){
+  try{
+    const r = await api(`/api/memory/${id}`, null, 10000, 'DELETE');
+    state.memories = r.memories || [];
+    renderMemories();
+    toast('기억을 지웠어요');
+  }catch(e){ toast(e.message); }
+}
+async function addMemory(){
+  const input = $('#memory-input');
+  const value = ((input && input.value) || '').trim();
+  if(!value) return toast('기억할 내용을 적어 주세요');
+  const kind = ($('#memory-kind') && $('#memory-kind').value) || 'fact';
+  try{
+    const r = await api('/api/memory', { kind, key:'manual_'+Date.now(), value, confidence:0.9 });
+    state.memories = r.memories || [];
+    if(input) input.value = '';
+    renderMemories();
+    toast('루미가 기억했어요!');
+  }catch(e){ toast(e.message); }
+}
+async function clearMemories(){
+  if(!confirm('루미의 기억을 모두 지울까요?')) return;
+  try{
+    await api('/api/memory', null, 10000, 'DELETE');
+    state.memories = [];
+    renderMemories();
+    toast('모든 기억을 지웠어요');
+  }catch(e){ toast(e.message); }
+}
+
+// ---- 아이가 칠한 로봇을 대화 버튼/아바타에 표시 ----
+function robotPalette(){
+  const p = state.robot && state.robot.palette;
+  if(!p) return {};
+  if(typeof p === 'string'){ try{ return JSON.parse(p); }catch(e){ return {}; } }
+  return p;
+}
+function updateChatFab(){
+  const r = state.robot;
+  if(!r) return;
+  const svg = robotSVG(r.template, effectiveColors(r.template, robotPalette()));
+  ['#chat-fab-bot','#chat-head-avatar','#side-avatar'].forEach(sel=>{
+    const el = $(sel); if(el) el.innerHTML = svg;
+  });
+  const sl = $('#side-level');
+  if(sl) sl.textContent = `Lv.${(state.growth && state.growth.level) || 1}`;
+}
+function renderHeroBot(){
+  const svg = robotSVG('doro', PAL_BASE.doro);
+  const el = $('#hero-bot'); if(el) el.innerHTML = svg;
+  if(!state.robot){
+    const fab = $('#chat-fab-bot'); if(fab) fab.innerHTML = svg;
+    const sa = $('#side-avatar'); if(sa) sa.innerHTML = svg;
+  }
+}
+function displayName(n){ return String(n||'').replace(/^데모_/, ''); }
+function syncSidebar(){
+  if(state.user && state.user.nickname){
+    const sn = $('#side-name'); if(sn) sn.textContent = displayName(state.user.nickname);
+  }
+  const sl = $('#side-level');
+  if(sl) sl.textContent = `Lv.${(state.growth && state.growth.level) || 1}`;
+  const tn = $('#tomorrow-note');
+  if(tn){
+    const st = (state.user && state.user.streak) || 0;
+    tn.textContent = st > 0 ? `내일 오면 🔥${st+1}일 · 새 계획이 기다려` : '내일 오면 새 계획이 기다려';
+  }
+}
+function showRevive(r){
+  if(!r || !r.available) return;
+  const el = $('#revive-streak'); if(el) el.textContent = `🔥${r.streak}`;
+  $('#revive-modal').classList.remove('hidden');
+}
+async function acceptRevive(){
+  try{
+    const r = await api('/api/streak/revive', {});
+    if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
+    if(state.user) state.user.streak = r.streak;
+    const ts = $('#top-streak'); if(ts) ts.textContent = `🔥${r.streak}`;
+    const hs = $('#hud-streak'); if(hs) hs.textContent = `🔥${r.streak}`;
+    $('#revive-modal').classList.add('hidden');
+    syncSidebar();
+    toast(`🔥 ${r.streak}일 연속을 되살렸어!`);
+  }catch(e){ toast(e.message); }
+}
+
+// ---- 대화 패널 ----
+async function chatOpen(){
+  $('#chat-panel').classList.remove('hidden');
+  $('#chat-text').focus();
+  await loadChatHistory();
+  refreshMemoryChips();
+  refreshReviewChip();
+  loadRoomState();
+}
+function chatClose(){ $('#chat-panel').classList.add('hidden'); }
+function chatModeSet(mode){
+  state.chatMode = mode;
+  $$('.chat-modes .chip').forEach(b=>b.classList.toggle('on', b.dataset.mode===mode));
+  $('#chat-solved').classList.toggle('hidden', mode!=='learn');
+  const hint = $('#chat-mode-hint');
+  if(hint) hint.textContent = mode==='learn' ? '정답 대신 한 단계씩 같이 생각해요'
+    : mode==='reflect' ? '판단 없이 마음을 들어요' : '편하게 이야기해요';
+  renderChatChips();
+}
+function chatAdd(role, text, hint){
+  const log = $('#chat-log');
+  const d = document.createElement('div');
+  d.className = 'msg ' + (role==='user' ? 'user' : (hint ? 'hint' : 'bot'));
+  const span = document.createElement('span');
+  span.textContent = text;
+  d.appendChild(span);
+  if(role !== 'user'){
+    const sp = document.createElement('button');
+    sp.className = 'msg-speak'; sp.title = '읽어주기'; sp.textContent = '🔊';
+    sp.onclick = ()=>speak(text);
+    d.appendChild(sp);
+  }
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+function chatTyping(on){
+  let t = $('#chat-typing');
+  if(on && !t){
+    t = document.createElement('div'); t.id='chat-typing'; t.className='typing';
+    t.innerHTML = '루미가 생각 중 <span class="dots"><i></i><i></i><i></i></span>';
+    $('#chat-log').appendChild(t); $('#chat-log').scrollTop = $('#chat-log').scrollHeight;
+  } else if(!on && t){ t.remove(); }
+}
+async function loadChatHistory(){
+  const log = $('#chat-log'); log.innerHTML='';
+  try{
+    const r = await api('/api/chat/history');
+    (r.messages||[]).forEach(m=> chatAdd(m.role, m.content, Number(m.hint_level)>1));
+    if(!(r.messages||[]).length){
+      const p = state.plan && state.plan.plan;
+      const idx = p && p.steps ? p.steps.findIndex(s=>!s.done) : -1;
+      const first = idx >= 0 ? p.steps[idx] : null;
+      if(first) chatAdd('assistant', `오늘의 계획 ${idx+1}단계: ${first.title}. 같이 시작해 볼까? 궁금한 게 있으면 언제든 말해!`);
+      else chatAdd('assistant','안녕! 나는 루미야. 오늘 뭐 하고 놀았어? 공부에서 막히면 같이 생각해 보자!');
+    }
+  }catch(e){ chatAdd('assistant','안녕! 나는 루미야. 같이 이야기해 보자!'); }
+  chatModeSet(state.chatMode);
+}
+function renderChatChips(){
+  const chips = $('#chat-chips'); if(!chips) return; chips.innerHTML='';
+  const base = state.chatMode==='learn'
+    ? ['이거 어떻게 해?', '개념을 모르겠어', '내가 해봤어요']
+    : state.chatMode==='reflect'
+      ? ['오늘 기분이 이상해', '시험 때문에 속상해']
+      : ['오늘 뭐 했어?', '같이 놀자', '칭찬해 줘'];
+  const weak = (state.memories||[]).find(m=>m.kind==='learning' && String(m.key||'').startsWith('weak:'));
+  const like = (state.memories||[]).find(m=>m.kind==='fact' && (String(m.key||'').startsWith('like:') || m.key==='like'));
+  const extras = [];
+  if(state.reviewDue > 0) extras.push('3일 전 틀린 문제');
+  if(like) extras.push('내가 좋아하는 것');
+  if(weak){
+    const topic = String(weak.key).replace(/^weak:/,'');
+    if(topic) extras.push(`${topic} 다시 보기`);
+  }
+  const list = [...extras, ...base];
+  if(state.plan && state.plan.plan && !state.plan.allDone && !list.includes('오늘의 계획')) list.unshift('오늘의 계획');
+  list.slice(0,6).forEach(t=>{
+    const b=document.createElement('button'); b.textContent=t;
+    b.onclick=()=>{
+      if(t==='오늘의 계획'){
+        const p = state.plan.plan;
+        chatAdd('assistant', '오늘의 계획: ' + p.steps.map((s,i)=>`${i+1}. ${s.title}`).join(' / '));
+        return;
+      }
+      if(t==='3일 전 틀린 문제'){
+        openReview();
+        return;
+      }
+      if(t==='내가 좋아하는 것'){
+        chatModeSet('chat');
+        $('#chat-text').value = '내가 좋아하는 것 기억나?';
+        sendChat(false);
+        return;
+      }
+      if(t.endsWith(' 다시 보기')){
+        const topic = t.replace(' 다시 보기','');
+        chatModeSet('learn');
+        $('#chat-text').value = `${topic} 다시 알려줘`;
+        sendChat(false);
+        return;
+      }
+      if(t==='내가 해봤어요'){ chatSolved(); } else { $('#chat-text').value=t; sendChat(false); }
+    };
+    chips.appendChild(b);
+  });
+}
+async function sendChat(solved){
+  if(state.chatBusy) return;
+  const input = $('#chat-text');
+  const msg = (input.value||'').trim();
+  if(!msg && !solved) return;
+  const text = solved ? '내가 해봤어요! 스스로 해결했어요.' : msg;
+  if(!solved) input.value='';
+  state.chatBusy = true;
+  chatAdd('user', text);
+  chatTyping(true);
+  $('#chat-send').disabled = true;
+  try{
+    const r = await api('/api/chat', { mode: state.chatMode, message: text, solved: !!solved }, 30000);
+    chatTyping(false);
+    const msgEl = chatAdd('assistant', r.reply, Number(r.hintLevel)>1);
+    if(state.voiceAuto || state.voiceChat){
+      speak(r.reply, ()=>{ if(state.voiceChat && !state.chatBusy) startMic(true); });
+    }
+    const lvl = Number(r.hintLevel) || 0;
+    if(state.chatMode === 'learn' && lvl){
+      const meta = document.createElement('div'); meta.className = 'msg-meta';
+      const badge = document.createElement('span'); badge.className = 'hint-badge';
+      badge.textContent = lvl === 1 ? 'L1 · 되묻기' : lvl === 2 ? 'L2 · 비유' : 'L3 · 다음 단계';
+      meta.appendChild(badge);
+      if(lvl < 3){
+        const more = document.createElement('button');
+        more.className = 'msg-more'; more.textContent = '힌트 한 단계 더';
+        more.onclick = ()=>{ const input=$('#chat-text'); if(input) input.value='힌트 한 단계 더 주세요'; sendChat(false); };
+        meta.appendChild(more);
+      }
+      const quiz = document.createElement('button');
+      quiz.className = 'msg-more'; quiz.textContent = '문제로 확인';
+      quiz.onclick = ()=>openPuzzle();
+      meta.appendChild(quiz);
+      msgEl.appendChild(meta);
+    }
+    if(r.followUp) chatAdd('assistant', '💡 다음 질문: ' + r.followUp, true);
+    if(r.remembered && r.remembered.length){
+      toast('🧠 루미가 기억했어: ' + r.remembered.join(', '));
+    }
+    if(r.solved){
+      chatAdd('assistant', '🌱 이해도 +3! 방이 조금 더 밝아졌어요.', true);
+      if(r.summary) chatAdd('assistant', '📘 오늘의 한 줄\n' + r.summary, true);
+      loadRoomState();
+      if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
+      if(state.lastPlanStep){
+        const id = state.lastPlanStep; state.lastPlanStep = null;
+        togglePlanStep(id, true);
+      }
+    }
+    $('#chat-und').textContent = `이해도 ${r.understanding||0}`;
+    $('#chat-left').textContent = r.left>0 ? `오늘 ${r.left}번 더 이야기할 수 있어요` : '오늘은 여기까지!';
+  }catch(e){
+    chatTyping(false);
+    chatAdd('assistant', e.message || '잠시 후 다시 이야기하자.');
+  }finally{
+    state.chatBusy = false; $('#chat-send').disabled = false; $('#chat-text').focus();
+  }
+}
+function chatSolved(){
+  if(state.chatMode!=='learn') chatModeSet('learn');
+  sendChat(true);
+}
+
+// ★ 2026-10-28: 음성 입력(Web Speech API). 지원 브라우저에서만 동작.
+let _rec = null;
+function startMic(auto){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR) return toast('이 브라우저는 음성 입력을 지원하지 않아요. Chrome/Safari를 사용해 주세요.');
+  if(_rec){ try{ _rec.stop(); }catch(e){} _rec = null; return; }
+  try{
+    _rec = new SR();
+    _rec.lang = 'ko-KR'; _rec.interimResults = false; _rec.maxAlternatives = 1;
+    _rec.onresult = e => {
+      const text = e.results[0][0].transcript || '';
+      const input = $('#chat-text');
+      if(input){ input.value = text; input.focus(); }
+      if(auto || state.voiceChat){
+        toast('🎤 ' + text);
+        setTimeout(()=>{ if(!state.chatBusy && String(text).trim()) sendChat(false); }, 250);
+      } else {
+        toast('🎤 ' + text);
+      }
+    };
+    _rec.onerror = () => { _rec = null; toast('음성을 듣지 못했어요. 다시 시도해 주세요.'); };
+    _rec.onend = () => { _rec = null; };
+    _rec.start();
+    toast('🎤 듣고 있어요… 말해 보세요.');
+  }catch(e){ _rec = null; toast('마이크를 시작하지 못했어요.'); }
+}
+
+// ---- 버그 슈터 (Canvas 2D) ----
+const SH_TIPS = [
+  '반복문 = 같은 일을 여러 번 시키는 명령',
+  '변수 = 값을 담아 두는 이름 붙은 상자',
+  '조건문 = 만약 ~이면 이렇게 해',
+  '함수 = 이름 붙인 명령 묶음',
+  '디버깅 = 틀린 조각을 하나씩 찾는 일',
+  '리스트 = 여러 값을 순서대로 담는 그릇',
+];
+const sh = { raf:null, running:false, submitted:false, last:0, time:60, score:0, combo:1, comboT:0,
+  kills:0, tips:0, tip:'', tipT:0, lastTip:'',
+  player:{x:180,y:430,r:14}, bullets:[], enemies:[], parts:[], pops:[], fireT:0, spawnT:0, boss:null, keys:{}, pointer:null };
+const SH_W=360, SH_H=480;
+function shReset(){
+  sh.running=false; sh.submitted=false; sh.last=0; sh.time=60; sh.score=0; sh.combo=1; sh.comboT=0;
+  sh.player={x:SH_W/2,y:SH_H-50,r:14}; sh.bullets=[]; sh.enemies=[]; sh.parts=[]; sh.pops=[]; sh.fireT=0; sh.spawnT=0; sh.boss=null; sh.keys={};
+  sh.kills=0; sh.tips=0; sh.tip=''; sh.tipT=0; sh.lastTip='';
+  shDraw();
+}
+function openShooter(){
+  $('#game-shooter').classList.remove('hidden');
+  shReset();
+  $('#sh-overlay').classList.remove('hidden'); $('#sh-overlay').textContent='START';
+  $('#shooter-go').textContent='시작하기';
+}
+function stopShooter(){
+  sh.running=false;
+  if(sh.raf){ cancelAnimationFrame(sh.raf); sh.raf=null; }
+}
+function shStart(){
+  stopShooter();
+  shReset(); sh.running=true;
+  $('#sh-overlay').classList.add('hidden');
+  $('#shooter-go').textContent='다시 시작';
+  sh.last = performance.now();
+  sh.raf = requestAnimationFrame(shLoop);
+}
+function shLoop(ts){
+  if(!sh.running) return;
+  const dt = Math.min(0.05, (ts - sh.last)/1000 || 0.016); sh.last = ts;
+  shUpdate(dt); shDraw();
+  if(sh.time <= 0){ shEnd(); return; }
+  sh.raf = requestAnimationFrame(shLoop);
+}
+function shUpdate(dt){
+  sh.time -= dt;
+  const p = sh.player;
+  if(sh.keys.ArrowLeft) p.x -= 260*dt;
+  if(sh.keys.ArrowRight) p.x += 260*dt;
+  if(sh.pointer != null) p.x += (sh.pointer - p.x) * Math.min(1, dt*12);
+  p.x = Math.max(18, Math.min(SH_W-18, p.x));
+
+  // 자동 사격
+  sh.fireT -= dt;
+  if(sh.fireT <= 0){ sh.fireT = 0.16; sh.bullets.push({x:p.x, y:p.y-18, vy:-430}); }
+
+  // 적 생성
+  sh.spawnT -= dt;
+  if(sh.spawnT <= 0 && sh.time > 2){
+    sh.spawnT = Math.max(0.34, 0.8 - (60-sh.time)*0.007);
+    const r = Math.random();
+    const type = r < 0.12 ? 2 : 1;
+    sh.enemies.push({x:24+Math.random()*(SH_W-48), y:-20, vy:60+Math.random()*50+(60-sh.time)*0.7,
+      r: type===2?15:12, hp: type===2?3:1, type, hitT:0});
+  }
+  // 보스 (30초)
+  if(!sh.boss && sh.time < 30){
+    sh.boss = {x:SH_W/2, y:-50, vy:28, r:38, hp:32, maxHp:32, hitT:0, boss:true, shootT:1.2};
+    sh.enemies.push(sh.boss);
+  }
+
+  // 탄 이동/충돌
+  for(let i=sh.bullets.length-1;i>=0;i--){
+    const b=sh.bullets[i]; b.y += b.vy*dt;
+    if(b.y < -10){ sh.bullets.splice(i,1); continue; }
+    for(let j=sh.enemies.length-1;j>=0;j--){
+      const e=sh.enemies[j];
+      if(Math.hypot(b.x-e.x, b.y-e.y) < e.r+3){
+        sh.bullets.splice(i,1); e.hp--; e.hitT=0.08;
+        if(e.hp<=0){
+          sh.enemies.splice(j,1);
+          if(e.boss){ sh.boss=null; sh.score += 200; shBurst(e.x,e.y,36,'#ff6b6b'); shPop(e.x,e.y,'+200','#ffd43b'); }
+          else {
+            const total = (e.type===2?20:10) * sh.combo;
+            sh.score += total;
+            shBurst(e.x,e.y,10, e.type===2?'#b197fc':'#63e6be');
+            shPop(e.x,e.y,`+${total}`, '#ffe066');
+            sh.kills++;
+            if(sh.kills % 10 === 0){
+              sh.tip = SH_TIPS[sh.tips % SH_TIPS.length]; sh.tips++;
+              sh.tipT = 2.4; sh.lastTip = sh.tip;
+            }
+          }
+          sh.combo = Math.min(5, sh.combo + 1); sh.comboT = 2.2;
+        }
+        break;
+      }
+    }
+  }
+  // 적 이동/플레이어 충돌
+  for(let i=sh.enemies.length-1;i>=0;i--){
+    const e=sh.enemies[i]; e.y += e.vy*dt; if(e.hitT>0) e.hitT-=dt;
+    if(e.boss){
+      e.x += Math.sin(performance.now()/700)*40*dt;
+      e.x = Math.max(50, Math.min(SH_W-50, e.x));
+      e.shootT -= dt;
+      if(e.shootT <= 0){ e.shootT = 1.4; sh.enemies.push({x:e.x, y:e.y+30, vy:150, r:7, hp:1, type:3, hitT:0, bullet:true}); }
+    }
+    if(e.y > SH_H+40){ sh.enemies.splice(i,1); continue; }
+    if(Math.hypot(e.x-p.x, e.y-p.y) < e.r+p.r-4){
+      sh.enemies.splice(i,1); sh.combo=1; sh.score=Math.max(0,sh.score-30);
+      shBurst(p.x,p.y,18,'#ff6b6b'); shPop(p.x,p.y-18,'-30','#ff6b6b');
+    }
+  }
+  // 콤보 타이머
+  if(sh.comboT>0){ sh.comboT-=dt; if(sh.comboT<=0) sh.combo=1; }
+  if(sh.tipT>0) sh.tipT -= dt;
+  // 파티클
+  for(let i=sh.parts.length-1;i>=0;i--){
+    const q=sh.parts[i]; q.x+=q.vx*dt; q.y+=q.vy*dt; q.life-=dt;
+    if(q.life<=0) sh.parts.splice(i,1);
+  }
+  // 점수 팝업
+  for(let i=sh.pops.length-1;i>=0;i--){
+    const q=sh.pops[i]; q.y -= 28*dt; q.life -= dt;
+    if(q.life<=0) sh.pops.splice(i,1);
+  }
+  $('#sh-score').textContent = sh.score;
+  $('#sh-combo').textContent = 'x'+sh.combo;
+  $('#sh-time').textContent = Math.max(0, Math.ceil(sh.time));
+}
+function shBurst(x,y,n,col='#ffd43b'){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, s=40+Math.random()*160;
+    sh.parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,
+      col, size:1.5+Math.random()*2.5});
+  }
+}
+function shPop(x,y,text,col='#ffe066'){
+  sh.pops.push({x,y,text,col,life:0.75});
+}
+function shDraw(){
+  const cv = $('#shooter-canvas'); if(!cv) return;
+  const g = cv.getContext('2d');
+  const t = performance.now()/1000;
+  // 깊은 우주 배경
+  const grd = g.createLinearGradient(0,0,0,SH_H);
+  grd.addColorStop(0,'#070b18'); grd.addColorStop(.45,'#0d1630'); grd.addColorStop(1,'#151034');
+  g.fillStyle=grd; g.fillRect(0,0,SH_W,SH_H);
+  // 성운
+  const neb1 = g.createRadialGradient(280,110,10,280,110,170);
+  neb1.addColorStop(0,'rgba(126,224,192,.18)'); neb1.addColorStop(1,'rgba(126,224,192,0)');
+  g.fillStyle=neb1; g.fillRect(0,0,SH_W,SH_H);
+  const neb2 = g.createRadialGradient(60,360,10,60,360,180);
+  neb2.addColorStop(0,'rgba(177,151,252,.16)'); neb2.addColorStop(1,'rgba(177,151,252,0)');
+  g.fillStyle=neb2; g.fillRect(0,0,SH_W,SH_H);
+  // 행성
+  g.save(); g.translate(74,96); g.rotate(-.22);
+  g.fillStyle='#24345f'; g.beginPath(); g.arc(0,0,34,0,Math.PI*2); g.fill();
+  g.fillStyle='rgba(126,224,192,.18)'; g.beginPath(); g.arc(-8,-8,20,0,Math.PI*2); g.fill();
+  g.strokeStyle='rgba(126,224,192,.28)'; g.lineWidth=5;
+  g.beginPath(); g.ellipse(0,0,54,15,0,0,Math.PI*2); g.stroke();
+  g.restore();
+  // 별
+  for(let i=0;i<70;i++){
+    const x=(i*83)%SH_W;
+    const y=((i*47)+t*(10+(i%4)*9))%SH_H;
+    const sz=(i%7===0)?2:1;
+    g.globalAlpha=.25+(i%5)*.13;
+    g.fillStyle='#fff'; g.fillRect(x,y,sz,sz);
+  }
+  g.globalAlpha=1;
+  // 속도선
+  g.strokeStyle='rgba(126,224,192,.08)'; g.lineWidth=1;
+  for(let i=0;i<5;i++){ const y=((i*97)+t*40)%SH_H; g.beginPath(); g.moveTo(0,y); g.lineTo(SH_W,y); g.stroke(); }
+  // 플레이어 로켓
+  const p=sh.player;
+  g.save(); g.translate(p.x,p.y);
+  const flame=10+Math.sin(t*28)*3;
+  const fg=g.createLinearGradient(0,10,0,12+flame);
+  fg.addColorStop(0,'rgba(255,224,102,.95)'); fg.addColorStop(.5,'rgba(255,107,107,.7)'); fg.addColorStop(1,'rgba(255,107,107,0)');
+  g.fillStyle=fg; g.beginPath(); g.moveTo(-5,10); g.quadraticCurveTo(0,14+flame,5,10); g.closePath(); g.fill();
+  g.fillStyle='#2f6fed';
+  g.beginPath(); g.moveTo(-10,4); g.lineTo(-19,16); g.lineTo(-7,12); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(10,4); g.lineTo(19,16); g.lineTo(7,12); g.closePath(); g.fill();
+  g.shadowColor='#7ee0c0'; g.shadowBlur=16;
+  g.fillStyle='#e9f7f2';
+  g.beginPath(); g.moveTo(0,-21); g.bezierCurveTo(14,-12,14,8,0,14); g.bezierCurveTo(-14,8,-14,-12,0,-21); g.fill();
+  g.shadowBlur=0;
+  g.fillStyle='#2f6fed'; g.beginPath(); g.arc(0,-5,6.2,0,Math.PI*2); g.fill();
+  g.fillStyle='rgba(255,255,255,.85)'; g.beginPath(); g.arc(-2,-7,1.8,0,Math.PI*2); g.fill();
+  g.strokeStyle='#9adfff'; g.lineWidth=1; g.beginPath(); g.arc(0,-3,2.4,.15*Math.PI,.85*Math.PI); g.stroke();
+  g.restore();
+  // 탄환
+  g.save(); g.shadowColor='#ffe066'; g.shadowBlur=14; g.fillStyle='#ffe066';
+  sh.bullets.forEach(b=>{
+    g.beginPath(); g.ellipse(b.x,b.y,2.4,7,0,0,Math.PI*2); g.fill();
+    g.globalAlpha=.28; g.fillRect(b.x-1.5,b.y+4,3,10); g.globalAlpha=1;
+  });
+  g.restore();
+  // 적
+  sh.enemies.forEach(e=>{
+    if(e.type===3 && e.bullet){
+      g.save(); g.shadowColor='#ff922b'; g.shadowBlur=14; g.fillStyle='#ff922b';
+      g.beginPath(); g.arc(e.x,e.y,e.r,0,Math.PI*2); g.fill();
+      g.fillStyle='#fff3bf'; g.beginPath(); g.arc(e.x-2,e.y-2,e.r*.35,0,Math.PI*2); g.fill();
+      g.restore(); return;
+    }
+    g.save(); g.translate(e.x,e.y);
+    const col = e.hitT>0 ? '#ffffff' : (e.boss ? '#ff6b6b' : (e.type===2 ? '#b197fc' : '#63e6be'));
+    g.shadowColor=col; g.shadowBlur=14;
+    if(e.boss){
+      g.fillStyle=col; g.beginPath(); g.ellipse(0,0,e.r,e.r*.82,0,0,Math.PI*2); g.fill();
+      g.fillStyle='rgba(255,255,255,.18)'; g.beginPath(); g.ellipse(-10,-10,e.r*.45,e.r*.3,-.4,0,Math.PI*2); g.fill();
+      g.strokeStyle=col; g.lineWidth=4; g.lineCap='round';
+      g.beginPath(); g.moveTo(-18,-20); g.lineTo(-30,-38); g.stroke();
+      g.beginPath(); g.moveTo(18,-20); g.lineTo(30,-38); g.stroke();
+      g.fillStyle='#1a1a1a'; g.beginPath(); g.arc(-12,-4,5,0,Math.PI*2); g.fill();
+      g.beginPath(); g.arc(12,-4,5,0,Math.PI*2); g.fill();
+      g.fillStyle='#fff'; g.beginPath(); g.arc(-13,-6,2,0,Math.PI*2); g.fill();
+      g.beginPath(); g.arc(11,-6,2,0,Math.PI*2); g.fill();
+      g.strokeStyle='#4a1010'; g.lineWidth=2; g.beginPath(); g.arc(0,10,8,.1*Math.PI,.9*Math.PI); g.stroke();
+    } else {
+      g.fillStyle='rgba(255,255,255,.16)';
+      g.beginPath(); g.ellipse(-e.r*.9,0,e.r*.55,e.r*.28,-.5,0,Math.PI*2); g.fill();
+      g.beginPath(); g.ellipse(e.r*.9,0,e.r*.55,e.r*.28,.5,0,Math.PI*2); g.fill();
+      g.fillStyle=col; g.beginPath(); g.arc(0,0,e.r,0,Math.PI*2); g.fill();
+      g.strokeStyle=col; g.lineWidth=2; g.lineCap='round';
+      g.beginPath(); g.moveTo(-4,-e.r+1); g.lineTo(-8,-e.r-6); g.stroke();
+      g.beginPath(); g.moveTo(4,-e.r+1); g.lineTo(8,-e.r-6); g.stroke();
+      g.fillStyle='#0b1220'; g.beginPath(); g.arc(-4,-2,2.2,0,Math.PI*2); g.fill();
+      g.beginPath(); g.arc(4,-2,2.2,0,Math.PI*2); g.fill();
+      g.fillStyle='#fff'; g.beginPath(); g.arc(-4.5,-2.8,.8,0,Math.PI*2); g.fill();
+      g.beginPath(); g.arc(3.5,-2.8,.8,0,Math.PI*2); g.fill();
+    }
+    g.restore();
+  });
+  // 파티클
+  sh.parts.forEach(q=>{
+    g.globalAlpha=Math.max(0,q.life*1.6);
+    g.fillStyle=q.col||'#ffd43b';
+    g.beginPath(); g.arc(q.x,q.y,q.size||2,0,Math.PI*2); g.fill();
+  });
+  g.globalAlpha=1;
+  // 점수 팝업
+  sh.pops.forEach(q=>{
+    g.globalAlpha=Math.max(0,q.life);
+    g.fillStyle=q.col||'#ffe066'; g.font='bold 14px sans-serif'; g.textAlign='center';
+    g.fillText(q.text,q.x,q.y);
+  });
+  g.globalAlpha=1;
+  // 보스 HP
+  if(sh.boss){
+    const w=SH_W-90, hp=Math.max(0,sh.boss.hp/sh.boss.maxHp);
+    g.fillStyle='rgba(4,10,20,.72)'; g.fillRect(45,40,w,9);
+    g.fillStyle='#ff6b6b'; g.fillRect(45,40,w*hp,9);
+    g.strokeStyle='rgba(255,255,255,.25)'; g.lineWidth=1; g.strokeRect(45,40,w,9);
+    g.fillStyle='#fff'; g.font='9px sans-serif'; g.textAlign='center'; g.fillText('BUG BOSS',SH_W/2,37);
+  }
+  // 비네트
+  const vg=g.createRadialGradient(SH_W/2,SH_H/2,SH_H*.32,SH_W/2,SH_H/2,SH_H*.78);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,.4)');
+  g.fillStyle=vg; g.fillRect(0,0,SH_W,SH_H);
+  // 팁 카드
+  if(sh.tipT>0 && sh.tip){
+    g.fillStyle='rgba(4,10,20,.82)'; g.beginPath();
+    if(g.roundRect) g.roundRect(10,SH_H-66,SH_W-20,50,10); else g.rect(10,SH_H-66,SH_W-20,50);
+    g.fill();
+    g.fillStyle='#ffe066'; g.font='11px sans-serif'; g.textAlign='left';
+    g.fillText('📘 ' + sh.tip, 20, SH_H-38);
+  }
+}
+function shEnd(){
+  stopShooter();
+  $('#sh-overlay').classList.remove('hidden');
+  const tipLine = sh.lastTip ? `<br><small style="font-size:12px;font-weight:600;opacity:.9">📘 ${sh.lastTip}</small>` : '';
+  $('#sh-overlay').innerHTML = (sh.score>=50 ? `GAME OVER · ${sh.score}점` : 'GAME OVER') + tipLine;
+  if(sh.score>=50 && !sh.submitted){
+    sh.submitted = true;
+    setTimeout(()=>submitGameResult('shooter',{score:sh.score}, $('#shooter-go')), sh.lastTip ? 1800 : 800);
+  }
+}
+
+// ---- 버그 두더지 (30초 반응 게임, 다른 장르) ----
+const mole = { running:false, submitted:false, score:0, combo:1, time:30,
+  active:-1, activeT:0, next:0, bomb:false, timer:null, holes:[] };
+function initMoleGrid(){
+  const grid = $('#mole-grid'); if(!grid) return;
+  if(grid.dataset.ready === '1'){ mole.holes = [...grid.children]; return; }
+  grid.innerHTML = '';
+  for(let i=0;i<9;i++){
+    const b = document.createElement('button');
+    b.className = 'mole-hole'; b.dataset.i = i;
+    b.innerHTML = '<span class="mole-bug"><svg viewBox="0 0 64 64"><use href="#mole-char"/></svg></span><span class="mole-pop"></span>';
+    b.addEventListener('click', ()=>moleHit(i));
+    grid.appendChild(b);
+  }
+  grid.dataset.ready = '1';
+  mole.holes = [...grid.children];
+}
+function moleReset(){
+  stopMole();
+  mole.running = false; mole.submitted = false; mole.score = 0; mole.combo = 1;
+  mole.time = 30; mole.active = -1; mole.activeT = 0; mole.next = 0; mole.bomb = false;
+  mole.holes.forEach(h=>h.classList.remove('show','bomb','hit'));
+  $('#mole-score').textContent = '0';
+  $('#mole-combo').textContent = 'x1';
+  $('#mole-time').textContent = '30';
+}
+function stopMole(){
+  mole.running = false;
+  if(mole.timer){ clearInterval(mole.timer); mole.timer = null; }
+}
+function openMole(){
+  $('#game-mole').classList.remove('hidden');
+  initMoleGrid();
+  moleReset();
+  $('#mole-overlay').classList.remove('hidden');
+  $('#mole-overlay').textContent = 'START';
+  $('#mole-go').textContent = '시작하기';
+}
+function moleStart(){
+  initMoleGrid();
+  moleReset();
+  mole.running = true;
+  $('#mole-overlay').classList.add('hidden');
+  $('#mole-go').textContent = '다시 시작';
+  mole.timer = setInterval(moleTick, 100);
+}
+function moleTick(){
+  if(!mole.running) return;
+  mole.time = Math.max(0, mole.time - 0.1);
+  $('#mole-time').textContent = Math.ceil(mole.time);
+  if(mole.time <= 0){ moleEnd(); return; }
+  if(mole.active >= 0){
+    mole.activeT -= 0.1;
+    if(mole.activeT <= 0) moleHide(false);
+  } else {
+    mole.next -= 0.1;
+    if(mole.next <= 0){ moleSpawn(); mole.next = 0.55 + Math.random()*0.5; }
+  }
+}
+function moleSpawn(){
+  const free = mole.holes.map((_,i)=>i).filter(i=>i!==mole.active);
+  const i = free[Math.floor(Math.random()*free.length)];
+  mole.active = i;
+  mole.activeT = 0.7 + Math.random()*0.35;
+  mole.bomb = Math.random() < 0.14;
+  const h = mole.holes[i];
+  h.classList.add('show');
+  h.classList.toggle('bomb', mole.bomb);
+  const use = h.querySelector('.mole-bug use');
+  if(use) use.setAttribute('href', mole.bomb ? '#mole-bomb' : '#mole-char');
+}
+function moleHit(i){
+  if(!mole.running || i !== mole.active) return;
+  const h = mole.holes[i];
+  h.classList.add('hit');
+  let gain = 0;
+  if(mole.bomb){
+    gain = -20;
+    mole.score = Math.max(0, mole.score - 20);
+    mole.combo = 1;
+  } else {
+    gain = 10 * mole.combo;
+    mole.score += gain;
+    mole.combo = Math.min(5, mole.combo + 1);
+  }
+  $('#mole-score').textContent = mole.score;
+  $('#mole-combo').textContent = 'x' + mole.combo;
+  const pop = h.querySelector('.mole-pop');
+  if(pop){
+    pop.textContent = (gain > 0 ? '+' : '') + gain;
+    pop.classList.remove('show');
+    void pop.offsetWidth;
+    pop.classList.add('show');
+  }
+  setTimeout(()=>h.classList.remove('hit'), 120);
+  moleHide(true);
+}
+function moleHide(hit){
+  if(mole.active < 0) return;
+  const h = mole.holes[mole.active];
+  h.classList.remove('show','bomb');
+  mole.active = -1;
+  if(!hit){ mole.combo = 1; $('#mole-combo').textContent = 'x1'; }
+}
+function moleEnd(){
+  stopMole();
+  $('#mole-overlay').classList.remove('hidden');
+  $('#mole-overlay').textContent = mole.score >= 20 ? `GAME OVER · ${mole.score}점` : 'GAME OVER';
+  if(mole.score >= 20 && !mole.submitted){
+    mole.submitted = true;
+    setTimeout(()=>submitGameResult('mole', { score:mole.score }, $('#mole-go')), 800);
+  }
+}
+
+// ---- 오늘의 퍼즐 (3문제 세트) ----
+function pzRender(){
+  const pz = state.pz;
+  if(!pz) return;
+  const q = pz.questions[pz.index];
+  if(!q){ $('#pz-question').textContent='문제를 불러오지 못했어요.'; return; }
+  $('#pz-topic').textContent = `문제 ${pz.index+1}/${pz.questions.length} · ${q.topic}`;
+  $('#pz-question').textContent = q.question;
+  $('#pz-hint').classList.add('hidden'); $('#pz-hint').textContent='';
+  pz.hintIdx = 0;
+  $('#pz-hints').textContent = `힌트 ${pz.hintsLeft}개`;
+  $('#pz-reward').textContent = pz.practice ? '연습' : `+${pz.reward}셀`;
+  const box=$('#pz-options'); box.innerHTML='';
+  (q.options||[]).forEach((opt,i)=>{
+    const btn=document.createElement('button'); btn.textContent=`${i+1}. ${opt}`;
+    btn.onclick=()=>answerPuzzle(i,btn); box.appendChild(btn);
+  });
+}
+async function openPuzzle(practice=false){
+  $('#game-puzzle').classList.remove('hidden');
+  $('#pz-options').innerHTML=''; $('#pz-hint').classList.add('hidden');
+  $('#pz-question').textContent='불러오는 중…';
+  try{
+    const r = await api('/api/puzzle/today' + (practice ? '?practice=1' : ''));
+    state.pz = { questions:r.questions||[], index:0, hintsLeft:3, hintIdx:0,
+                 reward: practice ? 0 : (r.reward||30), done: practice ? false : !!r.done, practice:!!practice };
+    if(state.pz.done){
+      $('#pz-topic').textContent='오늘의 퍼즐';
+      $('#pz-question').textContent='오늘은 이미 풀었어요! 내일 또 만나요.';
+      $('#pz-hints').textContent='힌트 0개';
+      $('#pz-reward').textContent=`+${state.pz.reward}셀`;
+      $('#pz-options').innerHTML='';
+      return;
+    }
+    if(!state.pz.questions.length) throw new Error('문제를 준비 중이에요. 잠시 후 다시 시도해 주세요.');
+    pzRender();
+  }catch(e){ $('#pz-question').textContent=e.message; }
+}
+async function answerPuzzle(choice, btn){
+  if(!state.pz || state.pz.done) return;
+  const q = state.pz.questions[state.pz.index];
+  if(!q) return;
+  const isPractice = !!state.pz.practice;
+  const isFinal = !isPractice && state.pz.index === state.pz.questions.length - 1;
+  try{
+    const r = await api('/api/puzzle/answer', { cardId:q.cardId, choice, final:isFinal });
+    $('#pz-hint').classList.remove('hidden');
+    if(!r.correct){
+      btn.classList.add('wrong');
+      state.pz.wrong = state.pz.wrong || {};
+      const n = (state.pz.wrong[q.cardId] || 0) + 1;
+      state.pz.wrong[q.cardId] = n;
+      $('#pz-hint').textContent = `💡 ${r.hint}`;
+      if(n >= 2) toast('루미에게 물어볼까? «루미에게 묻기»를 눌러봐.');
+      return;
+    }
+    btn.classList.add('correct');
+    if(!isFinal){
+      state.pz.index++;
+      if(isPractice && state.pz.index >= state.pz.questions.length){
+        state.pz.done = true;
+        $('#pz-hint').textContent = '🎉 연습 완료! 수고했어요.';
+        setTimeout(()=>closeGame('game-puzzle'), 1200);
+        return;
+      }
+      $('#pz-hint').textContent = '🎉 정답! 다음 문제로 갈게요.';
+      setTimeout(pzRender, 700);
+      return;
+    }
+    state.pz.done = true;
+    $('#pz-hint').textContent = `🎉 3문제 완료! +${r.reward}셀`;
+    state.user.cell_balance = r.balance; setBalance(r.balance);
+    if(!state.pz.practice && state.plan && state.plan.plan){
+      const ps = state.plan.plan.steps.find(s=>s.type==='puzzle' && !s.done);
+      if(ps) togglePlanStep(ps.id, true);
+    }
+    setTimeout(()=>{ closeGame('game-puzzle'); if(state.robot) renderMyroom(); }, 1500);
+  }catch(e){ $('#pz-hint').classList.remove('hidden'); $('#pz-hint').textContent=e.message; }
+}
+async function askPuzzle(){
+  const q = state.pz && state.pz.questions && state.pz.questions[state.pz.index];
+  closeGame('game-puzzle');
+  await chatOpen();
+  chatModeSet('learn');
+  const input = $('#chat-text');
+  if(input) input.value = q ? `${q.topic}이 헷갈려. 같이 볼까?` : '같이 공부하고 싶어';
+  sendChat(false);
+}
+function showPzHint(){
+  const pz = state.pz;
+  if(!pz || pz.done) return;
+  if(pz.hintsLeft<=0){
+    $('#pz-hint').classList.remove('hidden');
+    $('#pz-hint').textContent='힌트를 모두 썼어요. 다시 생각해 보자!';
+    return;
+  }
+  const q = pz.questions[pz.index];
+  const h = (q && (q.hints||[])[pz.hintIdx]) || '한 번 더 생각해 보자.';
+  pz.hintIdx++; pz.hintsLeft--;
+  $('#pz-hint').classList.remove('hidden'); $('#pz-hint').textContent=`💡 ${h}`;
+  $('#pz-hints').textContent=`힌트 ${pz.hintsLeft}개`;
+}
+
+// ---- 보호자 대시보드 / 접근성 설정 (2026-10-28) ----
+function applySettings(){
+  const font = localStorage.getItem('roomi_font_lg') === '1';
+  const cb = localStorage.getItem('roomi_cb') === '1';
+  state.voiceAuto = localStorage.getItem('roomi_voice_auto') === '1';
+  state.voiceChat = localStorage.getItem('roomi_voice_chat') === '1';
+  state.nudgeOptIn = localStorage.getItem('roomi_nudge') !== '0';
+  document.body.classList.toggle('font-lg', font);
+  document.body.classList.toggle('cb', cb);
+  const f = $('#set-font'), c = $('#set-cb'), v = $('#set-voice'), n = $('#set-nudge');
+  if(f) f.checked = font;
+  if(c) c.checked = cb;
+  if(v) v.checked = state.voiceAuto;
+  if(n) n.checked = state.nudgeOptIn;
+  const vc = $('#set-voice-chat'); if(vc) vc.checked = state.voiceChat;
+  const rate = Math.min(1.15, Math.max(0.7, Number(localStorage.getItem('roomi_voice_rate')) || 0.9));
+  const rr = $('#set-voice-rate'); if(rr) rr.value = rate;
+  const rv = $('#voice-rate-val'); if(rv) rv.textContent = rate.toFixed(2);
+  syncVoiceChatBtn();
+  loadVoiceOptions();
+}
+async function openParentDashboard(){
+  $('#parent-dashboard').classList.remove('hidden');
+  const box = $('#pd-body');
+  box.innerHTML = '<div class="pd-stat pd-wide"><span>불러오는 중…</span></div>';
+  try{
+    const r = await api('/api/parent/dashboard');
+    const g = Object.fromEntries((r.games||[]).map(x=>[x.kind, x]));
+    const byDay = Object.fromEntries((r.last7||[]).map(x=>[x.d, x]));
+    const days = [];
+    const base = new Date(Date.now() + 9*3600*1000);
+    for(let i=6;i>=0;i--){
+      const dt = new Date(base); dt.setUTCDate(dt.getUTCDate() - i);
+      const key = dt.toISOString().slice(0,10);
+      days.push(byDay[key] || { d:key, c:0 });
+    }
+    const maxV = Math.max(1, ...days.map(x=>x.c));
+    const bars = days.map(x=>
+      `<div class="pb" style="height:${Math.round(x.c/maxV*60)+3}px" title="${x.d} · ${x.c}회"></div>`
+    ).join('');
+    box.innerHTML = `
+      <div class="pd-stat"><b>${r.playMinutes}분</b><span>오늘 플레이 · 한도 ${r.limit}분</span></div>
+      <div class="pd-stat"><b>${r.understanding}</b><span>이해도</span></div>
+      <div class="pd-stat"><b>${r.solved}개</b><span>스스로 해결</span></div>
+      <div class="pd-stat"><b>${r.chats}회</b><span>루미와 대화</span></div>
+      <div class="pd-stat"><b>${(g.mole && g.mole.best) || 0}점</b><span>두더지 최고</span></div>
+      <div class="pd-stat"><b>${(g.shooter && g.shooter.best) || 0}점</b><span>슈터 최고</span></div>
+      <div class="pd-stat pd-wide pd-switch-row">
+        <div><b>친구 채팅</b><span>끄면 친구 채팅을 막을 수 있어요</span></div>
+        <label class="switch"><input type="checkbox" id="pd-fchat" ${r.friendChatEnabled?'checked':''}><i></i></label>
+      </div>
+      <div class="pd-stat pd-wide" style="display:flex;justify-content:center">
+        <button id="pd-memory" class="btn ghost">🧠 AI 기억 보기</button>
+      </div>
+      <div class="pd-stat pd-wide pd-weekly">
+        <b>이번 주</b>
+        <span>${(r.weekly&&r.weekly.studyDays)||0}일 공부 · ${(r.weekly&&r.weekly.solved)||0}개 해결 · ${(r.weekly&&r.weekly.chats)||0}회 대화 · ${(r.weekly&&r.weekly.games)||0}회 게임</span>
+        <span class="hint">다음 주: ${(r.weekly&&r.weekly.suggestion)||'새 주제 1개 읽기'}</span>
+      </div>
+      <div class="pd-stat pd-wide"><span>최근 7일 접속</span><div class="pd-bars">${bars}</div></div>`;
+    const fc = $('#pd-fchat');
+    if(fc) fc.addEventListener('change', async ()=>{
+      try{
+        const s = await api('/api/parent/friend-chat', { enabled: fc.checked });
+        toast(s.enabled ? '친구 채팅을 허용했어요' : '친구 채팅을 막았어요');
+      }catch(e){ fc.checked = !fc.checked; toast(e.message); }
+    });
+    $('#pd-memory')?.addEventListener('click', loadMemories);
+  }catch(e){ box.innerHTML = `<div class="pd-stat pd-wide"><span>${e.message}</span></div>`; }
+}
+
+// ---- 이벤트 바인딩 ----
+$('#chat-fab')?.addEventListener('click', chatOpen);
+$('#chat-close')?.addEventListener('click', chatClose);
+$('#chat-send')?.addEventListener('click', ()=>sendChat(false));
+$('#chat-text')?.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendChat(false); } });
+$$('.chat-modes .chip').forEach(b=>b.addEventListener('click', ()=>chatModeSet(b.dataset.mode)));
+$('#chat-solved')?.addEventListener('click', chatSolved);
+$('#shooter-go')?.addEventListener('click', shStart);
+$('#pz-hint-btn')?.addEventListener('click', showPzHint);
+$('#btn-games')?.addEventListener('click', ()=>goNav('games'));
+$('#btn-mole')?.addEventListener('click', openMole);
+$('#mole-go')?.addEventListener('click', moleStart);
+$('#pz-practice')?.addEventListener('click', ()=>openPuzzle(true));
+$('#pz-ask')?.addEventListener('click', askPuzzle);
+$('#chat-mic')?.addEventListener('click', startMic);
+$('#btn-parent')?.addEventListener('click', openParentDashboard);
+$('#side-user')?.addEventListener('click', ()=>goNav('board'));
+$('#btn-report')?.addEventListener('click', ()=>goNav('board'));
+$('#btn-settings')?.addEventListener('click', ()=>$('#settings-modal').classList.remove('hidden'));
+$('#set-font')?.addEventListener('change', e=>{ localStorage.setItem('roomi_font_lg', e.target.checked?'1':'0'); applySettings(); });
+$('#set-cb')?.addEventListener('change', e=>{ localStorage.setItem('roomi_cb', e.target.checked?'1':'0'); applySettings(); });
+$('#set-voice')?.addEventListener('change', e=>{ localStorage.setItem('roomi_voice_auto', e.target.checked?'1':'0'); applySettings(); });
+$('#set-voice-chat')?.addEventListener('change', e=>{ setVoiceChat(e.target.checked); toast(e.target.checked?'🎧 음성 대화를 켰어요':'음성 대화를 껐어요'); });
+$('#set-voice-name')?.addEventListener('change', e=>{ localStorage.setItem('roomi_voice_name', e.target.value); toast('읽어주는 목소리를 저장했어요'); });
+$('#set-voice-rate')?.addEventListener('input', e=>{
+  const r = Math.min(1.15, Math.max(0.7, Number(e.target.value)||0.9));
+  localStorage.setItem('roomi_voice_rate', r.toFixed(2));
+  const v = $('#voice-rate-val'); if(v) v.textContent = r.toFixed(2);
+});
+$('#voice-test')?.addEventListener('click', ()=> speak('안녕! 나는 루미야. 오늘도 같이 공부해 보자!'));
+$('#chat-voice')?.addEventListener('click', toggleVoiceChat);
+$('#review-next')?.addEventListener('click', nextReview);
+$('#revive-accept')?.addEventListener('click', acceptRevive);
+$('#revive-skip')?.addEventListener('click', ()=> $('#revive-modal').classList.add('hidden'));
+if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadVoiceOptions;
+$('#set-nudge')?.addEventListener('change', e=>{ localStorage.setItem('roomi_nudge', e.target.checked?'1':'0'); applySettings(); });
+$('#btn-prefs')?.addEventListener('click', openPrefs);
+$$('#pref-minutes button').forEach(b=>b.addEventListener('click', ()=>{ if(!state.prefs) return; state.prefs.minutes = Number(b.dataset.min); renderPrefs(); }));
+$$('#pref-time button').forEach(b=>b.addEventListener('click', ()=>{ if(!state.prefs) return; state.prefs.time = b.dataset.time; renderPrefs(); }));
+$$('#pref-diff button').forEach(b=>b.addEventListener('click', ()=>{ if(!state.prefs) return; state.prefs.difficulty = b.dataset.diff; renderPrefs(); }));
+$$('#pref-subjects button').forEach(b=>b.addEventListener('click', ()=>{
+  if(!state.prefs) return;
+  const s = b.dataset.subject;
+  const arr = state.prefs.subjects || [];
+  const i = arr.indexOf(s);
+  if(i >= 0) arr.splice(i,1); else arr.push(s);
+  state.prefs.subjects = arr;
+  renderPrefs();
+}));
+$('#prefs-save')?.addEventListener('click', savePrefs);
+$('#friend-add-btn')?.addEventListener('click', addFriendByCode);
+$('#friend-code-input')?.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); addFriendByCode(); } });
+$('#chat-memory')?.addEventListener('click', loadMemories);
+$('#memory-add-btn')?.addEventListener('click', addMemory);
+$('#memory-input')?.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); addMemory(); } });
+$('#memory-clear')?.addEventListener('click', clearMemories);
+$('#fc-send')?.addEventListener('click', sendFriendChat);
+$('#fc-text')?.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendFriendChat(); } });
+$('#fc-report')?.addEventListener('click', reportFriend);
+$('#fc-block')?.addEventListener('click', blockFriend);
+function setRoomTab(name){
+  $$('#room-tabs .room-tab').forEach(x=>x.classList.toggle('on', x.dataset.roomTab===name));
+  $$('.room-pane').forEach(p=>p.classList.toggle('on', p.dataset.roomPane===name));
+  try{ localStorage.setItem('roomi_room_tab', name); }catch(e){}
+}
+$$('#room-tabs .room-tab').forEach(b=>b.addEventListener('click', ()=>setRoomTab(b.dataset.roomTab)));
+setRoomTab(localStorage.getItem('roomi_room_tab') || 'today');
+$('#friend-code')?.addEventListener('click', async ()=>{
+  const code = $('#friend-code').textContent.trim();
+  try{ await navigator.clipboard.writeText(code); toast('친구 코드를 복사했어요!'); }
+  catch(e){ toast(`친구 코드: ${code}`); }
+});
+$$('#shop-filters .fchip').forEach(b=>b.addEventListener('click', ()=>{
+  state.shopFilter = b.dataset.shop;
+  $$('#shop-filters .fchip').forEach(x=>x.classList.toggle('on', x===b));
+  loadShop();
+}));
+applySettings();
+
+(function bindShooterInputs(){
+  const cv = $('#shooter-canvas'); if(!cv) return;
+  const toX = (clientX)=>{ const r=cv.getBoundingClientRect(); return (clientX-r.left)/r.width*SH_W; };
+  cv.addEventListener('pointerdown', e=>{ sh.pointer=toX(e.clientX); cv.setPointerCapture?.(e.pointerId); });
+  cv.addEventListener('pointermove', e=>{ if(e.buttons || e.pointerType==='touch') sh.pointer=toX(e.clientX); });
+  cv.addEventListener('pointerup', ()=>{ sh.pointer=null; });
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){ sh.keys[e.key]=true; if(sh.running) e.preventDefault(); }
+  });
+  document.addEventListener('keyup', e=>{ if(e.key==='ArrowLeft'||e.key==='ArrowRight') sh.keys[e.key]=false; });
+})();
+
+// 시작 화면의 대표 로봇을 그린다(로그인 전 장식).
+renderHeroBot();

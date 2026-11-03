@@ -4,44 +4,531 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>루미 · RooMi</title>
-<link rel="stylesheet" href="style.css">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css?v=20261102f">
 </head>
 <body>
+
+<!-- RooMi 브랜드 심볼: 로봇 얼굴 + 말풍선 -->
+<svg width="0" height="0" aria-hidden="true" style="position:absolute;overflow:hidden">
+  <symbol id="roomi-logo" viewBox="0 0 48 48">
+    <defs>
+      <linearGradient id="roomiGrad" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#2f6fed"/><stop offset="1" stop-color="#4fc3a1"/>
+      </linearGradient>
+    </defs>
+    <path d="M14 3h20c6.6 0 12 5.4 12 12v14c0 6.6-5.4 12-12 12H24l-9 6v-6h-1C7.4 41 2 35.6 2 29V15C2 8.4 7.4 3 14 3Z" fill="url(#roomiGrad)"/>
+    <circle cx="24" cy="8.2" r="2.1" fill="#fff"/>
+    <rect x="23.1" y="9.2" width="1.8" height="6" rx=".9" fill="#fff" opacity=".9"/>
+    <circle cx="17" cy="23" r="4.2" fill="#fff"/>
+    <circle cx="31" cy="23" r="4.2" fill="#fff"/>
+    <circle cx="17.6" cy="23.6" r="2.15" fill="#12203a"/>
+    <circle cx="31.6" cy="23.6" r="2.15" fill="#12203a"/>
+    <path d="M18 30.4c1.8 2.7 4 4 6 4s4.2-1.3 6-4" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    <circle cx="11.6" cy="28" r="1.9" fill="#ffd1dc" opacity=".85"/>
+    <circle cx="36.4" cy="28" r="1.9" fill="#ffd1dc" opacity=".85"/>
+    <path d="M38 9.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill="#fff" opacity=".85"/>
+  </symbol>
+  <symbol id="mole-char" viewBox="0 0 64 64">
+    <ellipse cx="32" cy="58" rx="20" ry="4" fill="#000" opacity=".18"/>
+    <ellipse cx="32" cy="40" rx="21" ry="20" fill="#8b5a3c"/>
+    <circle cx="12" cy="28" r="7" fill="#a97155"/>
+    <circle cx="52" cy="28" r="7" fill="#a97155"/>
+    <circle cx="12" cy="28" r="3.5" fill="#e7b79a"/>
+    <circle cx="52" cy="28" r="3.5" fill="#e7b79a"/>
+    <ellipse cx="32" cy="42" rx="15" ry="12" fill="#c98d68"/>
+    <circle cx="24" cy="38" r="3" fill="#1a1a1a"/>
+    <circle cx="40" cy="38" r="3" fill="#1a1a1a"/>
+    <circle cx="25" cy="37" r="1" fill="#fff"/>
+    <circle cx="41" cy="37" r="1" fill="#fff"/>
+    <ellipse cx="32" cy="46" rx="4.5" ry="3.2" fill="#f28fa3"/>
+    <path d="M27 51 Q32 55 37 51" stroke="#5a3522" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    <path d="M12 24c0-11 9-19 20-19s20 8 20 19" fill="#f5c542"/>
+    <rect x="8" y="22" width="48" height="6" rx="3" fill="#e8a92c"/>
+    <rect x="28" y="2" width="8" height="9" rx="3" fill="#e8a92c"/>
+  </symbol>
+  <symbol id="mole-bomb" viewBox="0 0 64 64">
+    <circle cx="32" cy="40" r="18" fill="#2b2b33"/>
+    <circle cx="25" cy="34" r="5" fill="#4a4a55"/>
+    <path d="M40 24l7-8" stroke="#8b5a3c" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="49" cy="14" r="4" fill="#ffb020"/>
+    <path d="M49 5v5M59 14h-5M56 7l-3 3" stroke="#ffb020" stroke-width="2.5" stroke-linecap="round"/>
+  </symbol>
+</svg>
+
 <div id="app">
 
-  <!-- 상단 바 -->
-  <header id="topbar" class="hidden">
-    <span class="logo">루미</span>
-    <nav>
-      <button data-nav="myroom" class="navbtn">마이룸</button>
-      <button data-nav="workshop" class="navbtn">공작소</button>
-      <button data-nav="shop" class="navbtn">상점</button>
-      <button data-nav="mail" class="navbtn">우편함<span id="mail-badge" class="nav-badge hidden">0</span></button>
-      <button data-nav="board" class="navbtn">리포트</button>
-    </nav>
-    <span class="cellbadge"><b id="cell-balance">0</b> 셀</span>
-    <button id="btn-sfx" class="textbtn" title="소리 켜기/끄기">소리</button>
-    <button id="btn-reset" class="textbtn" title="처음부터 다시 시작">초기화</button>
-  </header>
-
-  <!-- 시작 화면 -->
-  <section id="screen-start" class="screen">
-    <div class="card center">
-      <h1>루미</h1>
-      <p class="sub">나만의 로봇을 만들고, 키우고, 마이룸에 불러올 수 있어요!</p>
-      <input id="nickname" maxlength="12" placeholder="닉네임을 입력하세요">
-      <button id="btn-start" class="btn primary big">시작하기</button>
-      <!-- V4: 발표용 빠른 입장(신규 계정은 지표가 모두 0이라 성장 과정이 보이지 않는다) -->
-      <button id="btn-demo" class="btn ghost demo-btn"> 데모 계정으로 바로 보기</button>
-      <p class="hint">* 체험용 프로토타입 — 로그인 과정은 생략합니다</p>
-      <!-- ★ V16 안전·개인정보: 미성년자 서비스이므로 수집 항목과 보호자 동의를 명확히 드러낸다 -->
-      <p class="privacy-line">
-         <a href="#" id="link-privacy">개인정보 · 보호자 안내 보기</a>
-      </p>
+  <!-- ══════════════════════════════════════════════════════
+       사이드바 (로그인 후)
+  ═══════════════════════════════════════════════════════ -->
+  <aside id="sidebar" class="sidebar hidden">
+    <div class="brand">
+      <div class="brand-mark"><svg viewBox="0 0 48 48"><use href="#roomi-logo"/></svg></div>
+      <div class="brand-text"><b>Roo<span>Mi</span></b><span>루미 · AI 학습 파트너</span></div>
     </div>
-  </section>
 
-  <!-- ★ V16 개인정보 처리방침 -->
+    <nav class="side-nav">
+      <button data-nav="myroom" class="navbtn on">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5"/><path d="M6.5 10.5V20h11v-9.5"/><path d="M10 20v-5h4v5"/></svg>
+        <span>마이룸</span>
+      </button>
+      <button data-nav="games" class="navbtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 8h9a5 5 0 0 1 4.9 6l-.9 4.2a3 3 0 0 1-5.2 1.3L14 17.5h-4l-1.3 2a3 3 0 0 1-5.2-1.3L2.6 14a5 5 0 0 1 4.9-6Z"/><path d="M8 11.5v3"/><path d="M6.5 13h3"/><circle cx="16.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="18.5" cy="14" r="1" fill="currentColor" stroke="none"/></svg>
+        <span>미니게임</span>
+      </button>
+      <button data-nav="workshop" class="navbtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5a4 4 0 0 0-5 5L4 16v4h4l5.5-5.5a4 4 0 0 0 5-5l-2.5 2.5-2-2z"/></svg>
+        <span>공작소</span>
+      </button>
+      <button data-nav="shop" class="navbtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
+        <span>상점</span>
+      </button>
+      <button data-nav="mail" class="navbtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="m4.5 7 7.5 6 7.5-6"/></svg>
+        <span>우편함</span><span id="mail-badge" class="nav-badge hidden">0</span>
+      </button>
+      <button data-nav="friends" class="navbtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="17" cy="9" r="2.6"/><path d="M15.5 14.2c2.4-.4 4.4 1.1 5 4.3"/></svg>
+        <span>친구</span>
+      </button>
+    </nav>
+
+    <div class="side-bottom">
+      <button id="side-user" class="side-user" title="리포트 보기">
+        <div class="side-avatar" id="side-avatar">🤖</div>
+        <div class="side-user-text"><b id="side-name">게스트</b><span id="side-level">Lv.1</span></div>
+        <span class="side-user-go">📊</span>
+      </button>
+      <div class="side-tools">
+        <button id="btn-sfx" class="icon-btn" title="소리 켜기/끄기">🔊</button>
+        <button id="btn-reset" class="icon-btn" title="처음부터 다시 시작">↺</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════════════════════════════════
+       메인
+  ═══════════════════════════════════════════════════════ -->
+  <main id="main" class="main">
+
+    <header id="topbar" class="topbar hidden">
+      <div class="topbar-left">
+        <h1 id="topbar-title">마이룸</h1>
+        <p id="topbar-sub">루미와 함께하는 오늘</p>
+      </div>
+      <div class="topbar-right">
+        <span id="cellbadge" class="pill cellbadge">🪙 <b id="cell-balance">0</b> 셀</span>
+        <span class="pill"><b id="top-level">Lv.1</b></span>
+        <span class="pill"><b id="top-streak">🔥0</b></span>
+        <button id="btn-report" class="pill pill-btn report-mobile" title="리포트">📊</button>
+        <button id="btn-parent" class="pill pill-btn" title="보호자 대시보드">🛡 보호자</button>
+        <button id="btn-settings" class="pill pill-btn" title="설정">⚙</button>
+      </div>
+    </header>
+
+    <div id="content" class="content guest">
+
+      <!-- ══════════ 시작 화면 ══════════ -->
+      <section id="screen-start" class="screen guest-screen">
+        <div class="guest-orb orb-a"></div>
+        <div class="guest-orb orb-b"></div>
+        <div class="guest-orb orb-c"></div>
+        <div class="guest-wrap">
+          <div class="guest-top">
+            <span class="guest-logo">
+              <svg class="guest-logo-mark" viewBox="0 0 48 48"><use href="#roomi-logo"/></svg>
+              <span class="guest-word">Roo<span>Mi</span></span>
+              <i>루미</i>
+            </span>
+            <span class="guest-tag">AI 학습 파트너</span>
+          </div>
+
+          <div class="guest-grid">
+            <div class="guest-copy">
+              <span class="eyebrow">PAINT · TALK · GROW</span>
+              <h1>내가 칠한 로봇이<br>오늘도 나를 기다려요</h1>
+              <p>막힌 문제는 같이 생각하고, 스스로 풀면 방이 밝아져요.</p>
+              <div class="guest-badges">
+                <span>🎨 직접 칠하기</span>
+                <span>💬 같이 공부</span>
+                <span>💡 방이 밝아짐</span>
+              </div>
+            </div>
+            <div class="guest-art">
+              <div class="hero-ring"></div>
+              <div id="hero-bot" class="hero-bot">🤖</div>
+            </div>
+          </div>
+
+          <div class="guest-card">
+            <h3>루미 시작하기</h3>
+            <input id="nickname" maxlength="12" placeholder="닉네임을 입력하세요">
+            <button id="btn-start" class="btn primary big">시작하기</button>
+            <button id="btn-demo" class="btn ghost big demo-btn">🎬 데모 계정으로 바로 보기</button>
+            <p class="hint">* 체험용 프로토타입 — 로그인 과정은 생략합니다</p>
+            <p class="privacy-line"><a href="#" id="link-privacy">개인정보 · 보호자 안내 보기</a></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════ 만들기 ══════════ -->
+      <section id="screen-create" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">CREATE</span>
+            <h2>나만의 로봇 만들기</h2>
+            <p>색을 고르고, 로봇 부위를 눌러 칠해요.</p>
+          </div>
+          <div class="stepper"><span class="on"></span><span></span><span></span></div>
+        </div>
+
+        <div class="create-layout">
+          <div class="panel preview-panel">
+            <div class="canvas-wrap"><div id="paint-canvas"></div></div>
+            <p class="hint">① 팔레트에서 색 고르기 → ② 로봇 부위를 눌러 색칠!</p>
+          </div>
+          <div class="panel controls-panel">
+            <h3>1. 로봇 고르기</h3>
+            <div id="template-picker"></div>
+            <h3>2. 색 팔레트</h3>
+            <div id="palette"></div>
+            <h3>3. 이름 지어주기</h3>
+            <input id="bot-name" maxlength="12" placeholder="로봇 이름">
+            <button id="btn-done" class="btn primary big">완성! 🎉</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════ 마이룸 ══════════ -->
+      <section id="screen-myroom" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">MY ROOM</span>
+            <h2>나의 마이룸</h2>
+            <p>로봇이 살아있는 나만의 공간</p>
+          </div>
+          <div class="screen-actions">
+            <button id="btn-world" class="btn ghost">🌍 AI 마을</button>
+            <button id="btn-rank" class="btn ghost">🏆 랭킹</button>
+            <button id="btn-share" class="btn ghost">📸 자랑하기</button>
+          </div>
+        </div>
+
+        <div class="myroom-layout">
+          <div class="room-stage panel">
+            <canvas id="room3d" class="hidden"></canvas>
+            <div id="room-robot"></div>
+            <div id="bubble" class="bubble hidden"></div>
+            <div class="room-hud">
+              <span id="hud-lv">Lv.1</span>
+              <span id="hud-streak">🔥0</span>
+              <span id="hud-books">📚0</span>
+            </div>
+            <div class="room-dock">
+              <button class="dock-btn" data-act="feed">🍪<span>간식</span></button>
+              <button class="dock-btn" data-act="praise">💗<span>칭찬</span></button>
+              <button class="dock-btn" id="btn-games">🎮<span>미니게임</span></button>
+            </div>
+          </div>
+
+          <aside class="room-side">
+            <div class="room-tabs" id="room-tabs">
+              <button class="room-tab on" data-room-tab="today">오늘</button>
+              <button class="room-tab" data-room-tab="room">방</button>
+              <button class="room-tab" data-room-tab="growth">성장</button>
+            </div>
+            <div class="room-panes">
+              <div class="room-pane on" data-room-pane="today">
+                <div class="panel plan-panel">
+                  <div class="panel-head"><h3>오늘의 학습 계획</h3><div class="plan-head-right"><span class="mini-chip" id="plan-source">AI</span><button id="btn-prefs" class="mini-chip" title="학습 설정">⚙</button></div></div>
+                  <div id="plan-list"></div>
+                  <div class="plan-foot"><span id="plan-progress">0/0</span><span class="hint" id="tomorrow-note">내일 오면 새 계획이 기다려</span></div>
+                  <div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>
+                </div>
+                <div class="panel goals-panel">
+                  <div class="panel-head"><h3>이번 주 목표</h3><span class="mini-chip" id="goals-source">AI</span></div>
+                  <div id="goals-list"></div>
+                  <div class="plan-foot"><span id="goals-progress">0/0</span><span class="hint">이번 주가 끝나면 새 목표</span></div>
+                  <div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>
+                </div>
+                <div class="panel quest-panel">
+                  <div class="panel-head"><h3>오늘의 과제</h3><span class="mini-chip">DAILY</span></div>
+                  <div id="quest-list"></div>
+                  <div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>
+                </div>
+              </div>
+              <div class="room-pane" data-room-pane="room">
+                <div id="robot-info" class="panel bot-card"></div>
+                <div id="room-steps" class="steps"></div>
+                <div id="topic-banner" class="topic"></div>
+                <div id="class-card" class="classcard"></div>
+              </div>
+              <div class="room-pane" data-room-pane="growth">
+                <div id="room-learning" class="room-learning"></div>
+                <div id="streak-cal" class="streakcal"></div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ══════════ 미니게임 ══════════ -->
+      <section id="screen-games" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">MINI GAMES</span>
+            <h2>미니게임</h2>
+            <p>오늘의 기분에 맞는 게임을 골라요. 하루 1번씩 보상!</p>
+          </div>
+        </div>
+
+        <div class="game-menu">
+          <button class="mg-card" id="btn-mole">
+            <span class="mg-tag new">NEW</span>
+            <span class="mg-art">🐞</span>
+            <b>버그 두더지</b>
+            <span class="mg-desc">30초 안에 구멍에서 나오는 버그를 잡아요. 폭탄은 피해요!</span>
+            <span class="mg-reward">+10~80셀</span>
+          </button>
+          <button class="mg-card" id="btn-puzzle">
+            <span class="mg-tag">3문제</span>
+            <span class="mg-art">🧩</span>
+            <b>오늘의 퍼즐</b>
+            <span class="mg-desc">4지선다 3문제. 힌트 3개로 개념을 확인해요.</span>
+            <span class="mg-reward">+30셀</span>
+          </button>
+          <button class="mg-card" id="btn-shooter">
+            <span class="mg-tag">60초</span>
+            <span class="mg-art">🚀</span>
+            <b>버그 슈터</b>
+            <span class="mg-desc">코드 우주를 지켜라! 콤보와 보스전이 있는 슈팅 게임.</span>
+            <span class="mg-reward">+10~110셀</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ══════════ 공작소 ══════════ -->
+      <section id="screen-workshop" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">WORKSHOP</span>
+            <h2>공작소</h2>
+            <p>다시 칠하고, AI 성격을 만들고, 로봇에게 물어보세요.</p>
+          </div>
+        </div>
+
+        <div class="ws-layout">
+          <div class="panel ws-preview-panel">
+            <div id="ws-robot" class="ws-robot"></div>
+          </div>
+          <div class="ws-main">
+            <div class="ws-grid">
+              <button class="ws-card" id="ws-recolor">
+                <span class="ws-ico">🎨</span>
+                <span class="nm">색칠 다시 하기</span>
+                <span class="desc">마음이 바뀌었으면 다시 칠해요</span>
+                <span class="limit" id="ws-recolor-limit"></span>
+              </button>
+              <button class="ws-card" id="ws-regen">
+                <span class="ws-ico">✨</span>
+                <span class="nm">AI 성격 다시 만들기</span>
+                <span class="desc">색을 바꾸면 성격·인사말도 새로 생성</span>
+                <span class="limit" id="ws-regen-limit"></span>
+              </button>
+            </div>
+
+            <div class="panel ws-ask">
+              <div class="panel-head"><h3>로봇에게 물어보기</h3><span class="hint" id="ws-ask-left"></span></div>
+              <div class="ws-ask-row">
+                <input id="ws-q" maxlength="120" placeholder="예: 왜 하늘은 파래?">
+                <button class="btn primary" id="ws-ask-btn">물어보기</button>
+              </div>
+              <div id="ws-answer" class="ws-answer hidden"></div>
+            </div>
+
+            <div class="panel ws-owned">
+              <div class="panel-head"><h3>보유 부품·장식</h3><span class="mini-chip">MY ITEMS</span></div>
+              <div id="ws-owned-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════ 우편함 ══════════ -->
+      <section id="screen-mail" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">MAILBOX</span>
+            <h2>우편함</h2>
+            <p>선생님과 루미가 보낸 편지예요. 선물이 있으면 받아가세요.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="mail-actions">
+            <button class="btn primary" id="mail-claim-all">🎁 선물 한 번에 받기</button>
+            <span id="mail-summary" class="hint"></span>
+          </div>
+          <div id="mail-list"></div>
+        </div>
+      </section>
+
+      <!-- ══════════ 친구 ══════════ -->
+      <section id="screen-friends" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">FRIENDS</span>
+            <h2>친구</h2>
+            <p>6자리 코드로 친구를 만들고, 텍스트로 대화하거나 응원을 보낼 수 있어요. 개인정보/링크는 보내지 마세요.</p>
+          </div>
+        </div>
+        <div class="friends-layout">
+          <div class="panel">
+            <div class="panel-head"><h3>내 친구 코드</h3><span class="mini-chip">CODE</span></div>
+            <button class="friend-code" id="friend-code" title="복사">------</button>
+            <p class="hint">친구에게 이 코드를 알려 주세요. 실명·전화번호는 필요 없어요.</p>
+            <div class="friend-add">
+              <input id="friend-code-input" maxlength="6" placeholder="친구 코드 6자리">
+              <button id="friend-add-btn" class="btn primary">친구 추가</button>
+            </div>
+            <h3 class="mt">받은 요청</h3>
+            <div id="friend-requests"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>내 친구</h3><span class="mini-chip" id="friend-count">0명</span></div>
+            <div id="friend-list"></div>
+            <p class="hint" id="friend-chat-note" style="margin-top:10px">친구와 텍스트로 대화할 수 있어요. 개인정보/링크/전화번호는 보내지 마세요.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════ 상점 ══════════ -->
+      <section id="screen-shop" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">SHOP</span>
+            <h2>부품 상점</h2>
+            <p>셀로 부품을 사서 로봇을 꾸며보세요. 부품은 과제 보상도 올려줘요.</p>
+          </div>
+        </div>
+        <div class="shop-filters" id="shop-filters">
+          <button class="fchip on" data-shop="all">전체</button>
+          <button class="fchip" data-shop="part">부품</button>
+          <button class="fchip" data-shop="decor">장식</button>
+          <button class="fchip" data-shop="skin">스킨</button>
+          <button class="fchip" data-shop="shard">조각</button>
+        </div>
+        <div class="panel"><div id="shop-list" class="shop-grid"></div></div>
+        <div class="panel">
+          <div class="panel-head"><h3>내 부품함</h3><span class="mini-chip">INVENTORY</span></div>
+          <div id="shop-owned" class="owned-grid"></div>
+        </div>
+      </section>
+
+      <!-- ══════════ 리포트 ══════════ -->
+      <section id="screen-board" class="screen hidden">
+        <div class="screen-head">
+          <div>
+            <span class="eyebrow">REPORT</span>
+            <h2>나의 리포트</h2>
+            <p>셀 기록과 성장 흐름을 한눈에 확인해요.</p>
+          </div>
+        </div>
+        <div id="board-stats" class="stats-grid"></div>
+        <div class="panel">
+          <div class="panel-head"><h3>최근 7일 접속 추이</h3><span class="mini-chip">7 DAYS</span></div>
+          <div id="board-trend" class="trend"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>셀 사용 내역</h3><span class="sub-inline">최근 20건</span></div>
+          <table id="tx-table"><thead><tr><th>내용</th><th>금액</th><th>시간</th></tr></thead><tbody></tbody></table>
+        </div>
+      </section>
+
+    </div><!-- /content -->
+  </main><!-- /main -->
+
+  <!-- ══════════ 대화 패널 ══════════ -->
+  <button id="chat-fab" class="chat-fab" title="루미와 대화">
+    <span id="chat-fab-bot" class="chat-fab-bot">🤖</span>
+    <span class="chat-fab-dot"></span>
+  </button>
+  <div id="chat-panel" class="chat-panel hidden">
+    <div class="chat-head">
+      <div class="chat-head-avatar" id="chat-head-avatar">🤖</div>
+      <div class="chat-head-text"><b>루미</b><span>같이 생각하는 AI 친구</span></div>
+      <span id="chat-und" class="chat-und">이해도 0</span>
+      <button id="chat-voice" class="chat-mem" title="음성 대화">🎧</button>
+      <button id="chat-memory" class="chat-mem" title="루미의 기억">🧠</button>
+      <button id="chat-close" class="chat-x" title="닫기">✕</button>
+    </div>
+    <div class="chat-modes">
+      <button class="chip on" data-mode="chat">수다</button>
+      <button class="chip" data-mode="learn">같이 공부</button>
+      <button class="chip" data-mode="reflect">마음 체크</button>
+    </div>
+    <div id="chat-mode-hint" class="chat-mode-hint">편하게 이야기해요</div>
+    <div id="chat-log" class="chat-log"></div>
+    <div id="chat-chips" class="chat-chips"></div>
+    <div class="chat-input">
+      <input id="chat-text" maxlength="200" placeholder="루미에게 말을 걸어 보세요">
+      <button id="chat-mic" class="chat-mic" title="음성으로 말하기">🎤</button>
+      <button id="chat-send" class="btn primary">보내기</button>
+    </div>
+    <div class="chat-foot">
+      <span id="chat-left" class="chat-left"></span>
+      <button id="chat-solved" class="btn ghost small hidden">내가 해봤어요</button>
+      <span class="ai-credit">Powered by <b>DeepSeek</b></span>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <div id="world-screen" class="world-screen hidden">
+    <canvas id="world3d"></canvas>
+    <div class="world-top">
+      <div class="world-title">
+        <span class="eyebrow">AI WORLD</span>
+        <h2>AI 마을</h2>
+        <p>빛 조각 3개를 찾아 루미와 모험해요</p>
+      </div>
+      <button id="world-close" class="world-close" title="나가기">✕</button>
+    </div>
+    <div class="world-hud">
+      <span id="world-stars" class="world-chip">⭐ 0 / 3</span>
+      <span id="world-lessons" class="world-chip">📖 0 / 3</span>
+      <span id="world-hint" class="world-chip">드래그로 둘러보고, WASD로 걸어요</span>
+    </div>
+    <button id="world-prompt" class="world-prompt hidden">
+      <span class="wp-ico">📖</span>
+      <span class="wp-txt"><b>지혜의 샘</b><span>눌러서 루미의 질문 풀기</span></span>
+    </button>
+    <div id="world-quiz" class="world-quiz hidden">
+      <div class="wq-card">
+        <div class="wq-head">
+          <span class="wq-chip" id="wq-topic">오늘의 질문</span>
+          <button id="wq-close" class="wq-x" title="닫기">✕</button>
+        </div>
+        <p class="wq-q" id="wq-q"></p>
+        <div class="wq-opts" id="wq-opts"></div>
+        <div class="wq-feed hidden" id="wq-feed"></div>
+      </div>
+    </div>
+    <div class="world-dpad" id="world-dpad">
+      <button data-wk="w">▲</button>
+      <button data-wk="a">◀</button>
+      <button data-wk="s">▼</button>
+      <button data-wk="d">▶</button>
+    </div>
+    <div class="world-actions">
+      <button id="world-chat" class="btn primary">루미와 대화</button>
+    </div>
+    <div id="world-loading" class="world-loading"><div class="world-spinner"></div><span>AI 마을을 만드는 중…</span></div>
+  </div>
+
+  <!-- ══════════ 모달 ══════════ -->
   <div id="privacy-modal" class="modal hidden">
     <div class="modal-card center-card">
       <div class="big-emoji"></div>
@@ -50,14 +537,13 @@
         <p><b>모으는 것</b><br>닉네임(또는 없음)과 게임 속 기록(로봇 모습·레벨·접속 시간·보상 내역)만 저장합니다.</p>
         <p><b>쓰는 곳</b><br>내 로봇과 성장 기록을 저장해 두었다가 다음에 접속했을 때 그대로 보여주는 데만 씁니다.</p>
         <p><b>모으지 않는 것</b><br>실명 · 전화번호 · 주소 · 학교 · 사진 · 위치 정보는 <b>일절 수집하지 않습니다.</b></p>
-        <p><b>보관과 삭제</b><br>이 프로토타입의 데이터는 시연용으로만 보관되며, 화면의  버튼(처음부터 다시 시작)으로 언제든지 내 기록을 지울 수 있습니다.</p>
+        <p><b>보관과 삭제</b><br>이 프로토타입의 데이터는 시연용으로만 보관되며, 화면의 버튼(처음부터 다시 시작)으로 언제든지 내 기록을 지울 수 있습니다.</p>
         <p><b>보호자에게</b><br>이 서비스는 초등 고학년~중학생을 대상으로 한 <b>체험용 프로토타입</b>입니다. 하루 이용은 <b>40분</b>으로 제한되며, 상점 구매 전에는 <b>보호자 확인 문제</b>가 나옵니다.</p>
       </div>
       <button class="btn primary big" data-close="privacy-modal">확인했어요</button>
     </div>
   </div>
 
-  <!-- ★ V16 보호자 동의 (첫 이용 1회) -->
   <div id="consent-modal" class="modal hidden">
     <div class="modal-card center-card">
       <div class="big-emoji"></div>
@@ -74,73 +560,10 @@
     </div>
   </div>
 
-  <!-- 만들기 -->
-  <section id="screen-create" class="screen hidden">
-    <div class="card">
-      <h2>1. 골라서 색칠하기 </h2>
-      <div id="template-picker"></div>
-      <div class="create-grid">
-        <div class="canvas-wrap">
-          <div id="paint-canvas"></div>
-          <p class="hint">① 팔레트에서 색 고르기 → ② 로봇 부위를 눌러 색칠!</p>
-        </div>
-        <div class="side">
-          <h3>색 팔레트</h3>
-          <div id="palette"></div>
-          <h3 style="margin-top:16px">2. 이름 지어주기</h3>
-          <input id="bot-name" maxlength="12" placeholder="로봇 이름">
-          <button id="btn-done" class="btn primary big">완성! </button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 마이룸 -->
-  <section id="screen-myroom" class="screen hidden">
-    <div class="card">
-      <h2> 나의 마이룸</h2>
-      <div class="room-grid">
-      <div class="room-stage">
-        <canvas id="room3d" class="hidden"></canvas>
-        <div id="room-robot"></div>
-        <div id="bubble" class="bubble hidden"></div>
-      </div>
-        <div class="side">
-          <div id="robot-info"></div>
-          <!-- ★ V9 연속 방문 7칸 달력: 내일 받을 보상을 미리 보여준다 -->
-          <div id="streak-cal" class="streakcal"></div>
-          <!-- 오늘의 진행 단계: 카드 하단(화면 밖에 밀림)을 피하려고 과제 위에 배치.
-               아이가 첫 화면에서 '오늘 뭐 해야 하지?' 를 바로 알게 하는 것이 목적 -->
-          <div id="room-steps" class="steps"></div>
-          <div id="topic-banner" class="topic"></div>
-          <!-- ★ V15 P0-3 수업 출석: 회사 3대 기대효과 ②「수업도 콘텐츠」 -->
-          <div id="class-card" class="classcard"></div>
-          <h3>오늘의 과제</h3>
-          <div id="quest-list"></div>
-          <div class="interact-row">
-            <button class="btn ghost" data-act="feed"> 간식 주기</button>
-            <button class="btn ghost" data-act="praise"> 칭찬하기</button>
-          </div>
-          <!-- 미니게임: 난이도 커브를 만드는 두 가지 놀이(반응속도 · 기억력) -->
-          <h3 class="mt"> 미니게임</h3>
-          <div class="game-row">
-            <button class="btn ghost" id="btn-reflex"> 반사 속도<span class="rw">+10~50셀</span></button>
-            <button class="btn ghost" id="btn-memory"> 기억 순서<span class="rw">+50~110셀</span></button>
-          </div>
-          <div class="game-row mt">
-            <button class="btn ghost" id="btn-rank"> 오늘의 랭킹</button>
-            <button class="btn ghost" id="btn-share"> 내 로봇 자랑하기</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 반사 속도 게임 -->
   <div id="game-reflex" class="modal hidden">
     <div class="modal-card game-card">
       <button class="preview-close" data-close="game-reflex" title="닫기">✕</button>
-      <h3> 반사 속도</h3>
+      <h3>반사 속도</h3>
       <p class="desc">초록불이면 바로 눌러! 빨간불이면 기다려야 해요.<br>3번 중 가장 빠른 기록이 인정돼요.</p>
       <div id="reflex-stage" class="game-stage">초록불이 되면<br>아래 버튼을 눌러요!</div>
       <div class="game-hud"><span id="reflex-tries">시도 0/3</span><span id="reflex-best"></span></div>
@@ -148,102 +571,167 @@
     </div>
   </div>
 
-  <!-- 기억 순서 게임 -->
   <div id="game-memory" class="modal hidden">
     <div class="modal-card game-card">
       <button class="preview-close" data-close="game-memory" title="닫기">✕</button>
-      <h3> 기억 순서</h3>
-      <p class="desc">한 칸씩 차례로 빛나는 순서를<br>기억해서 같은 순서로 눌러요!<br>단계가 올라갈수록 칸이 늘어납니다.</p>
+      <h3>기억 순서</h3>
+      <p class="desc">한 칸씩 차례로 빛나는 순서를<br>기억해서 같은 순서로 눌러요!</p>
       <div id="memory-stage" class="game-stage seq">준비...</div>
       <div class="game-hud"><span id="memory-level">단계 1</span><span id="memory-best"></span></div>
       <button class="btn primary big" id="memory-go">시작하기</button>
     </div>
   </div>
 
-  <!-- ★ V15 P0-1 공작소: 로봇을 다시 만지고, AI 모듈을 쓰는 곳 -->
-  <section id="screen-workshop" class="screen hidden">
-    <div class="card">
-      <h2> 공작소</h2>
-      <p class="hint">내 로봇을 다시 칠하고, AI로 성격을 새로 만들거나 로봇에게 물어볼 수 있어요.</p>
-      <div id="ws-robot" class="ws-robot"></div>
-      <div class="ws-grid">
-        <button class="ws-card" id="ws-recolor">
-          <span class="em"></span>
-          <span class="nm">색칠 다시 하기</span>
-          <span class="desc">마음이 바뀌었으면 다시 칠해요</span>
-          <span class="limit" id="ws-recolor-limit"></span>
-        </button>
-        <button class="ws-card" id="ws-regen">
-          <span class="em"></span>
-          <span class="nm">AI 성격 다시 만들기</span>
-          <span class="desc">색을 바꾸면 성격·인사말도 새로 생성</span>
-          <span class="limit" id="ws-regen-limit"></span>
-        </button>
+  <div id="game-shooter" class="modal hidden">
+    <div class="modal-card game-card shooter-card">
+      <button class="preview-close" data-close="game-shooter" title="닫기">✕</button>
+      <h3>🐞 버그 슈터</h3>
+      <p class="desc">코드 우주를 지켜라! 드래그/방향키로 움직이고, 자동으로 쏴요.</p>
+      <div class="shooter-wrap">
+        <canvas id="shooter-canvas" width="360" height="480"></canvas>
+        <div class="shooter-hud"><span id="sh-score">0</span><span id="sh-combo">x1</span><span id="sh-time">60</span></div>
+        <div id="sh-overlay" class="shooter-overlay">START</div>
       </div>
-      <div class="ws-ask">
-        <h3 class="mt"> 로봇에게 물어보기</h3>
-        <p class="hint" id="ws-ask-left"></p>
-        <div class="ws-ask-row">
-          <input id="ws-q" maxlength="120" placeholder="예: 왜 하늘은 파래?">
-          <button class="btn primary" id="ws-ask-btn">물어보기</button>
-        </div>
-        <div id="ws-answer" class="ws-answer hidden"></div>
-      </div>
-      <div class="ws-owned">
-        <h3 class="mt"> 보유 부품·장식</h3>
-        <div id="ws-owned-list"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ★ V15 P0-4 우편함: 보상과 공지를 담아두고 아이가 직접 여는 곳 -->
-  <section id="screen-mail" class="screen hidden">
-    <div class="card">
-      <h2> 우편함</h2>
-      <p class="hint">선생님과 루미가 보낸 편지예요. 선물이 들어 있으면 받아가세요!</p>
-      <div class="mail-actions">
-        <button class="btn primary" id="mail-claim-all"> 선물 한 번에 받기</button>
-        <span id="mail-summary" class="hint"></span>
-      </div>
-      <div id="mail-list"></div>
-    </div>
-  </section>
-
-  <!-- 상점 -->
-  <section id="screen-shop" class="screen hidden">
-    <div class="card">
-      <h2> 부품 상점</h2>
-      <p class="hint">셀로 부품을 사서 로봇을 꾸며보세요! 부품은 과제 보상도 올려줘요.</p>
-      <div id="shop-list"></div>
-      <!-- 보유 중인 부품(규격에 있는 인벤토리 영역) -->
-      <h3 class="mt"> 내 부품함</h3>
-      <div id="shop-owned" class="owned-grid"></div>
-    </div>
-  </section>
-
-  <!-- 리포트 -->
-  <section id="screen-board" class="screen hidden">
-    <div class="card">
-      <h2> 나의 리포트</h2>
-      <p class="hint">지금까지의 셀 기록과 성장 흐름을 확인해요.</p>
-      <div id="board-stats" class="stats-grid"></div>
-      <!-- 최근 7일 접속 추이 -->
-      <h3 class="mt"> 최근 7일 접속 추이</h3>
-      <div id="board-trend" class="trend"></div>
-      <h3 class="mt"> 셀 사용 내역 <span class="sub-inline">(최근 20건)</span></h3>
-      <table id="tx-table"><thead><tr><th>내용</th><th>금액</th><th>시간</th></tr></thead><tbody></tbody></table>
-    </div>
-  </section>
-
-  <!-- 결과 모달 -->
-  <div id="modal" class="modal hidden">
-    <div class="modal-card">
-      <div id="modal-body"></div>
-      <button id="modal-ok" class="btn primary">마이룸으로 가기 </button>
+      <button class="btn primary big" id="shooter-go">시작하기</button>
     </div>
   </div>
 
-  <!-- 부모 승인 게이트(자녀 보호) -->
+  <div id="game-puzzle" class="modal hidden">
+    <div class="modal-card game-card">
+      <button class="preview-close" data-close="game-puzzle" title="닫기">✕</button>
+      <h3>🧩 오늘의 퍼즐</h3>
+      <p class="desc" id="pz-topic"></p>
+      <div id="pz-question" class="pz-q"></div>
+      <div id="pz-options" class="pz-options"></div>
+      <div id="pz-hint" class="pz-hint hidden"></div>
+      <div class="game-hud"><span id="pz-hints">힌트 3개</span><span id="pz-reward">+30셀</span></div>
+      <div class="pz-actions">
+        <button class="btn ghost" id="pz-hint-btn">힌트 보기</button>
+        <button class="btn ghost" id="pz-ask">루미에게 묻기</button>
+        <button class="btn ghost" id="pz-practice">연습 모드</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="game-mole" class="modal hidden">
+    <div class="modal-card game-card">
+      <button class="preview-close" data-close="game-mole" title="닫기">✕</button>
+      <h3>🐞 버그 두더지</h3>
+      <p class="desc">30초 안에 구멍에서 나오는 버그를 잡아라! 폭탄은 피해요.</p>
+      <div class="mole-wrap">
+        <div class="mole-hud"><span id="mole-score">0</span><span id="mole-combo">x1</span><span id="mole-time">30</span></div>
+        <div id="mole-grid" class="mole-grid"></div>
+        <div id="mole-overlay" class="shooter-overlay">START</div>
+      </div>
+      <button class="btn primary big" id="mole-go">시작하기</button>
+    </div>
+  </div>
+
+  <div id="parent-dashboard" class="modal hidden">
+    <div class="modal-card pd-card">
+      <button class="preview-close" data-close="parent-dashboard" title="닫기">✕</button>
+      <h3>🛡 보호자 대시보드</h3>
+      <p class="desc">오늘의 학습 · 플레이 요약</p>
+      <div id="pd-body" class="pd-grid"></div>
+      <p class="hint" style="margin-top:10px">이 화면은 보호자/교사 확인용입니다.</p>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card">
+      <button class="preview-close" data-close="settings-modal" title="닫기">✕</button>
+      <h3>⚙ 설정</h3>
+      <div class="set-row"><span>글자 크게</span><label class="switch"><input type="checkbox" id="set-font"><i></i></label></div>
+      <div class="set-row"><span>색약 모드</span><label class="switch"><input type="checkbox" id="set-cb"><i></i></label></div>
+      <div class="set-row"><span>답변 자동 읽기</span><label class="switch"><input type="checkbox" id="set-voice"><i></i></label></div>
+      <div class="set-row"><span>읽어주는 목소리</span><select id="set-voice-name" class="set-select"><option value="">자동 (한국어)</option></select></div>
+      <div class="set-row"><span>말하기 속도</span><div class="voice-rate"><input type="range" id="set-voice-rate" min="0.7" max="1.15" step="0.05" value="0.9"><b id="voice-rate-val">0.90</b></div></div>
+      <div class="set-row"><span>음성 대화</span><label class="switch"><input type="checkbox" id="set-voice-chat"><i></i></label></div>
+      <button id="voice-test" class="btn ghost small" style="margin-top:8px">🔊 목소리 테스트</button>
+      <div class="set-row"><span>루미가 먼저 말 걸기</span><label class="switch"><input type="checkbox" id="set-nudge"><i></i></label></div>
+      <p class="hint">음성 입력은 채팅 입력창의 🎤 버튼을 눌러 사용해요. 목소리가 기계음처럼 들리면 더 선명한 한국어 음성을 선택하거나 기기 설정에서 음성을 추가해 주세요.</p>
+    </div>
+  </div>
+
+  <div id="revive-modal" class="modal hidden">
+    <div class="modal-card center-card">
+      <button class="preview-close" data-close="revive-modal" title="닫기">✕</button>
+      <h3>어제 하루 쉬었네!</h3>
+      <p class="desc">20셀로 <b id="revive-streak">🔥7</b>일 연속을 되살릴까?</p>
+      <div class="revive-actions">
+        <button id="revive-accept" class="btn primary">되살리기 (20셀)</button>
+        <button id="revive-skip" class="btn ghost">다음에</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="review-modal" class="modal hidden">
+    <div class="modal-card review-card">
+      <button class="preview-close" data-close="review-modal" title="닫기">✕</button>
+      <h3>📚 3일 전 틀린 문제</h3>
+      <p class="desc" id="review-topic"></p>
+      <div id="review-question" class="review-q"></div>
+      <div id="review-options" class="review-options"></div>
+      <div id="review-feedback" class="review-feedback"></div>
+      <button id="review-next" class="btn primary" disabled>다음</button>
+    </div>
+  </div>
+
+  <div id="memory-modal" class="modal hidden">
+    <div class="modal-card memory-card">
+      <button class="preview-close" data-close="memory-modal" title="닫기">✕</button>
+      <h3>🧠 루미의 기억</h3>
+      <p class="desc">대화에서 배운 것을 기억해요. 지우고 싶으면 삭제할 수 있어요.</p>
+      <div id="memory-list"></div>
+      <div class="memory-add">
+        <select id="memory-kind">
+          <option value="fact">사실</option>
+          <option value="preference">偏好</option>
+          <option value="learning">학습</option>
+          <option value="goal">목표</option>
+          <option value="event">일정</option>
+        </select>
+        <input id="memory-input" maxlength="60" placeholder="예: 나는 공룡을 좋아해">
+        <button id="memory-add-btn" class="btn primary">기억시키기</button>
+      </div>
+      <button id="memory-clear" class="btn ghost">모두 잊어줘</button>
+    </div>
+  </div>
+
+  <div id="friend-chat" class="modal hidden">
+    <div class="modal-card friend-chat-card">
+      <button class="preview-close" data-close="friend-chat" title="닫기">✕</button>
+      <div class="fc-head">
+        <div class="fc-avatar" id="fc-avatar"></div>
+        <div class="fc-title"><b id="fc-name">친구</b><span id="fc-status">친구와 대화</span></div>
+        <div class="fc-actions"><button id="fc-report" class="fc-mini">신고</button><button id="fc-block" class="fc-mini danger">차단</button></div>
+      </div>
+      <div id="fc-log" class="fc-log"></div>
+      <div class="fc-safety">예의를 지켜요 · 개인정보/링크는 보낼 수 없어요</div>
+      <div class="fc-input"><input id="fc-text" maxlength="200" placeholder="메시지를 입력하세요"><button id="fc-send" class="btn primary">보내기</button></div>
+    </div>
+  </div>
+
+  <div id="prefs-modal" class="modal hidden">
+    <div class="modal-card prefs-card">
+      <button class="preview-close" data-close="prefs-modal" title="닫기">✕</button>
+      <h3>학습 설정</h3>
+      <p class="desc">루미가 계획을 짤 때 반영해요.</p>
+      <div class="pref-row"><span>하루 학습 시간</span><div class="pref-chips" id="pref-minutes"><button data-min="5">5분</button><button data-min="10">10분</button><button data-min="15">15분</button></div></div>
+      <div class="pref-row"><span>선호 시간</span><div class="pref-chips" id="pref-time"><button data-time="morning">아침</button><button data-time="afternoon">방과 후</button><button data-time="evening">저녁</button></div></div>
+      <div class="pref-row"><span>관심 주제</span><div class="pref-chips" id="pref-subjects"><button data-subject="AI">AI</button><button data-subject="코딩">코딩</button><button data-subject="수학">수학</button><button data-subject="과학">과학</button><button data-subject="게임">게임</button></div></div>
+      <div class="pref-row"><span>난이도</span><div class="pref-chips" id="pref-diff"><button data-diff="easy">쉬움</button><button data-diff="normal">보통</button><button data-diff="hard">도전</button></div></div>
+      <button id="prefs-save" class="btn primary big">저장하기</button>
+    </div>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div id="modal-body"></div>
+      <button id="modal-ok" class="btn primary">마이룸으로 가기</button>
+    </div>
+  </div>
+
   <div id="parent-gate" class="modal hidden">
     <div class="modal-card gate-card">
       <div class="big-emoji"></div>
@@ -257,7 +745,6 @@
     </div>
   </div>
 
-  <!-- 오버플레이 안내 -->
   <div id="overplay" class="modal hidden">
     <div class="modal-card gate-card">
       <div class="big-emoji"></div>
@@ -270,7 +757,6 @@
     </div>
   </div>
 
-  <!-- 부품 미리보기 모달 -->
   <div id="preview-modal" class="modal hidden">
     <div class="modal-card preview-card">
       <button id="preview-close" class="preview-close" title="닫기">✕</button>
@@ -281,28 +767,25 @@
     </div>
   </div>
 
-  <!-- 자랑하기 모달 -->
   <div id="share-modal" class="modal hidden">
     <div class="modal-card">
       <button id="share-close" class="preview-close" title="닫기">✕</button>
       <h3 id="share-title">내 로봇</h3>
       <p id="share-desc" class="desc"></p>
-      <img id="share-img" alt="내 로봇" style="width:100%;border-radius:12px;background:#dceafc">
-      <a id="share-save" class="btn primary big" download> 그림으로 저장하기</a>
+      <img id="share-img" alt="내 로봇" style="width:100%;border-radius:16px;background:#e8f0fa">
+      <a id="share-save" class="btn primary big" download>그림으로 저장하기</a>
     </div>
   </div>
 
-  <!-- 오늘의 랭킹 모달 -->
   <div id="rank-modal" class="modal hidden">
     <div class="modal-card">
       <button id="rank-close" class="preview-close" title="닫기">✕</button>
-      <h3> 오늘의 랭킹</h3>
+      <h3>오늘의 랭킹</h3>
       <p class="desc">오늘 기록된 순위예요. 매일 새로 시작!</p>
       <div id="rank-body"></div>
     </div>
   </div>
 
-  <!-- 첫 실행 온보딩 -->
   <div id="onboard" class="modal hidden">
     <div class="modal-card center-card">
       <div id="ob-emoji" class="big-emoji"></div>
@@ -316,6 +799,9 @@
 
 </div>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs@7/babylon.js" defer onload="window.__bjsReady=true;window.dispatchEvent(new Event('bjsready'))" onerror="window.__bjsFailed=true"></script>
-<script src="app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@7/babylonjs.loaders.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/babylonjs-materials@7/babylonjs.materials.min.js" defer></script>
+<script src="app.js?v=20261102b"></script>
+<script src="world.js?v=20261102e"></script>
 </body>
 </html>

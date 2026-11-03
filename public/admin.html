@@ -34,6 +34,10 @@
   .hidden{ display:none; }
   .note{ font-size:12px; color:var(--sub); line-height:1.6; margin-top:8px; }
   .login-wrap{ max-width:360px; margin:80px auto; }
+  /* UI 2.0 (2026-10-27) */
+  .panel{ border-radius:16px; box-shadow:0 4px 12px rgba(16,24,40,.06); }
+  button{ border-radius:10px; min-height:40px; font-weight:600; }
+  input,select,textarea{ border-radius:10px; }
 </style>
 </head>
 <body>
@@ -97,6 +101,31 @@
         <span class="note">같은 <b>tag</b> 로 두 번 보내면 중복 발송되지 않습니다.</span>
       </div>
       <div class="msg" id="mail-msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>🛍 아이템 추가 / 수정</h2>
+      <div class="row">
+        <div><label>ID (수정 시)</label><input id="item-id" type="number" min="1" style="width:90px"></div>
+        <div style="flex:1;min-width:180px"><label>이름</label><input id="item-name" style="width:100%"></div>
+        <div><label>종류</label><select id="item-type"><option value="part">part</option><option value="decor">decor</option><option value="skin">skin</option><option value="shard">shard</option></select></div>
+        <div><label>가격</label><input id="item-price" type="number" min="0" value="60" style="width:90px"></div>
+        <div><label>소모품</label><select id="item-consumable"><option value="0">아니오</option><option value="1">예</option></select></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="btn-item">저장</button><span class="note" id="item-count"></span></div>
+      <div class="msg" id="item-msg"></div>
+    </div>
+
+    <div class="panel">
+      <h2>📝 오늘의 과제 추가</h2>
+      <div class="row">
+        <div><label>날짜</label><input id="quest-date" type="date"></div>
+        <div><label>종류</label><input id="quest-type" value="daily" style="width:100px"></div>
+        <div style="flex:1;min-width:220px"><label>제목</label><input id="quest-title" style="width:100%"></div>
+        <div><label>보상</label><input id="quest-reward" type="number" min="0" value="30" style="width:90px"></div>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="btn-quest">추가</button><span class="note" id="quest-count"></span></div>
+      <div class="msg" id="quest-msg"></div>
     </div>
 
     <div class="panel">
@@ -166,8 +195,35 @@ async function loadAll(){
     </tr>`).join('');
     const t = await api('/api/public/stats').catch(()=>null);
     if(t) $('#topic-now').textContent = `현재: 참가자 ${t.participants}명 · 평균 재접속률 ${t.avgReturnRate}%`;
+    loadItems();
   }catch(e){ showMsg('#login-msg', e.message, false); }
 }
+
+// 아이템 / 과제 CRUD
+async function loadItems(){
+  try{ const r = await api('/api/admin/items'); $('#item-count').textContent = `총 ${r.items.length}개`; }
+  catch(e){}
+}
+$('#btn-item').addEventListener('click', async ()=>{
+  const body = { name: $('#item-name').value.trim(), type: $('#item-type').value,
+                 price: Number($('#item-price').value)||0, consumable: Number($('#item-consumable').value)||0 };
+  const id = Number($('#item-id').value)||0; if(id) body.id = id;
+  if(!body.name) return showMsg('#item-msg', '이름을 입력해 주세요', false);
+  try{
+    const r = await api('/api/admin/item', { method:'POST', body: JSON.stringify(body) });
+    showMsg('#item-msg', r.updated ? `수정 완료 #${r.updated}` : `추가 완료 #${r.id}`, true);
+    loadItems();
+  }catch(e){ showMsg('#item-msg', e.message, false); }
+});
+$('#btn-quest').addEventListener('click', async ()=>{
+  const body = { date: $('#quest-date').value, type: $('#quest-type').value.trim()||'daily',
+                 title: $('#quest-title').value.trim(), reward: Number($('#quest-reward').value)||30 };
+  if(!body.title) return showMsg('#quest-msg', '제목을 입력해 주세요', false);
+  try{
+    const r = await api('/api/admin/quest', { method:'POST', body: JSON.stringify(body) });
+    showMsg('#quest-msg', `추가 완료 #${r.id}`, true); $('#quest-title').value='';
+  }catch(e){ showMsg('#quest-msg', e.message, false); }
+});
 function esc(v){ return String(v==null?'':v).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 // 주제 저장
@@ -209,6 +265,7 @@ $('#btn-cleanup').addEventListener('click', async ()=>{
   const d = new Date(); const day = d.getDay();
   d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
   $('#topic-week').value = d.toISOString().slice(0,10);
+  $('#quest-date').value = new Date().toISOString().slice(0,10);
 })();
 </script>
 </body>

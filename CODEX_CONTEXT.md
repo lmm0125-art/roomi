@@ -41,7 +41,7 @@ The company's problem: DLS online classes are **once a week**, so kids don't log
 
 ```
 dorobot/
-├── server.js              (1,698 lines)  Express 5 API + SQLite schema + LLM pipeline + admin API
+├── server.js              (2,030 lines)  Express 5 API + SQLite schema + LLM(DeepSeek) + admin API
 ├── public/
 │   ├── index.html         (322)  single page, 7 screens, modals
 │   ├── app.js             (2,825)  all client logic, vanilla JS, no framework
@@ -77,11 +77,10 @@ node --experimental-sqlite server.js          # http://localhost:3000
 | `DB_PATH` | `./roomi.db` | SQLite file path — **must be persistent in deploy** |
 | `ADMIN_KEY` | `''` | admin endpoints; **empty ⇒ all admin APIs return 503 (fail-closed)** |
 | `CLASS_CODE` | `1004` | weekly class attendance code |
-| `GEMINI_API_KEY` | file `gemini_key.txt` | primary LLM |
-| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | first model in chain |
-| `LLM_DAILY_LIMIT[_2/_3/_4]` | 490/490/20/20 | per-model daily quotas |
-| `LLM_TOTAL_BUDGET_MS` | 8000 | wall-clock budget for one LLM call |
-| `DEEPSEEK_API_KEY` | file `deepseek_key.txt` | fallback LLM |
+| `DEEPSEEK_API_KEY` | file `deepseek_key.txt` | **only LLM** (DeepSeek) |
+| `LLM_MODEL` | `deepseek-chat` | non-reasoner (no deep thinking) |
+| `LLM_TIMEOUT_MS` | 6000 | per-request timeout |
+| `LLM_MAX_TOKENS` | 220 | output cap |
 
 
 > **Local machine note (this Mac has no system `node`)**: use the managed runtime
@@ -109,7 +108,7 @@ Express 5 (server.js)
    ├─ static: public/
    ├─ auth: users.token (opaque, generated at signup)
    ├─ domain logic: quests, economy, growth, mailbox, class, workshop, games
-   ├─ LLM pipeline: prompt → isSafeText guard → Gemini chain → DeepSeek → preset fallback
+   ├─ LLM pipeline: prompt → isSafeText guard → DeepSeek(deepseek-chat) → preset fallback
    └─ SQLite (node:sqlite, synchronous DatabaseSync)
 ```
 
@@ -118,14 +117,14 @@ No cache layer, no queue, no websockets. All state in one SQLite file.
 **Auth model**: `POST /api/user {nickname}` returns `{user:{id, token,...}}`. Client stores token in
 `localStorage` (`roomi_token`) and sends `X-Token`. There is no password — this is a prototype.
 
-**LLM chain** (`server.js` top):
-`gemini-3.5-flash-lite` (490/day) → `gemini-3.1-flash-lite` (490) → `gemini-flash-latest` (20) →
-`gemini-3.5-flash` (20) → DeepSeek → **preset line from `robot_lines`**.
-Every model output passes `sanitizeLine()` / `isSafeText()`; failure ⇒ preset fallback (never blank).
+**LLM** (`server.js` top):
+`deepseek-chat` (non-reasoner) → **preset line from `robot_lines`**.
+Every output passes `sanitizeLine()` / `isSafeText()`; failure ⇒ preset fallback (never blank).
+`callLLM(prompt, {messages})` supports multi-turn for `/api/chat`.
 
 ---
 
-## 5. Data model — 15 tables
+## 5. Data model — 21 tables
 
 `users` is the root; every other table carries `user_id`.
 
@@ -146,6 +145,12 @@ Every model output passes `sanitizeLine()` / `isSafeText()`; failure ⇒ preset 
 | **interact_logs** | id, user_id, day, situation, ts | **UNIQUE(user_id, day, situation)** |
 | **workshop_logs** | id, user_id, day, kind, ts | **UNIQUE(user_id, day, kind)** — daily limits |
 | **game_logs** | id, user_id, day, kind, score, reward, ts | **UNIQUE(user_id, day, kind)** |
+| **chat_messages** | id, user_id, role, content, mode, hint_level, ts | short-term chat memory |
+| **learner_profile** | user_id PK, understanding, weak_topics, hint_style, last_summary | long-term learner memory |
+| **knowledge_cards** | id, topic, chapter, concept, analogy, example, hint_l1~3, quiz, tags | RAG-lite |
+| **learning_help_logs** | id, user_id, day, subject, level, solved, ts | self-solve tracking |
+| **seasons** | id, name, start_week, end_week, reward_cell | minimal season |
+| **llm_logs** | id, user_id, mode, model, latency_ms, ok, ts | LLM latency/health log |
 
 Indexes: `visits(user_id, entered_at)`, `mailbox(user_id, claimed)`, `interact_logs(user_id, day, situation)`.
 
@@ -154,7 +159,11 @@ ignore these errors — the 400 response is the anti-cheat mechanism.
 
 ---
 
-## 6. API surface — 38 endpoints
+## 6. API surface — 49 endpoints
+
+> 2026-10-27 additions: `POST /api/chat`, `GET /api/chat/history`, `POST /api/chat/reset`,
+> `GET /api/room/state`, `GET /api/puzzle/today`, `POST /api/puzzle/answer`, `GET /api/season/current`,
+> `GET /api/admin/items`, `POST /api/admin/item`, `POST /api/admin/quest`, `POST /api/admin/season`.
 
 **Session / lifecycle**
 `POST /api/user` (create-or-load by nickname) · `POST /api/visit` · `POST /api/visit/duration` ·
@@ -349,7 +358,7 @@ Expected: repeated calls to recolor/attend/quest return `400` with a Korean mess
 3. **Demo seed wipes the demo account.** `POST /api/demo/seed` deletes that user's rows first; don't point it
    at a real test subject.
 4. **`ADMIN_KEY` unset ⇒ 503 everywhere in /api/admin.** That is intentional; set it in the deploy env.
-5. **LLM keys may live in text files** (`gemini_key.txt`, `deepseek_key.txt`). Never commit or share them.
+5. **LLM key may live in a text file** (`deepseek_key.txt`). Never commit or share it.
 6. **Class code is global**, not per-teacher. If multiple classes use the service, extend `weekly_topics`
    or add a `classes` table before scaling.
 7. **`users.nickname` is UNIQUE** — signup is create-or-load, so a returning child with the same nickname
