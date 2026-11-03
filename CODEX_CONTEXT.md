@@ -22,7 +22,7 @@ admin APIs stay fail-closed. Run the §13 smoke test after every change.
 ## 1. What this product is
 
 A **DOROBUS content module** for ㈜도로 (Korean youth AI-edu company), built as an IC-PBL course project
-at Hanyang ERICA. Target users: **upper elementary ~ middle school (ages 10–15)**.
+at Hanyang. Target users: **upper elementary ~ middle school (ages 10–15)**.
 
 One-sentence pitch:
 > A robot the child paints by hand becomes a 3D roommate that waits for them — creating a daily
