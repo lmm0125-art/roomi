@@ -1,8 +1,10 @@
 // ============================================================
 // 루미 (RooMi) — IC-PBL Prototype Server
 // 스택: Node 22 내장 SQLite(node:sqlite) + Express
-// 설명: DB는 31개 테이블(기본 15 + LLM 학습/기억/퍼즐/시즌/로그/친구/계획/목표/안전/기억/보상/복습 16). AI 대사는 우선 규칙 엔진으로 처리하고,
-//       LLM 은 DeepSeek 단일(deepseek-chat)로 호출한다.
+// 설명: DB는 39개 테이블(기본 15 + 학습/기억/퍼즐/시즌/로그/친구/계획/목표/안전/보상/복습/마을/리텐션
+//       + 2026-11-04 학습 동행 2.0 의 nudges·mood_logs·focus_sessions·season_claims 4개).
+//       AI 대사는 우선 규칙 엔진으로 처리하고, LLM 은 DeepSeek 단일(deepseek-chat)로 호출한다.
+//       신규 기능은 LLM 호출을 늘리지 않고 기존 로그를 결정론 규칙으로 집계한다(자세한 내용은 docs/기술문서.md v1.27).
 // ============================================================
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
@@ -232,6 +234,60 @@ try{ db.exec('CREATE INDEX IF NOT EXISTS idx_chat_user_ts ON chat_messages(user_
 // 30일 지난 대화는 서버 시작 시 정리한다(개인정보 최소화).
 try{ db.prepare("DELETE FROM chat_messages WHERE ts < datetime('now','+9 hours','-30 days')").run(); }catch(e){}
 
+// ★ v1.40 «대화 저장 → 분석» — 원문은 chat_messages, 분석 결과는 chat_analyses(1턴 1행),
+//   일별 집계는 chat_reports. «모든 대화» 가 이 파이프라인을 통과하도록 saveChatTurn() 으로 단일화했다.
+//   고아 분석행을 막기 위해 DELETE 시 함께 지우고, 재집계(rebuild) 가 가능하도록 UNIQUE(user_msg_id).
+db.exec(`CREATE TABLE IF NOT EXISTS chat_analyses(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  user_msg_id INTEGER NOT NULL,
+  ai_msg_id INTEGER,
+  day TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'chat',
+  topic TEXT,
+  subject TEXT,
+  intent TEXT,
+  sentiment TEXT,
+  stuck INTEGER NOT NULL DEFAULT 0,
+  hint_level INTEGER,
+  solved INTEGER NOT NULL DEFAULT 0,
+  word_count INTEGER NOT NULL DEFAULT 0,
+  question_count INTEGER NOT NULL DEFAULT 0,
+  reply_len INTEGER NOT NULL DEFAULT 0,
+  reply_has_hint INTEGER NOT NULL DEFAULT 0,
+  reply_has_praise INTEGER NOT NULL DEFAULT 0,
+  keywords TEXT,
+  created_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_msg_id),
+  FOREIGN KEY(user_msg_id) REFERENCES chat_messages(id)
+)`);
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_ca_user_day ON chat_analyses(user_id, day)'); }catch(e){}
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_ca_subject ON chat_analyses(user_id, subject)'); }catch(e){}
+db.exec(`CREATE TABLE IF NOT EXISTS chat_reports(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  turns INTEGER NOT NULL DEFAULT 0,
+  user_words INTEGER NOT NULL DEFAULT 0,
+  stuck_count INTEGER NOT NULL DEFAULT 0,
+  solved_count INTEGER NOT NULL DEFAULT 0,
+  hint_sum INTEGER NOT NULL DEFAULT 0,
+  top_subject TEXT,
+  top_intent TEXT,
+  mood TEXT,
+  summary TEXT,
+  updated_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_id, day)
+)`);
+// 주제별 집계는 «뷰» 로 둔다 — 저장하지 않고도 최신 분석 결과를 SQL 한 줄로 읽는다(중복 데이터 없음).
+db.exec(`CREATE VIEW IF NOT EXISTS v_chat_subject AS
+  SELECT user_id, subject, COUNT(*) AS turns,
+         SUM(stuck) AS stuck_count, SUM(solved) AS solved_count,
+         ROUND(AVG(word_count), 1) AS avg_words
+  FROM chat_analyses
+  WHERE subject IS NOT NULL
+  GROUP BY user_id, subject`);
+
 // LLM 호출 로그(비용/지연 모니터링). 민감정보 없음.
 db.exec(`CREATE TABLE IF NOT EXISTS llm_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,7 +309,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS learner_profile(
   last_summary TEXT,
   updated_at TEXT DEFAULT (datetime('now','+9 hours'))
 )`);
-// ★ 2026-10-28: 학습 偏好(하루 시간/선호 시간대/관심 주제/난이도)
+// ★ 2026-10-28: 학습 선호(하루 시간/선호 시간대/관심 주제/난이도)
 try{ db.exec("ALTER TABLE learner_profile ADD COLUMN pref_minutes INTEGER NOT NULL DEFAULT 10"); }catch{}
 try{ db.exec("ALTER TABLE learner_profile ADD COLUMN pref_time TEXT NOT NULL DEFAULT 'afternoon'"); }catch{}
 try{ db.exec("ALTER TABLE learner_profile ADD COLUMN pref_subjects TEXT NOT NULL DEFAULT ''"); }catch{}
@@ -336,6 +392,31 @@ try{ db.exec('CREATE INDEX IF NOT EXISTS idx_review_due ON review_cards(user_id,
 
 // ---- AI 마을 학습 스테이션 (2026-11-02) ----
 //   마을 외곽 3곳의 «지혜의 샘» 에서 하루 1문제씩. 지식카드(quiz) 를 결정론적으로 배정한다.
+// ---- 마을 성장 · 방명록 (2026-11-03) ----
+db.exec(`CREATE TABLE IF NOT EXISTS village_props(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  prop_key TEXT NOT NULL,
+  granted_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_id, prop_key)
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS treasure_claims(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  spot INTEGER NOT NULL,
+  claimed_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_id, day, spot)
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS guestbook(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  to_user INTEGER NOT NULL,
+  from_user INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now','+9 hours'))
+)`);
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_gb_to ON guestbook(to_user, id DESC)'); }catch{}
+
 db.exec(`CREATE TABLE IF NOT EXISTS world_lessons(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -390,6 +471,63 @@ db.exec(`CREATE TABLE IF NOT EXISTS friend_messages(
   read_at TEXT
 )`);
 try{ db.exec('CREATE INDEX IF NOT EXISTS idx_fmsg_pair ON friend_messages(from_user, to_user, id)'); }catch{}
+// ★ v1.35 AI 마을 «같이 놀기» — 지금 마을에 있는 친구의 위치. 45초 넘으면 «떠난 것» 으로 본다.
+db.exec(`CREATE TABLE IF NOT EXISTS world_presence(
+  user_id INTEGER PRIMARY KEY,
+  x REAL NOT NULL DEFAULT 0,
+  z REAL NOT NULL DEFAULT 0,
+  ry REAL NOT NULL DEFAULT 0,
+  anim TEXT DEFAULT 'Idle',
+  ts INTEGER NOT NULL
+)`);
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_presence_ts ON world_presence(ts)'); }catch{}
+// ★ v1.37 대세계 «의뢰» — 하루 3건. __skip__ 행은 «건너뛰기 1장»(소모 = DELETE).
+db.exec(`CREATE TABLE IF NOT EXISTS world_quests(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  quest TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  reward INTEGER NOT NULL DEFAULT 0,
+  ts TEXT DEFAULT (datetime('now','+9 hours'))
+)`);
+try{ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_wq_daily ON world_quests(user_id, day, quest)'); }catch{}
+// ★ v1.37 빛 조각 3개 — 모으면 «건너뛰기» 한 장
+db.exec(`CREATE TABLE IF NOT EXISTS world_stars(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  star INTEGER NOT NULL,
+  ts TEXT DEFAULT (datetime('now','+9 hours'))
+)`);
+try{ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ws_daily ON world_stars(user_id, day, star)'); }catch{}
+// ★ v1.38 이스터에그 «주인공의 흔적» — 마을 끝 낡은 이정표를 처음 읽은 기록. 계정당 1회 보상.
+db.exec(`CREATE TABLE IF NOT EXISTS world_secrets(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  ts TEXT DEFAULT (datetime('now','+9 hours'))
+)`);
+try{ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_wsec_user ON world_secrets(user_id, key)'); }catch{}
+// ★ v1.39 «자기 생각 × 도로랜드» — 아이가 막힌 순간에 적은 «생각 조각».
+//   핵심은 «틀린 답» 이 아니라 «처음에 한 생각» 을 지우지 않고 남긴다는 것.
+//   나중에 아이가 스스로 «고쳐 쓴 생각» 을 적으면 fixed 가 되고, 그때 별빛 셀이 나온다.
+db.exec(`CREATE TABLE IF NOT EXISTS thought_shards(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  chapter INTEGER NOT NULL DEFAULT 1,
+  topic TEXT,
+  stuck TEXT NOT NULL,
+  guess TEXT NOT NULL,
+  revised TEXT,
+  prompt_key TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  cell_reward INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','+9 hours')),
+  fixed_at TEXT
+)`);
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_thought_user ON thought_shards(user_id, id DESC)'); }catch{}
 db.exec(`CREATE TABLE IF NOT EXISTS friend_blocks(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -413,6 +551,52 @@ db.exec(`CREATE TABLE IF NOT EXISTS seasons(
   end_week TEXT NOT NULL,
   reward_cell INTEGER DEFAULT 0
 )`);
+
+// ---- 학습 동행 2.0 (2026-11-04): 능동 넛지 · 기분 · 집중 · 시즌 ----
+//   원칙: 새 LLM 호출 없이 «기존 기록»을 규칙으로 읽어 아이에게 돌려준다.
+//         화면의 DeepSeek 표기는 정적 UI 크레딧이며 생성 로직은 결정론적이다.
+db.exec(`CREATE TABLE IF NOT EXISTS nudges(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  cta TEXT,
+  target TEXT,
+  shown INTEGER NOT NULL DEFAULT 0,
+  clicked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_id, day)
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS mood_logs(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  mood TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_id, day)
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS focus_sessions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  minutes INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  finished_at TEXT,
+  reward INTEGER NOT NULL DEFAULT 0,
+  done INTEGER NOT NULL DEFAULT 0
+)`);
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_focus_user ON focus_sessions(user_id, day)'); }catch(e){}
+db.exec(`CREATE TABLE IF NOT EXISTS season_claims(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  week TEXT NOT NULL,
+  reward INTEGER NOT NULL DEFAULT 0,
+  claimed_at TEXT DEFAULT (datetime('now','+9 hours')),
+  UNIQUE(user_id, week)
+)`);
+// ★ 대화의 «다음 질문»을 남겨 두면 다음 접속에 루미가 먼저 말을 이어간다.
+try{ db.exec('ALTER TABLE chat_messages ADD COLUMN follow_up TEXT'); }catch(e){}
 
 // 지식 카드 시드(운영자가 추가/수정 가능). quiz 는 정답을 서버에만 둔다.
 // ★ 2026-10-28: 8 → 16장. 기존 DB에도 없는 카드만 추가(멱등).
@@ -689,13 +873,17 @@ const MISSION_POOL_SIZE = 3;
 // ★ V12 주제별 예비 질문 — LLM 이 실패해도 '이번 주 주제'와 이어지게 한다.
 //   (예전 예비 질문은 주제와 무관한 일상 질문이라, 실패 시 연결이 끊겼다)
 const TOPIC_PRESETS = [
-  ['이번 주 새로 알게 된 것이 있니?', '오늘 배운 걸 친구에게 알려준다면 뭐라고 할래?', '이번 주에 제일 열심히 한 일은 뭐야?'],
+  // v1.34: 저학년도 바로 답할 수 있는 «구체적인 장면» 질문으로 (예전엔 «알려준다면 뭐라고 할래» 처럼 한 번 더 생각해야 했다)
+  ['이번 주에 처음 알게 된 게 있니?', '오늘 학교에서 제일 웃긴 일은 뭐였어?', '이번 주에 제일 신난 일은 뭐야?'],
   ['무언가 고장 났을 때 어떻게 했니?', '오늘 어려운 문제를 어떻게 해결했어?', '다시 도전해 보고 싶은 일이 있니?'],
   ['오늘 모은 것 중에 제일 아끼는 건 뭐야?', '친구에게 나눠준 적이 있니?', '내일 더 모으고 싶은 것은 뭐야?'],
   ['오늘 순서대로 한 일을 말해볼래?', '규칙을 지켜서 좋았던 일이 있니?', '가보고 싶은 곳이 있니?'],
   ['오늘 궁금했던 것은 뭐야?', '로봇에게 물어보고 싶은 게 있니?', '오늘 누구를 도와줬어?'],
 ];
 const presetsForTopic = (topic) => TOPIC_PRESETS[(Math.max(1, topic.chapter) - 1) % TOPIC_PRESETS.length];
+// ★ v1.34 아동 눈높이 — 초등 저학년이 모르는 «어른 세계» 어휘가 섞인 질문은 만들지도, 남기지도 않는다.
+//   (실제 사례: "첫 출근하는 기분을 내 경험에 빗대면 어땠나요?" → 아이가 답할 수 없는 질문)
+const ADULT_WORDS = /(출근|회사|직장|업무|회의|보고서|야근|상사|동료|입사|퇴사|경력|빗대|비유하|프로젝트|매출|실적|인터뷰)/;
 async function ensureQuests(dateStr) {
   const rows = db.prepare('SELECT * FROM daily_quests WHERE quest_date=?').all(dateStr);
   const has = t => rows.some(r=>r.type===t);
@@ -705,17 +893,36 @@ async function ensureQuests(dateStr) {
   if(!has('feed'))   ins.run(dateStr,'feed','로봇에게 간식 주기',10,null);
   if(!has('praise')) ins.run(dateStr,'praise','로봇 칭찬하기',10,null);
   // ★ 오늘의 AI 미션: 풀이 비어 있으면 LLM 1회로 채움, 실패 시 프리셋 질문으로 보강
-  const missions = rows.filter(r=>r.type==='ai_mission');
+  let missions = rows.filter(r=>r.type==='ai_mission');
+  // ★ v1.34: 이미 만들어진 «어른 말투» 질문은 폐기하고 새로 만든다.
+  //   아이가 이미 답한 질문은 기록 보존을 위해 건드리지 않는다.
+  if (missions.length) {
+    const answered = new Set(db.prepare('SELECT DISTINCT quest_id FROM quest_logs').all().map(r=>r.quest_id));
+    //   · 어른 어휘가 섞였거나
+    //   · 주제가 바뀌었는데(예: «신입 사원» → «처음 간 날») 예전 주제로 만들어진 질문
+    const bad = missions.filter(m => !answered.has(m.id) &&
+      (ADULT_WORDS.test(m.title) || (m.topic && m.topic !== topic.topic)));
+    if (bad.length) {
+      const del = db.prepare('DELETE FROM daily_quests WHERE id=?');
+      bad.forEach(m => del.run(m.id));
+      missions = missions.filter(m => !bad.includes(m));
+    }
+  }
   if(missions.length < MISSION_POOL_SIZE){
     const need = MISSION_POOL_SIZE - missions.length;
     // ★ V12: 이번 주 주제(세계관/수업)를 프롬프트에 넣는다.
     //   "오늘 뭐 했어?" 같은 일반 질문 → "이번 주 배운 것과 연결된" 질문으로 바뀐다.
-    const MP = `DOROBUS의 로봇이 초등 고학년~중학생 아이에게 오늘 묻고 싶은 질문 ${MISSION_POOL_SIZE}개를 만들어라.
+    const MP = `너는 초등학교 저학년(7~10살) 아이와 이야기하는 다정한 로봇이다. 오늘 아이에게 물어보고 싶은 질문 ${MISSION_POOL_SIZE}개를 만들어라.
 이번 주 주제: "${topic.topic}" (도로랜드 CH.${topic.chapter}${topic.keywords ? ', ' + topic.keywords : ''})
-아이가 이번 주에 배운 것과 자기 경험을 연결해서 답할 수 있는 질문으로 만들어라.
-한국어 한 문장씩(각 30자 이내), 줄바꿈으로만 구분해 하나씩 출력하고 설명·번호 없이 질문만. 아이에게 안전하고 건전한 질문만.`;
+[꼭 지킬 것]
+- 아이가 실제로 겪어 봤을 일(학교·친구·놀이·가족·동물·날씨)로 물어라.
+- 회사·출근·직장·업무·회의·보고서 같은 어른 세계 개념은 절대 쓰지 마라.
+- "빗대다", "비유하면", "경험에 빗대면" 같은 어려운 말 대신 쉬운 말로 물어라.
+- 한 문장, 25자 안팎. 예) "오늘 학교에서 제일 웃긴 일은 뭐였어?"
+한국어 한 문장씩 줄바꿈으로만 구분해 출력하고 설명·번호·따옴표 없이 질문만. 아이에게 안전하고 건전한 질문만.`;
     const txt = (await callLLM(MP) || '');
     let qs = txt.split('\n').map(s=>s.trim().replace(/^["'“”]+|["'“”]+$/g,'')).filter(s=>s.length>=8 && s.length<=60);
+    qs = qs.filter(q=>!ADULT_WORDS.test(q));     // ★ v1.34 LLM 이 또 어른 말을 쓰면 버리고 프리셋으로 채운다
     qs = [...new Set(qs)];
     const exist = new Set(missions.map(m=>m.title));
     const preset = presetsForTopic(topic).filter(p=>!exist.has(p));
@@ -730,7 +937,8 @@ function dayKST(offset=0){ return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asi
 // ★ V12 도로랜드 챕터를 주제로 쓴다 — 새 콘텐츠가 세계관과 이어지게 하는 가장 싼 방법.
 //   지정이 없으면 주차에 따라 자동으로 돌아가므로 운영자가 손대지 않아도 매주 질문이 달라진다.
 const DEFAULT_TOPICS = [
-  { chapter:1, topic:'도로랜드 신입 사원', keywords:'첫 출근, 새 친구, 설렘' },
+  // v1.34: «신입 사원 / 첫 출근» 은 아이가 겪어 본 적 없는 어른 세계 → «처음 가 본 날» 로 바꾼다
+  { chapter:1, topic:'도로랜드에 처음 간 날', keywords:'첫 방문, 새 친구, 두근두근' },
   { chapter:2, topic:'멈춘 기계의 노래',   keywords:'고장, 원인 찾기, 고치기' },
   { chapter:3, topic:'별빛 저장고',       keywords:'모으기, 나누기, 약속' },
   { chapter:4, topic:'코딩 숲의 지도',     keywords:'순서, 규칙, 길 찾기' },
@@ -753,6 +961,60 @@ function currentTopic(){
   const weeks = Math.floor(Date.parse(week + 'T00:00:00Z') / 86400000 / 7);
   const t = DEFAULT_TOPICS[Math.abs(weeks) % DEFAULT_TOPICS.length];
   return { week, chapter:t.chapter, topic:t.topic, keywords:t.keywords, source:'auto' };
+}
+
+// ★ v1.39 «자기 생각 × 도로랜드» — 이번 주 챕터에 붙는 «정비사 서사».
+//   기업 세계관(DOROLAND · 셀 · 공작소 · CH.2 «멈춘 기계의 노래»)의 «이름과 구조» 만 빌리고,
+//   이야기 자체는 이 프로젝트가 새로 쓴다. (5 캐릭터 이미지는 쓰지 않는다 — IP 의존을 피한다)
+//   챕터 번호는 DEFAULT_TOPICS / weekly_topics 와 그대로 맞물리므로, 운영자가 주제를 바꾸면 서사도 따라간다.
+const STORY_CHAPTERS = {
+  1: { badge:'새내기 정비사',
+       line:'루미랑 처음 마을에 온 날을 기억해? 모르는 게 잔뜩이어도 괜찮아. 정비사는 먼저 «모르겠다» 를 적는 사람이야.',
+       vow:'오늘은 모르는 걸 숨기지 않을래' },
+  2: { badge:'고침 정비사',
+       line:'멈춘 기계는 버리는 게 아니라 왜 멈췄는지 찾아서 고쳐. 생각도 똑같아. 지우지 말고 고쳐 쓰면 돼.',
+       vow:'멈춘 생각도 버리지 않고 열어 볼래' },
+  3: { badge:'별빛 정비사',
+       line:'고쳐 쓴 생각 하나가 별빛 하나가 되어 저장고에 쌓여. 네가 고친 만큼 마을이 밝아져.',
+       vow:'내가 고친 생각을 별빛으로 남길래' },
+  4: { badge:'길 찾는 정비사',
+       line:'길을 찾으려면 먼저 «여기서 헤맸어» 를 지도에 표시해야 해. 헤맨 자리가 다음 길이 되니까.',
+       vow:'헤맨 자리를 지도에 그려 둘래' },
+  5: { badge:'질문하는 정비사',
+       line:'좋은 질문은 처음엔 엉뚱해도 괜찮아. 고쳐 쓰는 동안 질문이 자라서 진짜 질문이 돼.',
+       vow:'다시 물어보는 걸 부끄러워하지 않을래' }
+};
+// 루미의 성찰 질문 3종 — LLM 에 맡기지 않는다. 아이 생각을 «평가» 하지 않고 «되돌아보게» 만 한다.
+const REFLECT_PROMPTS = [
+  { key:'where',   q:'어디에서 막혔는지 찾아볼래?',        hint:'문제의 어느 부분이 어려웠는지' },
+  { key:'diff',    q:'지금은 뭐가 다르게 보여?',            hint:'처음 생각과 지금 생각의 차이' },
+  { key:'explain', q:'친구에게 뭐라고 설명해 줄래?',        hint:'내 말로 다시 설명해 보기' }
+];
+const THOUGHT_CELL = 6;        // 고쳐 쓴 조각 1개당 별빛 셀
+const THOUGHT_DAILY_CAP = 3;   // 하루에 셀을 받을 수 있는 조각 수 (4번째부터는 0셀, 그래도 불은 켜진다)
+const THOUGHT_NEW_CAP = 6;     // 하루에 새로 적을 수 있는 조각 수
+const VAULT_LIGHTS = 8;        // 별빛 저장고 등의 개수
+
+// 이번 주 챕터 서사 + 아이의 조각 통계 (한 곳에서 계산해 API/UI/3D 가 같은 숫자를 본다)
+function thoughtStats(uid){
+  const d = today();
+  const rows = db.prepare('SELECT status, cell_reward, fixed_at FROM thought_shards WHERE user_id=?').all(uid);
+  const fixed = rows.filter(r => r.status === 'fixed').length;
+  const todayFixed = rows.filter(r => r.status === 'fixed' && String(r.fixed_at || '').slice(0, 10) === d).length;
+  const todayNew = db.prepare('SELECT COUNT(*) AS c FROM thought_shards WHERE user_id=? AND day=?').get(uid, d).c;
+  return {
+    total: rows.length,
+    open: rows.length - fixed,
+    fixed,
+    starCell: rows.reduce((s, r) => s + (r.cell_reward || 0), 0),
+    todayFixed,
+    todayNew,
+    lit: Math.min(VAULT_LIGHTS, fixed),
+    lights: VAULT_LIGHTS,
+    cell: THOUGHT_CELL,
+    dailyCap: THOUGHT_DAILY_CAP,
+    newCap: THOUGHT_NEW_CAP
+  };
 }
 
 // ★ V11 요일(0=일 … 6=토, KST) — 주말 한정 아이템 판정용
@@ -1036,14 +1298,15 @@ app.post('/api/demo/seed', (req,res)=>{
   // 1) 데모 계정의 모든 학습/게임/친구 데이터를 먼저 비운다(멱등).
   const wipe = ['robots','inventory','cell_tx','quest_logs','interact_logs','game_logs','visits',
     'mailbox','learning_help_logs','chat_messages','learning_plans','weekly_goals','learner_profile',
-    'user_memories','goal_claims','review_cards','world_lessons','llm_logs','workshop_logs','class_logs'];
+    'user_memories','goal_claims','review_cards','world_lessons','village_props','guestbook','treasure_claims','llm_logs','workshop_logs','class_logs',
+    'nudges','mood_logs','focus_sessions','season_claims'];
   for(const t of wipe){ try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(did); }catch(e){} }
   try{ db.prepare('DELETE FROM friendships WHERE user_a=? OR user_b=?').run(did,did); }catch(e){}
   try{ db.prepare('DELETE FROM friend_messages WHERE from_user=? OR to_user=?').run(did,did); }catch(e){}
   try{ db.prepare('DELETE FROM cheers WHERE from_user=? OR to_user=?').run(did,did); }catch(e){}
 
   const token = crypto.randomUUID();
-  // 2) 성장 수치 + 학습 偏好
+  // 2) 성장 수치 + 학습 선호
   db.prepare(`UPDATE users SET token=?, cell_balance=320, level=5, exp=210, streak=6, last_visit=?,
     parent_ok=1, play_minutes=22, play_bonus=40, understanding=18 WHERE id=?`)
     .run(token, today(), did);
@@ -1076,6 +1339,51 @@ app.post('/api/demo/seed', (req,res)=>{
         .run(did, rc.id, rc.topic, qz.q || '틀린 문제', JSON.stringify(qz.options||[]), Number(qz.answer)||0, today());
     }
   }catch(e){ console.warn('[demo/seed] review_cards:', e.message); }
+
+  // ★ 2026-11-03: 지혜의 샘 4문제를 이미 푼 상태 → 마을에 나무 4그루 + 도감 4/16
+  try{
+    const cards = db.prepare("SELECT id FROM knowledge_cards WHERE quiz IS NOT NULL AND quiz<>'' ORDER BY id LIMIT 6").all();
+    const yday = dayKST(-1), yday2 = dayKST(-2);
+    const plan = [
+      [today(), 0, cards[0]],
+      [today(), 1, cards[1]],
+      [yday, 0, cards[2]],
+      [yday, 1, cards[3]]
+    ].filter(x => x[2]);
+    plan.forEach(([d, st, c]) => {
+      try{
+        db.prepare('INSERT OR IGNORE INTO world_lessons(user_id,day,station,card_id,solved) VALUES(?,?,?,?,1)')
+          .run(did, d, st, c.id);
+      }catch(e){}
+    });
+    if (plan.length >= 4) {
+      try{ db.prepare('INSERT OR IGNORE INTO world_lessons(user_id,day,station,card_id,solved) VALUES(?,?,?,?,1)')
+        .run(did, yday2, 0, cards[4] ? cards[4].id : cards[0].id); }catch(e){}
+    }
+  }catch(e){ console.warn('[demo/seed] world_lessons:', e.message); }
+
+  // ★ 2026-11-04 학습 동행 2.0 데모 데이터 — 6개 기능이 첫 화면에서 바로 보이게
+  try{
+    const y1 = dayKST(-1), y2 = dayKST(-2);
+    // ★ 오늘 기분은 비워 둔다 → 첫 화면에서 «오늘 기분은 어때?» 카드가 떠서
+    //   아이가 직접 고르고, 그 결과가 채팅 말투·방 조명에 반영되는 흐름을 시연할 수 있다.
+    db.prepare('INSERT OR IGNORE INTO mood_logs(user_id,day,mood) VALUES(?,?,?)').run(did, y1, 'ok');
+    db.prepare('INSERT OR IGNORE INTO mood_logs(user_id,day,mood) VALUES(?,?,?)').run(did, y2, 'low');
+    const f1 = new Date(Date.now()-3600000).toISOString(), f2 = new Date(Date.now()-90000000).toISOString();
+    db.prepare('INSERT INTO focus_sessions(user_id,day,minutes,started_at,finished_at,reward,done) VALUES(?,?,?,?,?,?,1)')
+      .run(did, today(), 10, f1, new Date().toISOString(), 8);
+    db.prepare('INSERT INTO focus_sessions(user_id,day,minutes,started_at,finished_at,reward,done) VALUES(?,?,?,?,?,?,1)')
+      .run(did, y1, 15, f2, f2, 10);
+    // 지난주 시즌 보상은 이미 수령 → 이번 주 진행판이 깨끗하게 열린다
+    db.prepare('INSERT OR IGNORE INTO season_claims(user_id,week,reward) VALUES(?,?,?)').run(did, weekKeyOffset(1), 30);
+    // 이번 주 복습 1장 완료 → 시즌 미션 진행도가 보인다
+    const c2 = db.prepare('SELECT * FROM knowledge_cards ORDER BY id DESC LIMIT 1').get();
+    if(c2){
+      let qz2 = {}; try{ qz2 = JSON.parse(c2.quiz||'{}'); }catch(e){}
+      db.prepare('INSERT OR IGNORE INTO review_cards(user_id,card_id,topic,question,options_json,answer,wrong_count,due_date,done) VALUES(?,?,?,?,?,?,1,?,1)')
+        .run(did, c2.id, c2.topic, qz2.q||'복습 문제', JSON.stringify(qz2.options||[]), Number(qz2.answer)||0, today());
+    }
+  }catch(e){ console.warn('[demo/seed] companion:', e.message); }
 
   // 3) 로봇 + 보유 부품/장식
   const pal = { body:'#5cc9a7', head:'#a8e6d0', antenna:'#ff9f43', arms:'#3d9e80', legs:'#2a7a63' };
@@ -1165,6 +1473,11 @@ app.post('/api/demo/seed', (req,res)=>{
     db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(fids[0], did, '나 두더지 300점 넘었어!');
     db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(fids[1], did, '이번 주 목표 같이 달성하자!');
   }catch(e){ console.warn('[demo/seed] friend_messages:', e.message); }
+  // ★ 2026-11-04: 이번 주 '친구 응원 1번'도 채워 시즌 보상 수령까지 시연 가능하게
+  try{
+    db.prepare('INSERT OR IGNORE INTO cheers(from_user,to_user,day) VALUES(?,?,?)')
+      .run(did, fids[0], today());
+  }catch(e){ console.warn('[demo/seed] cheers:', e.message); }
 
   // 10) 우편함: 수령 대기 선물 + 공지 + 친구 응원
   db.prepare('DELETE FROM mailbox WHERE user_id=?').run(did);
@@ -1172,7 +1485,7 @@ app.post('/api/demo/seed', (req,res)=>{
     body:'퍼즐 2번, 혼자 풀기 3개 — 진짜 해냈어! 80셀 선물이야.' });
   sendMail(did, { title:'이번 주 이야기', cell:0, tag:'demo-notice',
     body:`이번 주는 "${topic.topic}" 이야기예요. 궁금한 게 있으면 루미에게 물어봐!` });
-  sendMail(did, { title:'민지가 응원했어요!', cell:0, tag:'demo-cheer',
+  sendMail(did, { title:'민지가 응원했어요!', cell:0, tag:'friend:cheer:demo',
     body:'민지: 오늘도 화이팅! 같이 퍼즐 풀자.' });
 
   // 11) 셀 거래 내역
@@ -1202,7 +1515,8 @@ app.post('/api/user/delete', (req,res)=>{
   const uid = u.id;
   const wipe = ['robots','inventory','cell_tx','quest_logs','interact_logs','game_logs','visits',
     'mailbox','learning_help_logs','chat_messages','learning_plans','weekly_goals','learner_profile',
-    'user_memories','goal_claims','review_cards','world_lessons','llm_logs','workshop_logs','class_logs'];
+    'user_memories','goal_claims','review_cards','world_lessons','village_props','guestbook','treasure_claims','llm_logs','workshop_logs','class_logs',
+    'nudges','mood_logs','focus_sessions','season_claims'];
   for(const t of wipe){ try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(uid); }catch(e){} }
   try{ db.prepare('DELETE FROM friendships WHERE user_a=? OR user_b=?').run(uid,uid); }catch(e){}
   try{ db.prepare('DELETE FROM friend_messages WHERE from_user=? OR to_user=?').run(uid,uid); }catch(e){}
@@ -1630,8 +1944,10 @@ app.post('/api/game/result', (req,res)=>{
   if (kind === 'shooter'){
     const score = Math.max(0, Math.min(99999, Number(req.body.score)||0));
     if (score < 50) return res.status(400).json({error:'조금 더 도전해 볼래?'});
-    const reward = score >= 5000 ? 110 : score >= 3000 ? 80 : score >= 1800 ? 50
-                 : score >= 1000 ? 30 : score >= 500 ? 20 : 10;
+    // v1.37: 보스 무한 재소환을 막았으므로 «5000점» 기준은 도달 불가 → 구간을 다시 잡았다.
+    //   500/1200/2000/2800/3500 → 20/30/50/80/110 (설계 §5-3)
+    const reward = score >= 3500 ? 110 : score >= 2800 ? 80 : score >= 2000 ? 50
+                 : score >= 1200 ? 30 : score >= 500 ? 20 : 10;
     return grantGameReward(u, 'shooter', reward, '버그 슈터', { score, res });
   }
   // ★ 2026-10-28: 버그 두더지 — 30초 안에 버그를 잡는 다른 장르. 점수 기반 보상.
@@ -1641,6 +1957,18 @@ app.post('/api/game/result', (req,res)=>{
     const reward = score >= 800 ? 80 : score >= 500 ? 50 : score >= 300 ? 30
                  : score >= 150 ? 20 : 10;
     return grantGameReward(u, 'mole', reward, '버그 두더지', { score, res });
+  }
+  // ★ v1.41 «고장 탐정 · 미리 고치기» — 관찰·진단·복구 게임.
+  //   교수 피드백 «미니게임이 전부 유명한 장르» 에 대한 응답으로 만든 자체 장르다.
+  //   핵심: 오답은 감점이 아니라 «제외» 이며, 첫 판단에만 보너스를 준다.
+  if (kind === 'repair'){
+    const score = Math.max(0, Math.min(9999, Number(req.body.score)||0));
+    if (score < 100) return res.status(400).json({error:'조금 더 도전해 볼래?'});
+    // 7개 고장(+120) + 첫 판단(+60) + 3대 복구(+100) + 남은 시간(×4) → 이론 ≈1,870점.
+    //   그래서 «1,500점 만점» 으로 두면 거의 모든 판이 120셀이 된다. 구간을 실제 분포에 맞춘다.
+    const reward = score >= 1750 ? 120 : score >= 1450 ? 90 : score >= 1150 ? 60
+                 : score >= 800 ? 40 : score >= 400 ? 20 : 10;
+    return grantGameReward(u, 'repair', reward, '고장 탐정', { score, res });
   }
   res.status(400).json({error:'알 수 없는 게임이야'});
 });
@@ -1726,8 +2054,9 @@ function sendMail(uid, { title, body, cell, itemId, tag }){
 app.get('/api/mailbox', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
-  const rows = db.prepare('SELECT id,title,body,cell,item_id,claimed,ts FROM mailbox WHERE user_id=? ORDER BY id DESC LIMIT 50').all(u.id);
-  const unread = rows.filter(r=>!r.claimed && (r.cell>0 || r.item_id)).length;
+  const rows = db.prepare('SELECT id,title,body,cell,item_id,claimed,ts,tag FROM mailbox WHERE user_id=? ORDER BY id DESC LIMIT 50').all(u.id);
+  // ★ 2026-11-04: 친구 알림(셀 없는 편지)도 미확인 배지에 잡힌다 → 재방문 이유가 된다.
+  const unread = rows.filter(r=>!r.claimed && (r.cell>0 || r.item_id || String(r.tag||'').startsWith('friend:'))).length;
   res.json({
     unread,
     mails: rows.map(r=>({
@@ -1899,7 +2228,8 @@ app.post('/api/workshop/ask', async (req,res)=>{
   if(asked >= 5) return res.status(429).json({error:'오늘은 로봇이 많이 바빠요. 내일 또 물어봐요!'});
   try{ db.prepare('INSERT INTO workshop_logs(user_id,day,kind) VALUES(?,?,?)').run(u.id, d, 'ask'+asked); }catch(e){}
   const topic = currentTopic();
-  const AP = `너는 DOROBUS의 로봇 "${robot?robot.name:'루미'}"(성격: ${robot?robot.personality:'반짝이'})다. 초등 고학년 아이가 물었다: "${q}". 이번 주 주제는 "${topic.topic}"(CH.${topic.chapter})다. 아이가 이해할 수 있는 한국어 두 문장으로만 답해라. 인사·설명·이모지 없이 답만.`;
+  // v1.34: 대상 연령을 «초등 아이» 로 낮추고 «쉬운 말» 을 명시한다(어른 말투 방지).
+  const AP = `너는 DOROBUS의 로봇 "${robot?robot.name:'루미'}"(성격: ${robot?robot.personality:'반짝이'})다. 초등학교 아이가 물었다: "${q}". 이번 주 주제는 "${topic.topic}"(CH.${topic.chapter})다. 아이가 바로 알아듣는 쉬운 한국어 두 문장으로만 답해라. 인사·설명·이모지 없이 답만.`;
   const raw = await callLLM(AP) || '';
   const safe = sanitizeLine(raw, 140);
   if(safe) return res.json({ ok:true, answer:safe, ai:true, left: Math.max(0, 4-asked) });
@@ -2039,7 +2369,7 @@ app.get('/api/admin/export.csv', (req,res)=>{
 });
 
 // ★ V12 운영자가 이번 주(또는 다음 주) 주제를 직접 넣는다.
-//   평가기준 ①「운영자가 문제·보상·내용을 추가/수정할 수 있는가」에 대한 실제 구현.
+//   평가기준 1) '운영자가 문제·보상·내용을 추가/수정할 수 있는가' 에 대한 실제 구현.
 //   예) curl -X POST -H "X-Admin-Key: <키>" -H "Content-Type: application/json" \
 //        -d '{"topic":"우리 동네 AI","keywords":"생활, 도움"}' /api/admin/topic
 app.post('/api/admin/topic', (req,res)=>{
@@ -2376,7 +2706,7 @@ async function generatePlan(u, force){
   const memTextPlan = memoryPrompt(retrieveMemories(u.id, topic.topic, 8));
   let steps = planFallback(u, profile), source = 'fallback';
   try{
-    const prompt = `너는 초등 고학년 학습 코치 '루미'다. 아래 학습자 데이터를 보고 오늘의 3단계 학습 계획을 만들어라.
+    const prompt = `너는 초등 저학년도 알아듣는 학습 코치 '루미'다. 아래 학습자 데이터를 보고 오늘의 3단계 학습 계획을 만들어라.
 - 이번 주 주제: ${topic.topic} (CH.${topic.chapter})
 - 레벨: ${u.level||1}, 이해도: ${profile.understanding||0}
 - 최근 스스로 해결한 개념: ${solvedText}
@@ -2447,7 +2777,7 @@ app.post('/api/plan/step', (req,res)=>{
              balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
 });
 
-// ---- 학습 偏好 + 주간 목표 (2026-10-28) ----
+// ---- 학습 선호 + 주간 목표 (2026-10-28) ----
 const PREF_TIMES = new Set(['morning','afternoon','evening']);
 const PREF_DIFFS = new Set(['easy','normal','hard']);
 app.get('/api/prefs', (req,res)=>{
@@ -2470,7 +2800,7 @@ app.post('/api/prefs', (req,res)=>{
   profileFor(u.id);
   db.prepare('UPDATE learner_profile SET pref_minutes=?, pref_time=?, pref_subjects=?, pref_difficulty=? WHERE user_id=?')
     .run(minutes, time, subjects, difficulty, u.id);
-  // 偏好가 바뀌면 오늘 계획과 이번 주 목표는 새로 짜게 한다.
+  // 선호가 바뀌면 오늘 계획과 이번 주 목표는 새로 짜게 한다.
   db.prepare('DELETE FROM learning_plans WHERE user_id=? AND day=?').run(u.id, today());
   db.prepare('DELETE FROM weekly_goals WHERE user_id=? AND week_start=?').run(u.id, weekStartKST());
   res.json({ ok:true, minutes, time, subjects:subjects.split(',').filter(Boolean), difficulty });
@@ -2506,7 +2836,7 @@ async function generateGoals(u, profile){
   let goals = goalFallback(profile), source = 'auto';
   try{
     const memTextGoal = memoryPrompt(retrieveMemories(u.id, '주간 목표', 8));
-    const prompt = `너는 초등 고학년 학습 코치 '루미'다. 이번 주 3개 목표를 JSON으로만 만들어라.
+    const prompt = `너는 초등 저학년도 알아듣는 학습 코치 '루미'다. 이번 주 3개 목표를 JSON으로만 만들어라.
 - 레벨: ${u.level||1}, 이해도: ${profile.understanding||0}
 - 하루 학습 시간: ${profile.pref_minutes||10}분
 - 관심 주제: ${profile.pref_subjects||'(없음)'}
@@ -2619,6 +2949,193 @@ function friendshipBetween(a,b){
 }
 function parsePalette(p){ try{ return p ? JSON.parse(p) : {}; }catch(e){ return {}; } }
 
+// ★ v1.37 대세계 «의뢰» — 세계를 미니게임의 «이유» 로 만든다.
+//   조건은 기존 보상 기준과 맞춰 «따로 연습하지 않아도» 도전할 수 있게 잡았다.
+//   보상은 15셀(설계 §9: 20 → 15, 하루 수입 330 → 375로 억제).
+const WORLD_QUESTS = [
+  { key:'well', prop:'well',      kind:'mole',    label:'우물',
+    cond:{ score:300 },              text:'우물이 버그로 막혔어. 두더지 300점을 넘겨 봐!' },
+  { key:'mill', prop:'mill',      kind:'shooter', label:'풍차',
+    cond:{ score:800, lives:1 },     text:'풍차 날개가 멈췄어. 목숨 1개 이상 남기고 800점!' },
+  { key:'bell', prop:'belltower', kind:'puzzle',  label:'종탑',
+    cond:{ firstTry:3 },             text:'종탑이 잠들었어. 퍼즐 3문제를 한 번에 맞혀 봐!' }
+];
+const WORLD_QUEST_REWARD = 15;
+
+function worldQuestState(uid, day){
+  const rows = db.prepare('SELECT quest,done,reward FROM world_quests WHERE user_id=? AND day=?').all(uid, day);
+  const done = new Set(rows.filter(r=>r.done && r.quest !== '__skip__').map(r=>r.quest));
+  const skipReady = rows.some(r=>r.quest === '__skip__');
+  const stars = db.prepare('SELECT COUNT(*) c FROM world_stars WHERE user_id=? AND day=?').get(uid, day).c;
+  return { done, skipReady, stars };
+}
+
+app.get('/api/world/quest', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const day = today();
+  const st = worldQuestState(u.id, day);
+  res.json({ ok:true, day, reward: WORLD_QUEST_REWARD, skipReady: st.skipReady, stars: st.stars,
+    quests: WORLD_QUESTS.map(q=>({ key:q.key, prop:q.prop, kind:q.kind, label:q.label,
+      text:q.text, cond:q.cond, done: st.done.has(q.key) })) });
+});
+
+app.post('/api/world/quest/claim', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const key = String(b.quest || '');
+  const def = WORLD_QUESTS.find(q=>q.key === key);
+  if(!def) return res.status(400).json({error:'그런 의뢰는 없어요'});
+  const day = today();
+  const already = db.prepare('SELECT done FROM world_quests WHERE user_id=? AND day=? AND quest=?').get(u.id, day, key);
+  if(already && already.done){
+    return res.json({ ok:true, already:true, reward:0,
+      balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+  }
+  // 조건 판정 (신뢰 수준은 기존 /api/game/result 와 동일 — §3-3)
+  const score = Number(b.score) || 0;
+  const lives = Number(b.lives) || 0;
+  const firstTry = Number(b.firstTry) || 0;
+  const need = [];
+  if(def.cond.score && score < def.cond.score) need.push('score>=' + def.cond.score);
+  if(def.cond.lives && lives < def.cond.lives) need.push('lives>=' + def.cond.lives);
+  if(def.cond.firstTry && firstTry < def.cond.firstTry) need.push('firstTry>=' + def.cond.firstTry);
+  if(need.length) return res.json({ ok:false, need: need.join(' & ') });
+
+  try{
+    db.prepare(`INSERT INTO world_quests(user_id,day,quest,done,reward) VALUES(?,?,?,1,?)
+      ON CONFLICT(user_id,day,quest) DO UPDATE SET done=1, reward=excluded.reward`)
+      .run(u.id, day, key, WORLD_QUEST_REWARD);
+  }catch(e){ }
+  grantCell(u.id, WORLD_QUEST_REWARD, 'world_quest');
+  // 영구 흔적 — 다음 날에도 «고쳐진 우물» 이 그대로다 (P2)
+  try{ db.prepare('INSERT OR IGNORE INTO village_props(user_id, prop_key) VALUES(?,?)')
+    .run(u.id, 'relic_' + key); }catch(e){ }
+  res.json({ ok:true, reward: WORLD_QUEST_REWARD, relic:'relic_' + key,
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+});
+
+app.post('/api/world/quest/skip', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const day = today();
+  const has = db.prepare("SELECT 1 FROM world_quests WHERE user_id=? AND day=? AND quest='__skip__'").get(u.id, day);
+  if(!has) return res.json({ ok:false, need:'skip' });
+  const key = String((req.body||{}).quest || '');
+  const def = WORLD_QUESTS.find(q=>q.key === key);
+  if(!def) return res.status(400).json({error:'그런 의뢰는 없어요'});
+  // 소모 = DELETE (하루 1장, 재사용 불가)
+  db.prepare("DELETE FROM world_quests WHERE user_id=? AND day=? AND quest='__skip__'").run(u.id, day);
+  db.prepare(`INSERT INTO world_quests(user_id,day,quest,done,reward) VALUES(?,?,?,1,0)
+    ON CONFLICT(user_id,day,quest) DO UPDATE SET done=1, reward=0`).run(u.id, day, key);
+  try{ db.prepare('INSERT OR IGNORE INTO village_props(user_id, prop_key) VALUES(?,?)')
+    .run(u.id, 'relic_' + key); }catch(e){ }
+  res.json({ ok:true, reward:0, relic:'relic_' + key,
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+});
+
+app.post('/api/world/star', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const star = Number((req.body||{}).star);
+  if(!(star >= 0 && star <= 2)) return res.status(400).json({error:'별 번호가 이상해요'});
+  const day = today();
+  const exists = db.prepare('SELECT 1 FROM world_stars WHERE user_id=? AND day=? AND star=?').get(u.id, day, star);
+  if(!exists){
+    try{ db.prepare('INSERT INTO world_stars(user_id,day,star) VALUES(?,?,?)').run(u.id, day, star); }catch(e){ }
+  }
+  const count = db.prepare('SELECT COUNT(*) c FROM world_stars WHERE user_id=? AND day=?').get(u.id, day).c;
+  if(count >= 3){
+    try{ db.prepare("INSERT OR IGNORE INTO world_quests(user_id,day,quest,done,reward) VALUES(?,?,'__skip__',0,0)").run(u.id, day); }catch(e){ }
+  }
+  res.json({ ok:true, already: !!exists, count, skipReady: count >= 3 });
+});
+
+// ★ v1.38 이스터에그 «마을 끝의 낡은 이정표».
+//   조건도 알림도 없다. 길이 끊기는 자리에 서 있을 뿐이고, 걸어온 아이만 읽는다.
+//   처음 읽은 계정에만 20셀 — «발견» 자체를 기억에 남기기 위한 최소한의 보상.
+const WORLD_SECRETS = {
+  maker: { reward: 20 }
+};
+app.post('/api/world/secret', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const key = String((req.body||{}).key || '');
+  const def = WORLD_SECRETS[key];
+  if(!def) return res.status(400).json({error:'그런 글은 없어요'});
+  const already = db.prepare('SELECT 1 FROM world_secrets WHERE user_id=? AND key=?').get(u.id, key);
+  if(already){
+    return res.json({ ok:true, first:false, reward:0,
+      balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+  }
+  try{ db.prepare('INSERT INTO world_secrets(user_id,key) VALUES(?,?)').run(u.id, key); }catch(e){ }
+  grantCell(u.id, def.reward, 'world_secret');
+  res.json({ ok:true, first:true, reward:def.reward,
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+});
+
+// ★ v1.35 AI 마을 «같이 놀기» — 친구가 같은 마을에 있으면 서로 보인다.
+//   실시간 소켓 대신 1.6초 폴링 + 45초 TTL. 아이들 놀이엔 충분하고 배포가 단순하다.
+//   위치는 «서로 친구(accepted)» 인 사람에게만 돌려준다 — 모르는 사람에게 좌표를 노출하지 않는다.
+const PRESENCE_TTL = 45;
+function presenceNow(){ return Math.floor(Date.now() / 1000); }
+
+// 위치 보고와 «지금 마을에 있는 친구» 조회를 한 번에(왕복 1회).
+app.post('/api/world/presence', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const x = Math.max(-140, Math.min(140, Number(b.x) || 0));
+  const z = Math.max(-140, Math.min(140, Number(b.z) || 0));
+  const ry = Math.max(-7, Math.min(7, Number(b.ry) || 0));
+  const anim = String(b.anim || 'Idle').replace(/[^A-Za-z]/g, '').slice(0, 10) || 'Idle';
+  const now = presenceNow();
+  db.prepare(`INSERT INTO world_presence(user_id,x,z,ry,anim,ts) VALUES(?,?,?,?,?,?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      x=excluded.x, z=excluded.z, ry=excluded.ry, anim=excluded.anim, ts=excluded.ts`)
+    .run(u.id, x, z, ry, anim, now);
+  const rows = db.prepare(`SELECT p.user_id, p.x, p.z, p.ry, p.anim,
+      u.nickname, u.level, r.template, r.palette
+    FROM world_presence p
+    JOIN friendships f ON f.status='accepted' AND
+      ((f.user_a=? AND f.user_b=p.user_id) OR (f.user_b=? AND f.user_a=p.user_id))
+    JOIN users u ON u.id=p.user_id
+    LEFT JOIN robots r ON r.user_id=p.user_id
+    WHERE p.ts > ?
+    ORDER BY u.nickname`).all(u.id, u.id, now - PRESENCE_TTL);
+  res.json({ ok:true, ttl:PRESENCE_TTL,
+    peers: rows.map(r=>({ uid:r.user_id, nickname:r.nickname, level:r.level||1,
+      x:r.x, z:r.z, ry:r.ry, anim:r.anim,
+      robot:{ template:r.template||'doro', palette:parsePalette(r.palette) } })) });
+});
+
+app.post('/api/world/leave', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  db.prepare('DELETE FROM world_presence WHERE user_id=?').run(u.id);
+  res.json({ ok:true });
+});
+
+// 친구에게 «손 흔들기» — 대화 기록(friend_messages)에 남겨 친구 시스템과 실제로 이어진다.
+app.post('/api/world/wave', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const to = Number((req.body || {}).to || 0);
+  if(!to || to === u.id) return res.status(400).json({error:'누구에게 인사할까요?'});
+  const isFriend = db.prepare(`SELECT 1 FROM friendships WHERE status='accepted' AND
+    ((user_a=? AND user_b=?) OR (user_a=? AND user_b=?))`).get(u.id, to, to, u.id);
+  if(!isFriend) return res.status(403).json({error:'친구에게만 인사할 수 있어요'});
+  // 도배 방지: 같은 친구에게 5분에 한 번
+  const recent = db.prepare(`SELECT 1 FROM friend_messages
+    WHERE from_user=? AND to_user=? AND body LIKE '👋%'
+      AND created_at > datetime('now','+9 hours','-5 minutes')`).get(u.id, to);
+  if(recent) return res.json({ ok:true, throttled:true });
+  db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)')
+    .run(u.id, to, '👋 AI 마을에서 만났어요! 같이 놀아요~');
+  res.json({ ok:true });
+});
+
 app.get('/api/friends', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
@@ -2636,10 +3153,14 @@ app.get('/api/friends', (req,res)=>{
   const unreadMap = Object.fromEntries(unreadRows.map(x=>[x.from_user, x.c]));
   const prof = profileFor(u.id);
   const chatEnabled = !!(prof.friend_chat_enabled === undefined ? 1 : prof.friend_chat_enabled);
+  // ★ v1.35 «지금 마을에 있음» 표시 — 친구 목록과 대세계가 같은 데이터를 본다
+  const onlineIds = new Set(db.prepare('SELECT user_id FROM world_presence WHERE ts > ?')
+    .all(presenceNow() - PRESENCE_TTL).map(r=>r.user_id));
   res.json({ ok:true, code, chatEnabled, requests,
     friends: friends.map(f=>({ id:f.id, friendshipId:f.friendship_id, nickname:f.nickname,
       level:f.level||1, streak:f.streak||0,
       robot:{ template:f.template||'doro', palette:parsePalette(f.palette) },
+      inWorld: onlineIds.has(f.id),
       cheeredToday: cheered.has(f.id), unread: unreadMap[f.id]||0 })) });
 });
 
@@ -2706,7 +3227,7 @@ app.post('/api/friends/cheer', (req,res)=>{
     db.prepare('INSERT INTO cheers(from_user,to_user,day) VALUES(?,?,?)').run(u.id, target, today());
   }catch(e){ return res.status(400).json({error:'오늘은 이미 응원했어요'}); }
   const t = db.prepare('SELECT nickname FROM users WHERE id=?').get(target);
-  sendMail(target, { title:'친구가 응원했어요!', body:`${u.nickname}님이 오늘도 화이팅이라고 응원했어요.`, cell:0, tag:`cheer_${u.id}_${today()}` });
+  sendMail(target, { title:'💌 친구가 응원했어요!', body:`${u.nickname}님이 오늘도 화이팅이라고 응원했어요.`, cell:0, tag:`friend:cheer:${u.id}:${today()}` });
   res.json({ ok:true, nickname: t ? t.nickname : '' });
 });
 
@@ -2777,10 +3298,120 @@ app.post('/api/friends/chat', (req,res)=>{
   const sent = db.prepare("SELECT COUNT(*) c FROM friend_messages WHERE from_user=? AND substr(created_at,1,10)=?").get(u.id, today()).c;
   if(sent >= 30) return res.status(429).json({error:'오늘은 친구에게 30번까지 보낼 수 있어요'});
   const r = db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(u.id, fid, msg);
+  // ★ 새 메시지는 우편함 배지로도 알린다(하루 1건, tag 로 중복 방지)
+  sendMail(fid, { title:'💬 친구에게 새 메시지', body:`${u.nickname}님이 메시지를 보냈어요. 확인해 볼래?`,
+                  cell:0, tag:`friend:chat:${u.id}:${today()}` });
   res.json({ ok:true, id:r.lastInsertRowid });
 });
 
 // ---- 대화: 3 모드 + 최근 6턴 + JSON + 안전 ----
+// ────────────────────────── v1.40 대화 분석 엔진 ──────────────────────────
+//  설계 원칙: 아이의 대화를 «LLM 에 다시 보내 평가» 하지 않는다.
+//  ① 결정적 규칙이라 같은 입력은 항상 같은 결과(재현 가능 · 시험 가능) ② 지연 0 · 비용 0
+//  ③ 원문은 chat_messages, 판정은 chat_analyses 로 분리해 나중에 규칙을 바꿔도 원문이 보존된다.
+const CA_SUBJECT_RULES = [
+  ['수학', /(수학|분수|더하기|빼기|곱하기|나누기|계산|숫자|도형|구구단|소수|통분)/],
+  ['코딩', /(코딩|코드|변수|반복문|조건문|버그|프로그래|알고리즘|명령어|순서)/],
+  ['과학', /(과학|실험|중력|빛|소리|동물|식물|우주|날씨|기계|전기)/],
+  ['언어', /(읽기|문장|영어|한글|단어|쓰기|독서|발표|맞춤법|이야기)/],
+  ['로봇·마을', /(로봇|루미|부품|공작소|마을|미니게임|셀|별빛|의뢰)/]
+];
+const CA_INTENT_RULES = [
+  ['인사', /(안녕|하이|반가|잘 지냈|오랜만|안녕하세요)/],
+  ['힌트 요청', /(힌트|알려\s*줘|도와\s*줘|가르쳐|어떻게 해|정답|답이)/],
+  ['마음 표현', /(기분|좋아|신나|속상|힘들|무서|슬프|화나|재밌|고마워|사랑)/],
+  ['복습', /(다시|또|복습|어제|지난번|아까|전에)/],
+  ['질문', /(\?|뭐|왜|어떻게|언제|누가|어디|무슨)/]
+];
+const CA_STUCK_RE = /(모르겠|어렵|힘들|틀렸|막혔|안\s*돼|이해가\s*안|헷갈|실수|못\s*하겠|포기)/;
+const CA_LOW_RE = /(힘들|어렵|속상|슬프|화나|무서|모르겠|포기|싫|지루)/;
+const CA_BRIGHT_RE = /(좋|신나|재밌|고마워|해냈|알겠|최고|멋져|와우|풀었)/;
+const CA_HINT_RE = /(힌트|생각해|먼저|순서|예를 들어|해 볼래|찾아봐|바꿔\s*봐)/;
+const CA_PRAISE_RE = /(잘했|멋져|훌륭|대단|정확|맞았|칭찬|해냈|대단해)/;
+const CA_KEY_RE = /(수학|분수|더하기|계산|코딩|코드|변수|반복|버그|과학|실험|동물|우주|읽기|영어|로봇|루미|공작소|게임|셀|별빛|친구|문제|힌트|숙제)/g;
+
+function analyzeChatText(msg, reply, mode, opts){
+  const o = opts || {};
+  const m = String(msg || ''), r = String(reply || '');
+  const subject = (CA_SUBJECT_RULES.find(([, re]) => re.test(m)) || [null])[0] || '일상';
+  const intent = (CA_INTENT_RULES.find(([, re]) => re.test(m)) || [null])[0] || '이야기';
+  let sentiment = '보통';
+  if(CA_LOW_RE.test(m)) sentiment = '힘듦';
+  else if(CA_BRIGHT_RE.test(m)) sentiment = '밝음';
+  const keys = [];
+  let mk;
+  CA_KEY_RE.lastIndex = 0;
+  while((mk = CA_KEY_RE.exec(m)) !== null && keys.length < 5){
+    if(!keys.includes(mk[0])) keys.push(mk[0]);
+  }
+  return {
+    topic: o.topic || null,
+    subject, intent, sentiment,
+    stuck: CA_STUCK_RE.test(m) ? 1 : 0,
+    hint_level: o.hintLevel == null ? null : Number(o.hintLevel),
+    solved: o.solved ? 1 : 0,
+    word_count: m.replace(/\s+/g, ' ').trim().length,
+    question_count: (m.match(/\?/g) || []).length,
+    reply_len: r.length,
+    reply_has_hint: CA_HINT_RE.test(r) ? 1 : 0,
+    reply_has_praise: CA_PRAISE_RE.test(r) ? 1 : 0,
+    keywords: keys.join(',')
+  };
+}
+
+// chat_analyses 1행 + chat_reports 재집계. «+1 누적» 이 아니라 현재 분석행을 다시 세므로
+// 재분석(rebuild) 을 몇 번 돌려도 숫자가 불어나지 않는다(멱등).
+function recordChatAnalysis(uid, userMsgId, aiMsgId, msg, reply, mode, opts){
+  const o = opts || {};
+  const day = String(o.day || today()).slice(0, 10);
+  const a = analyzeChatText(msg, reply, mode, o);
+  db.prepare(`INSERT OR IGNORE INTO chat_analyses(
+      user_id,user_msg_id,ai_msg_id,day,mode,topic,subject,intent,sentiment,stuck,
+      hint_level,solved,word_count,question_count,reply_len,reply_has_hint,reply_has_praise,keywords)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(uid, userMsgId, aiMsgId, day, mode || 'chat', a.topic, a.subject, a.intent, a.sentiment,
+      a.stuck, a.hint_level, a.solved, a.word_count, a.question_count, a.reply_len,
+      a.reply_has_hint, a.reply_has_praise, a.keywords);
+  const agg = db.prepare(`SELECT COUNT(*) turns, SUM(word_count) words, SUM(stuck) stuck,
+      SUM(solved) solved, SUM(COALESCE(hint_level,0)) hints
+    FROM chat_analyses WHERE user_id=? AND day=?`).get(uid, day);
+  const topSub = db.prepare(`SELECT subject FROM chat_analyses WHERE user_id=? AND day=?
+      AND subject IS NOT NULL GROUP BY subject ORDER BY COUNT(*) DESC LIMIT 1`).get(uid, day);
+  const topInt = db.prepare(`SELECT intent FROM chat_analyses WHERE user_id=? AND day=?
+      AND intent IS NOT NULL GROUP BY intent ORDER BY COUNT(*) DESC LIMIT 1`).get(uid, day);
+  const mood = db.prepare(`SELECT sentiment FROM chat_analyses WHERE user_id=? AND day=?
+      GROUP BY sentiment ORDER BY COUNT(*) DESC LIMIT 1`).get(uid, day);
+  const turns = agg.turns || 0, stuck = agg.stuck || 0, solved = agg.solved || 0;
+  const summary = `오늘 루미와 ${turns}번 이야기했어요. `
+    + (stuck ? `막힌 순간이 ${stuck}번 있었고, ` : '막힘 없이 ')
+    + (solved ? `${solved}번 스스로 풀었어요.` : '천천히 같이 생각해 봤어요.');
+  db.prepare(`INSERT INTO chat_reports(user_id,day,turns,user_words,stuck_count,solved_count,
+      hint_sum,top_subject,top_intent,mood,summary,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,datetime('now','+9 hours'))
+    ON CONFLICT(user_id,day) DO UPDATE SET
+      turns=excluded.turns, user_words=excluded.user_words, stuck_count=excluded.stuck_count,
+      solved_count=excluded.solved_count, hint_sum=excluded.hint_sum,
+      top_subject=excluded.top_subject, top_intent=excluded.top_intent,
+      mood=excluded.mood, summary=excluded.summary, updated_at=excluded.updated_at`)
+    .run(uid, day, turns, agg.words || 0, stuck, solved, agg.hints || 0,
+      topSub ? topSub.subject : null, topInt ? topInt.intent : null,
+      mood ? mood.sentiment : null, summary);
+  return a;
+}
+
+// 모든 대화는 반드시 이 함수로만 저장한다. «저장했는데 분석이 없다» 는 구멍을 구조적으로 막는다.
+function saveChatTurn(uid, msg, reply, mode, opts){
+  const o = opts || {};
+  const ins = db.prepare('INSERT INTO chat_messages(user_id,role,content,mode,hint_level,follow_up) VALUES(?,?,?,?,?,?)');
+  const hint = o.hintLevel == null ? null : o.hintLevel;
+  const r1 = ins.run(uid, 'user', msg, mode, hint, null);
+  const r2 = ins.run(uid, 'assistant', reply, mode, hint, o.followUp || null);
+  const userMsgId = Number(r1.lastInsertRowid), aiMsgId = Number(r2.lastInsertRowid);
+  try{ recordChatAnalysis(uid, userMsgId, aiMsgId, msg, reply, mode, o); }
+  catch(e){ console.warn('[chat analysis]', e && e.message); }
+  return { userMsgId, aiMsgId };
+}
+
 app.post('/api/chat', async (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
@@ -2801,10 +3432,21 @@ app.post('/api/chat', async (req,res)=>{
     const reply = topic
       ? (removed ? `"${topic}" 기억은 지웠어. 다른 기억은 그대로야.` : `"${topic}" 기억은 없었어.`)
       : '무엇을 잊을까? "BTS 잊어줘"처럼 말해 줘.';
-    db.prepare('INSERT INTO chat_messages(user_id,role,content,mode,hint_level) VALUES(?,?,?,?,?)')
-      .run(u.id, 'user', msg, mode, null);
-    db.prepare('INSERT INTO chat_messages(user_id,role,content,mode,hint_level) VALUES(?,?,?,?,?)')
-      .run(u.id, 'assistant', reply, mode, null);
+    saveChatTurn(u.id, msg, reply, mode, { topic: currentTopic().topic });
+    return res.json({ ok:true, mode, reply, hintLevel:null, followUp:null,
+      left: Math.max(0, limit-used-1), understanding: profileFor(u.id).understanding||0,
+      solved:false, balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+  }
+
+  // ★ v1.38 이스터에그: «누가 만들었어?» 는 LLM 에 맡기지 않고 사실로 답한다.
+  //   아이들이 진짜로 물어보는 질문이라, 여기서만큼은 지어낸 이야기가 나오면 안 된다.
+  //   답 끝에 «마을 끝 이정표» 를 슬쩍 걸어 두어 세계로 한 번 더 걸어가게 만든다.
+  const MAKER_Q = /(누가|누구).{0,8}(만들|만든|개발)|(만든|만들어\s*준)\s*(사람|이)|개발자|제작자|만든\s*이/;
+  if(mode === 'chat' && MAKER_Q.test(msg)){
+    const reply = "나를 만든 사람은 한양대학교에서 인공지능을 공부하는 '이멍멍'이야. "
+      + "아주 오래 고민해서 나를 이 마을에 세웠대. "
+      + "마을 끝에 그 사람이 남긴 낡은 이정표가 숨어 있어.";
+    saveChatTurn(u.id, msg, reply, mode, { topic: currentTopic().topic });
     return res.json({ ok:true, mode, reply, hintLevel:null, followUp:null,
       left: Math.max(0, limit-used-1), understanding: profileFor(u.id).understanding||0,
       solved:false, balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
@@ -2813,6 +3455,11 @@ app.post('/api/chat', async (req,res)=>{
   const robot = db.prepare('SELECT * FROM robots WHERE user_id=? ORDER BY id DESC LIMIT 1').get(u.id);
   const profile = profileFor(u.id);
   const topic = currentTopic();
+  // ★ 2026-11-04: 오늘 기분을 말투에 반영한다(미기록이면 중립).
+  const moodRow = db.prepare('SELECT mood FROM mood_logs WHERE user_id=? AND day=?').get(u.id, day);
+  const moodNote = moodRow && MOODS[moodRow.mood]
+    ? `[아이의 오늘 기분] ${MOODS[moodRow.mood].ko} — 말투는 ${MOODS[moodRow.mood].tone}.`
+    : '';
   // ★ 질문 키워드 우선 → 없으면 이번 주 챕터 → 그래도 없으면 랜덤.
   //   (예전엔 챕터만 봐서 "변수가 뭐야?"에 AI 추천 카드가 들어가는 문제가 있었다)
   const cards = mode === 'learn'
@@ -2836,8 +3483,9 @@ app.post('/api/chat', async (req,res)=>{
   const memText = memoryPrompt(mems);
 
   const system = `너는 DOROBUS의 로봇 "${robot?robot.name:'루미'}"(성격: ${robot?robot.personality:'반짝이'})다.
-대상: 초등 고학년(10-13세). 짧고 쉬운 한국어, 한 번에 2-4문장.
+대상: 초등 저학년~고학년(7-11세). 아주 쉬운 한국어, 한 번에 2-3문장.
 이번 주 주제: "${topic.topic}"(CH.${topic.chapter}). 학습자 Lv.${u.level||1}, understanding ${profile.understanding||0}.
+${moodNote}
 [모드=${mode}] ${CHAT_MODE_RULES[mode]}
 [지식 카드]
 ${cardText}
@@ -2896,10 +3544,10 @@ ${memText}
     else if((hintLevel||1) >= 2 && focusCard) addWeakTopic(u.id, focusCard.topic);
   }
 
-  db.prepare('INSERT INTO chat_messages(user_id,role,content,mode,hint_level) VALUES(?,?,?,?,?)')
-    .run(u.id, 'user', msg, mode, hintLevel);
-  db.prepare('INSERT INTO chat_messages(user_id,role,content,mode,hint_level) VALUES(?,?,?,?,?)')
-    .run(u.id, 'assistant', reply, mode, hintLevel);
+  saveChatTurn(u.id, msg, reply, mode, {
+    hintLevel, followUp, solved: solvedNow,
+    topic: focusCard ? focusCard.topic : topic.topic
+  });
 
   const p2 = profileFor(u.id);
   const remembered = extractMemoryRules(u.id, msg, reply);
@@ -2922,9 +3570,91 @@ app.get('/api/chat/history', (req,res)=>{
   res.json({ ok:true, messages: rows });
 });
 
+// ───────── v1.40 대화 분석 API — 저장된 대화를 «읽어» 리포트를 만든다 ─────────
+//  모든 쿼리는 user_id 로 스코프를 좁힌다(다른 아이의 대화/분석은 절대 조회되지 않는다).
+app.get('/api/chat/analysis', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const d = today();
+  const todayRow = db.prepare('SELECT * FROM chat_reports WHERE user_id=? AND day=?').get(u.id, d) || null;
+  const week = db.prepare(`SELECT day,turns,user_words,stuck_count,solved_count,top_subject,mood,summary
+    FROM chat_reports WHERE user_id=? AND day>=? ORDER BY day`).all(u.id, dayKST(-6));
+  // v_chat_subject 뷰 — 집계 테이블을 또 만들지 않고 SQL 뷰로 최신 값을 읽는다
+  const subjects = db.prepare(`SELECT subject,turns,stuck_count,solved_count,avg_words
+    FROM v_chat_subject WHERE user_id=? ORDER BY turns DESC`).all(u.id);
+  const intents = db.prepare(`SELECT intent, COUNT(*) c FROM chat_analyses
+    WHERE user_id=? GROUP BY intent ORDER BY c DESC`).all(u.id);
+  const totals = db.prepare(`SELECT COUNT(*) turns, SUM(stuck) stuck, SUM(solved) solved,
+      SUM(question_count) questions, ROUND(AVG(word_count),1) avg_words,
+      SUM(reply_has_hint) hints, SUM(reply_has_praise) praise
+    FROM chat_analyses WHERE user_id=?`).get(u.id);
+  const coverage = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM chat_messages WHERE user_id=? AND role='user') user_msgs,
+      (SELECT COUNT(*) FROM chat_messages WHERE user_id=? AND role='assistant') ai_msgs,
+      (SELECT COUNT(*) FROM chat_analyses WHERE user_id=?) analyzed`).get(u.id, u.id, u.id);
+  const recent = db.prepare(`SELECT day,mode,subject,intent,sentiment,stuck,solved,keywords,word_count
+    FROM chat_analyses WHERE user_id=? ORDER BY id DESC LIMIT 8`).all(u.id);
+  const stuckWords = db.prepare(`SELECT keywords FROM chat_analyses
+    WHERE user_id=? AND stuck=1 AND keywords<>'' ORDER BY id DESC LIMIT 20`).all(u.id);
+  res.json({ ok:true, day:d, today:todayRow, week, subjects, intents, totals: totals || {},
+    coverage: coverage || {}, recent, stuckWords,
+    retainedDays: 30 });
+});
+
+// 원문 JOIN — «분석 1행이 실제 대화 1턴에 연결되어 있다» 는 것을 눈으로 확인하는 용도
+app.get('/api/chat/analysis/messages', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const lim = Math.max(1, Math.min(100, Math.round(Number(req.query.limit) || 30)));
+  const rows = db.prepare(`SELECT ca.id, ca.day, ca.mode, ca.subject, ca.intent, ca.sentiment,
+      ca.stuck, ca.solved, ca.keywords, ca.word_count, ca.hint_level, cm.content
+    FROM chat_analyses ca LEFT JOIN chat_messages cm ON cm.id = ca.user_msg_id
+    WHERE ca.user_id=? ORDER BY ca.id DESC LIMIT ?`).all(u.id, lim);
+  res.json({ ok:true, limit:lim, messages:rows });
+});
+
+// 실제 sqlite_master DDL 을 그대로 내려준다 — 발표 자료의 «데이터베이스 설계» 가 코드와 일치한다는 증거
+app.get('/api/chat/analysis/schema', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const objects = db.prepare(`SELECT type,name,sql FROM sqlite_master
+    WHERE name IN ('chat_messages','chat_analyses','chat_reports','v_chat_subject')
+    ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name`).all();
+  const indexes = db.prepare(`SELECT name,tbl_name,sql FROM sqlite_master
+    WHERE type='index' AND tbl_name IN ('chat_messages','chat_analyses','chat_reports')
+      AND sql IS NOT NULL ORDER BY name`).all();
+  res.json({ ok:true, objects, indexes });
+});
+
+// 과거 대화도 분석 파이프라인에 편입한다. 멱등이라 몇 번 실행해도 숫자가 불어나지 않는다.
+app.post('/api/chat/analysis/rebuild', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const rows = db.prepare('SELECT id,role,content,mode,hint_level,ts FROM chat_messages WHERE user_id=? ORDER BY id').all(u.id);
+  const exist = db.prepare('SELECT 1 FROM chat_analyses WHERE user_msg_id=?');
+  let rebuilt = 0, paired = 0;
+  for(let i=0; i<rows.length; i++){
+    const m = rows[i];
+    if(m.role !== 'user' || exist.get(m.id)) continue;
+    const a = (rows[i+1] && rows[i+1].role === 'assistant') ? rows[i+1] : null;
+    if(a) paired++;
+    try{
+      recordChatAnalysis(u.id, m.id, a ? a.id : null, m.content, a ? a.content : '', m.mode || 'chat',
+        { day: String(m.ts || today()).slice(0,10), hintLevel: m.hint_level });
+      rebuilt++;
+    }catch(e){ console.warn('[chat rebuild]', e && e.message); }
+  }
+  res.json({ ok:true, rebuilt, paired,
+    userMessages: rows.filter(r=>r.role==='user').length,
+    totalMessages: rows.length });
+});
+
+// 대화 초기화 시 «분석 결과» 도 함께 지운다 — 원문만 지우면 고아 분석행이 남는다.
 app.post('/api/chat/reset', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  db.prepare('DELETE FROM chat_analyses WHERE user_id=?').run(u.id);
+  db.prepare('DELETE FROM chat_reports WHERE user_id=?').run(u.id);
   db.prepare('DELETE FROM chat_messages WHERE user_id=?').run(u.id);
   db.prepare("UPDATE learner_profile SET last_summary=NULL, updated_at=datetime('now','+9 hours') WHERE user_id=?").run(u.id);
   res.json({ ok:true });
@@ -2977,7 +3707,9 @@ app.get('/api/puzzle/today', (req,res)=>{
 app.post('/api/puzzle/answer', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
-  const { cardId, choice, final } = req.body || {};
+  // v1.37: firstTryCount = «첫 시도에 맞힌 문제 수(0~3)». hintsLeft 는 «정답 공개» 판단에만 쓴다.
+  const body = req.body || {};
+  const { cardId, choice, final, firstTryCount, hintsLeft } = body;
   const card = db.prepare('SELECT * FROM knowledge_cards WHERE id=?').get(Number(cardId)||0);
   if(!card) return res.status(400).json({error:'문제를 찾을 수 없어요'});
   let quiz = {}; try{ quiz = JSON.parse(card.quiz || '{}'); }catch(e){}
@@ -2990,19 +3722,30 @@ app.post('/api/puzzle/answer', (req,res)=>{
         ON CONFLICT(user_id,card_id,due_date) DO UPDATE SET wrong_count=wrong_count+1, done=0`)
         .run(u.id, card.id, card.topic, quiz.q || '틀린 문제', JSON.stringify(quiz.options||[]), Number(quiz.answer), due);
     }catch(e){}
-    return res.json({ ok:true, correct:false, hint: card.hint_l2 || '한 번 더 생각해 보자.' });
+    const out = { ok:true, correct:false, hint: card.hint_l2 || '한 번 더 생각해 보자.' };
+    // v1.37: 힌트를 다 쓴 뒤 또 틀리면 «정답을 알려주고» 다음 문제로 넘어갈 수 있게 한다(P3)
+    if(Number(hintsLeft) <= 0){ out.reveal = Number(quiz.answer); out.next = true; }
+    return res.json(out);
   }
   // 마지막 문제가 아니면 정답 여부만 알려주고, 보상은 세트 마지막에 한 번만 준다.
   if(!final){
     return res.json({ ok:true, correct:true, reward:0 });
   }
+  // v1.37 «정확도» 축 — 첫 시도에 맞힌 문제 수 f 로 20~45셀 (전부 맞히면 +10 보너스)
+  let f;
+  if (firstTryCount !== undefined) f = Number(firstTryCount);
+  else if (body.firstTry !== undefined)
+    f = (typeof body.firstTry === 'boolean' ? (body.firstTry ? 3 : 0) : Number(body.firstTry));
+  else f = 3;                       // 옛 클라이언트 = «전부 첫 시도 정답» 으로 간주(하위 호환)
+  f = Math.max(0, Math.min(3, Number.isFinite(f) ? f : 0));
+  const reward = 20 + 5 * f + (f >= 3 ? 10 : 0);
   try{
     db.prepare("INSERT INTO game_logs(user_id,day,kind,score,reward) VALUES(?,?,?,?,?)")
-      .run(u.id, today(), 'puzzle', 3, 30);
+      .run(u.id, today(), 'puzzle', f, reward);
   }catch(e){ return res.status(400).json({error:'오늘은 이미 풀었어!'}); }
-  grantCell(u.id, 30, 'game');
+  grantCell(u.id, reward, 'game');
   const g = addExp(u.id, 15);
-  res.json({ ok:true, correct:true, reward:30, growth:g,
+  res.json({ ok:true, correct:true, reward, firstTry:f, growth:g,
              balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
 });
 
@@ -3099,6 +3842,139 @@ app.post('/api/world/lesson/answer', (req,res)=>{
     balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
 });
 
+// ---- AI 마을 보물찾기 · 별똥별 (2026-11-04) ----
+//   하루 5개 보물상자 + 가끔 떨어지는 별똥별. 둘 다 셀 보상.
+const TREASURE_SPOTS = 5;
+app.get('/api/world/treasure', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const d = today();
+  const got = new Set(db.prepare('SELECT spot FROM treasure_claims WHERE user_id=? AND day=?').all(u.id, d).map(r=>r.spot));
+  const spots = [];
+  for(let i=0;i<TREASURE_SPOTS;i++) spots.push({ i, claimed: got.has(i) });
+  res.json({ ok:true, spots, left: TREASURE_SPOTS - got.size, total: TREASURE_SPOTS });
+});
+app.post('/api/world/treasure', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const i = Number((req.body||{}).spot);
+  if(!(i >= 0 && i < TREASURE_SPOTS)) return res.status(400).json({ error:'잘못된 위치예요' });
+  const d = today();
+  const r = db.prepare('INSERT OR IGNORE INTO treasure_claims(user_id,day,spot) VALUES(?,?,?)').run(u.id, d, i);
+  if(!r.changes) return res.json({ ok:true, already:true, reward:0 });
+  grantCell(u.id, 8, 'treasure');
+  const left = TREASURE_SPOTS - db.prepare('SELECT COUNT(*) c FROM treasure_claims WHERE user_id=? AND day=?').get(u.id, d).c;
+  res.json({ ok:true, reward:8, left,
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+});
+app.post('/api/world/starfall', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const d = today();
+  const c = db.prepare("SELECT COUNT(*) c FROM cell_tx WHERE user_id=? AND source='starfall' AND substr(created_at,1,10)=?").get(u.id, d).c;
+  if(c >= 5) return res.json({ ok:true, capped:true, reward:0 });
+  grantCell(u.id, 3, 'starfall');
+  res.json({ ok:true, reward:3, balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+});
+
+// ---- 마을 성장 · 지식 도감 · 컴백 카드 · 방명록 (2026-11-03) ----
+//   마을은 «내가 한 만큼» 자란다. 성과 지표에서 자격 키를 계산해 village_props 에 한 번만 기록한다.
+function villageStats(uid){
+  const solved = db.prepare('SELECT COUNT(*) c FROM world_lessons WHERE user_id=? AND solved=1').get(uid).c;
+  const codex  = db.prepare('SELECT COUNT(DISTINCT card_id) c FROM world_lessons WHERE user_id=? AND solved=1').get(uid).c;
+  const u = db.prepare('SELECT streak FROM users WHERE id=?').get(uid) || { streak:0 };
+  return { solved, codex, streak: u.streak || 0 };
+}
+function villageKeys(st){
+  const keys = [];
+  for (let i = 1; i <= 10; i++) if (st.solved >= i) keys.push('tree_' + i);
+  if (st.streak >= 3) keys.push('lantern_1');
+  if (st.streak >= 7) keys.push('lantern_2');
+  if (st.codex >= 4) keys.push('bench_1');
+  if (st.codex >= 8) keys.push('banner_1');
+  if (st.solved >= 15) keys.push('fountain');
+  return keys;
+}
+function syncVillage(uid){
+  const st = villageStats(uid);
+  const keys = villageKeys(st);
+  const ins = db.prepare('INSERT OR IGNORE INTO village_props(user_id,prop_key) VALUES(?,?)');
+  keys.forEach(k => { try{ ins.run(uid, k); }catch(e){} });
+  const have = db.prepare('SELECT prop_key FROM village_props WHERE user_id=? ORDER BY id').all(uid).map(r => r.prop_key);
+  return { st, keys: have };
+}
+app.get('/api/world/village', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const { st, keys } = syncVillage(u.id);
+  res.json({ ok:true, props:keys, stats:st });
+});
+
+app.get('/api/codex', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const rows = db.prepare('SELECT id,topic,chapter,concept,analogy,example FROM knowledge_cards ORDER BY chapter, id').all();
+  const got = new Set(db.prepare('SELECT DISTINCT card_id FROM world_lessons WHERE user_id=? AND solved=1')
+    .all(u.id).map(r => r.card_id));
+  const cards = rows.map(r => ({
+    id:r.id, topic:r.topic, chapter:r.chapter,
+    concept:r.concept || '', analogy:r.analogy || '', example:r.example || '',
+    unlocked: got.has(r.id)
+  }));
+  res.json({ ok:true, total:cards.length, unlocked:cards.filter(c=>c.unlocked).length, cards });
+});
+
+// 컴백 카드 — 아이가 앱을 열었을 때 루미가 먼저 말을 거는 한 줄
+app.get('/api/comeback', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ ok:true, card:null });
+  const due = db.prepare('SELECT COUNT(*) c FROM review_cards WHERE user_id=? AND done=0 AND due_date<=?').get(u.id, today()).c;
+  const solvedToday = db.prepare('SELECT COUNT(*) c FROM world_lessons WHERE user_id=? AND day=? AND solved=1').get(u.id, today()).c;
+  const streak = u.streak || 0;
+  const left = Math.max(0, 3 - solvedToday);
+  let card = null;
+  if (due > 0) card = { kind:'review', icon:'🔁', text:`어제 틀린 문제 ${due}개가 기다리고 있어. 3분만 같이 볼까?`, cta:'복습하기', target:'review' };
+  else if (left > 0) card = { kind:'world', icon:'📖', text:`오늘의 지혜 샘 ${left}곳이 아직 비어 있어. 같이 가볼까?`, cta:'마을 가기', target:'world' };
+  else if (streak >= 2) card = { kind:'streak', icon:'🔥', text:`${streak}일 연속이야! 오늘 흔적을 남기고 갈래?`, cta:'마을 가기', target:'world' };
+  res.json({ ok:true, card });
+});
+
+app.get('/api/guestbook', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const fid = Number(req.query.friendId) || 0;
+  const f = friendshipBetween(u.id, fid);
+  if(!f || f.status !== 'accepted') return res.status(400).json({ error:'친구만 볼 수 있어요' });
+  const fr = db.prepare('SELECT id,nickname,level,streak FROM users WHERE id=?').get(fid);
+  const { st } = syncVillage(fid);
+  const msgs = db.prepare(`SELECT g.id, g.message, g.created_at, u.nickname
+    FROM guestbook g JOIN users u ON u.id=g.from_user
+    WHERE g.to_user=? ORDER BY g.id DESC LIMIT 6`).all(fid);
+  res.json({ ok:true,
+    friend:{ id:fid, nickname: fr?fr.nickname:'', level: fr?fr.level:1, streak: fr?fr.streak:0 },
+    stats: st, messages: msgs });
+});
+app.post('/api/guestbook', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
+  const b = req.body || {};
+  const fid = Number(b.friendId) || 0;
+  const msg = String(b.message || '').trim().slice(0, 40);
+  if(!msg) return res.status(400).json({ error:'한 줄 적어 주세요' });
+  if(!isSafeText(msg) || hasContactInfo(msg))
+    return res.status(400).json({ error:'예의를 지키고 개인정보는 쓰지 마세요' });
+  const f = friendshipBetween(u.id, fid);
+  if(!f || f.status !== 'accepted') return res.status(400).json({ error:'친구만 남길 수 있어요' });
+  const already = db.prepare("SELECT COUNT(*) c FROM guestbook WHERE from_user=? AND to_user=? AND substr(created_at,1,10)=?")
+    .get(u.id, fid, today()).c;
+  if(already >= 3) return res.status(429).json({ error:'오늘은 3번까지 남길 수 있어요' });
+  db.prepare('INSERT INTO guestbook(to_user,from_user,message) VALUES(?,?,?)').run(fid, u.id, msg);
+  // ★ 친구 마을에 한 줄을 남기면 상대 우편함으로 알림 → 다시 들어올 이유
+  sendMail(fid, { title:'💌 친구 마을에 방명록!', body:`${u.nickname}님이 마을에 한 줄을 남겼어요.`,
+                  cell:0, tag:`friend:guestbook:${u.id}:${today()}` });
+  res.json({ ok:true });
+});
+
 // ---- 시즌(최소) ----
 app.get('/api/season/current', (req,res)=>{
   const u = authUser(req);
@@ -3108,6 +3984,251 @@ app.get('/api/season/current', (req,res)=>{
   res.json({ ok:true, weekStart:wk, name: s ? s.name : '기본 시즌',
              startWeek: s ? s.start_week : null, endWeek: s ? s.end_week : null,
              rewardCell: s ? s.reward_cell : 0 });
+});
+
+// ============================================================
+// ★ 2026-11-04 학습 동행 2.0
+//   ① 능동 넛지  ② 성장 지도  ③ 보호자 주간 레터
+//   ④ 기분 체크  ⑤ 같이 집중  ⑥ 시즌 보드
+//   공통: 새 LLM 호출 없음. DeepSeek 표기는 UI 의 정적 크레딧.
+// ============================================================
+
+function robotNameFor(uid){
+  const r = db.prepare('SELECT name FROM robots WHERE user_id=? ORDER BY id DESC LIMIT 1').get(uid);
+  return r ? r.name : '루미';
+}
+function safeCount(sql, args){
+  try{ return db.prepare(sql).get(...args).c || 0; }catch(e){ return 0; }
+}
+function weekEndOf(wk){
+  return new Date(Date.parse(wk + 'T00:00:00Z') + 7*86400000).toISOString().slice(0,10);
+}
+function weekKeyOffset(n){
+  return new Date(Date.parse(weekStartKST() + 'T00:00:00Z') - n*7*86400000).toISOString().slice(0,10);
+}
+function weakList(uid){
+  let raw = '';
+  try{ raw = profileFor(uid).weak_topics || ''; }catch(e){}
+  return String(raw).split(',').map(s=>s.trim()).filter(Boolean);
+}
+
+// ── ① 능동 넛지: 접속할 때 «루미가 먼저» 말을 건다 ──
+//   우선순위: 어제 못 다 한 대화 → 복습 → 오늘 계획 → 연속 기록 → 기본 인사
+function buildNudge(u){
+  const day = today(), name = robotNameFor(u.id);
+  // ★ 2026-11-04: 예전 대화의 follow_up 이 영구히 넛지를 점유하지 않도록 최근 2일만 본다.
+  const since = dayKST(-1);
+  const last = db.prepare("SELECT follow_up FROM chat_messages WHERE user_id=? AND role='assistant' AND follow_up IS NOT NULL AND follow_up<>'' AND ts>=? ORDER BY id DESC LIMIT 1").get(u.id, since);
+  if(last && last.follow_up)
+    return { kind:'followup', target:'chat', cta:'이어서 이야기', text:`${name}: ${String(last.follow_up).slice(0,90)}` };
+  const due = safeCount('SELECT COUNT(*) c FROM review_cards WHERE user_id=? AND done=0 AND due_date<=?', [u.id, day]);
+  if(due > 0)
+    return { kind:'review', target:'review', cta:'3분만 같이 보기', text:`${name}: 어제 헷갈린 문제 ${due}개가 기다려. 같이 볼래?` };
+  const pr = db.prepare('SELECT plan_json FROM learning_plans WHERE user_id=? AND day=?').get(u.id, day);
+  if(pr){
+    try{
+      const p = JSON.parse(pr.plan_json);
+      const next = (p.steps||[]).find(s=>!s.done);
+      if(next) return { kind:'plan', target:'plan', cta:'1단계 시작', text:`${name}: 오늘 «${String(next.title).slice(0,24)}» 이 남았어. 같이 시작할까?` };
+    }catch(e){}
+  }
+  const streak = u.streak || 0;
+  const visited = safeCount('SELECT COUNT(*) c FROM visits WHERE user_id=? AND substr(entered_at,1,10)=?', [u.id, day]);
+  if(streak >= 2 && !visited)
+    return { kind:'streak', target:'world', cta:'마을 가기', text:`${name}: ${streak}일 연속이야! 오늘도 흔적 남기러 갈래?` };
+  return { kind:'hello', target:'chat', cta:'루미와 대화', text:`${name}: 오늘은 뭐가 제일 궁금해? 같이 찾아보자!` };
+}
+function todayNudge(u){
+  const day = today();
+  const pick = db.prepare('SELECT * FROM nudges WHERE user_id=? AND day=?');
+  let row = pick.get(u.id, day);
+  if(!row){
+    const n = buildNudge(u);
+    try{ db.prepare('INSERT INTO nudges(user_id,day,kind,text,cta,target) VALUES(?,?,?,?,?,?)')
+      .run(u.id, day, n.kind, n.text, n.cta, n.target); }catch(e){}
+    row = pick.get(u.id, day);
+  }else if(!row.clicked && row.kind !== 'followup'){
+    // ★ 2026-11-04: 대화에서 새 follow_up 이 생기면 같은 날이라도 «이어서 이야기»로 갱신.
+    //   (하루 1회 캐시 때문에 방금 나눈 대화가 다음 날에야 되살아나던 문제)
+    const n = buildNudge(u);
+    if(n.kind === 'followup'){
+      try{ db.prepare('UPDATE nudges SET kind=?,text=?,cta=?,target=? WHERE id=?')
+        .run(n.kind, n.text, n.cta, n.target, row.id); }catch(e){}
+      row = pick.get(u.id, day);
+    }
+  }
+  return row;
+}
+app.get('/api/nudge/today', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const n = todayNudge(u);
+  if(!n) return res.json({ ok:true, card:null });
+  db.prepare('UPDATE nudges SET shown=shown+1 WHERE id=?').run(n.id);
+  res.json({ ok:true, id:n.id, kind:n.kind, text:n.text, cta:n.cta, target:n.target, clicked:!!n.clicked });
+});
+app.post('/api/nudge/click', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const id = Number((req.body||{}).id) || 0;
+  db.prepare('UPDATE nudges SET clicked=1 WHERE id=? AND user_id=?').run(id, u.id);
+  res.json({ ok:true });
+});
+
+// ── ② 성장 지도: 최근 6주 추세 + 요약 (기존 로그를 SQL 로 집계) ──
+app.get('/api/growth/timeline', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const weeks = [];
+  for(let i=5;i>=0;i--){
+    const wk = weekKeyOffset(i), end = weekEndOf(wk);
+    const solved  = safeCount('SELECT COUNT(*) c FROM learning_help_logs WHERE user_id=? AND day>=? AND day<? AND solved=1', [u.id,wk,end]);
+    const lessons = safeCount('SELECT COUNT(*) c FROM world_lessons WHERE user_id=? AND day>=? AND day<? AND solved=1', [u.id,wk,end]);
+    const reviews = safeCount('SELECT COUNT(*) c FROM review_cards WHERE user_id=? AND done=1 AND due_date>=? AND due_date<?', [u.id,wk,end]);
+    const chats   = safeCount("SELECT COUNT(*) c FROM chat_messages WHERE user_id=? AND role='user' AND substr(ts,1,10)>=? AND substr(ts,1,10)<?", [u.id,wk,end]);
+    const games   = safeCount('SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND day>=? AND day<?', [u.id,wk,end]);
+    const focus   = safeCount('SELECT COUNT(*) c FROM focus_sessions WHERE user_id=? AND day>=? AND day<? AND done=1', [u.id,wk,end]);
+    weeks.push({ week:wk, label:`${Number(wk.slice(5,7))}/${Number(wk.slice(8,10))}`,
+      solved, lessons, reviews, chats, games, focus,
+      index: Math.min(100, 12 + solved*4 + lessons*3 + reviews*3 + focus*2) });
+  }
+  const mastered = safeCount('SELECT COUNT(DISTINCT card_id) c FROM world_lessons WHERE user_id=? AND solved=1', [u.id]);
+  const totalCards = safeCount('SELECT COUNT(*) c FROM knowledge_cards', []);
+  res.json({ ok:true, weeks,
+    summary:{ understanding: (()=>{ try{ return profileFor(u.id).understanding||0; }catch(e){ return 0; } })(),
+      mastered, totalCards, weakTopics: weakList(u.id), streak:u.streak||0, level:u.level||1 } });
+});
+
+// ── ③ 보호자 주간 레터: 규칙 템플릿 (LLM 미사용, UI 에만 크레딧) ──
+app.get('/api/parent/weekly', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const wk = weekStartKST(), end = weekEndOf(wk);
+  const studyDays = safeCount('SELECT COUNT(DISTINCT day) c FROM learning_help_logs WHERE user_id=? AND day>=? AND day<?', [u.id,wk,end]);
+  const solved  = safeCount('SELECT COUNT(*) c FROM learning_help_logs WHERE user_id=? AND day>=? AND day<? AND solved=1', [u.id,wk,end]);
+  const lessons = safeCount('SELECT COUNT(*) c FROM world_lessons WHERE user_id=? AND day>=? AND day<? AND solved=1', [u.id,wk,end]);
+  const chats   = safeCount("SELECT COUNT(*) c FROM chat_messages WHERE user_id=? AND role='user' AND substr(ts,1,10)>=? AND substr(ts,1,10)<?", [u.id,wk,end]);
+  const games   = safeCount('SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND day>=? AND day<?', [u.id,wk,end]);
+  let focusMin = 0;
+  try{ focusMin = db.prepare('SELECT COALESCE(SUM(minutes),0) c FROM focus_sessions WHERE user_id=? AND day>=? AND day<? AND done=1').get(u.id,wk,end).c || 0; }catch(e){}
+  const weak = weakList(u.id);
+  const highlight = solved > 0 ? `스스로 ${solved}개 문제를 해결했어요`
+                  : lessons > 0 ? `지혜의 샘에서 ${lessons}개 질문을 풀었어요`
+                  : chats > 0 ? `${robotNameFor(u.id)}와 ${chats}번 이야기를 나눴어요`
+                  : '이번 주도 루미를 찾아와 줬어요';
+  const encourage = weak.length
+    ? `아직 «${weak[0]}» 은 조금 헷갈려 해요. 정답보다 «어디서 막혔는지» 를 먼저 물어봐 주세요.`
+    : `새 개념을 받아들이는 속도가 안정적이에요. 아이가 스스로 설명하게 해 보면 더 오래 남아요.`;
+  const suggestion = focusMin >= 30
+    ? '다음 주에는 집중 시간을 조금 줄이고, 짧게 자주 마주치는 편을 권해요.'
+    : '다음 주에는 10분씩 3번만 같은 주제를 이어가 보도록 권해요.';
+  const letter = `${highlight}.\n\n${encourage}\n\n${suggestion}\n\n` +
+    `이번 주 기록: 공부 ${studyDays}일 · 스스로 해결 ${solved}개 · 지혜의 샘 ${lessons}개 · ` +
+    `대화 ${chats}회 · 집중 ${focusMin}분 · 게임 ${games}회 · 연속 ${u.streak||0}일.`;
+  res.json({ ok:true, weekStart:wk,
+    stats:{ studyDays, solved, lessons, chats, games, focusMin, streak:u.streak||0 },
+    highlight, encourage, suggestion, letter });
+});
+
+// ── ④ 기분 체크: 아이 상태를 기록하고 루미 톤·방 조명에 반영 ──
+const MOODS = {
+  good: { ko:'신나',   greeting:'와, 오늘 기분이 좋구나! 나도 덩달아 신나!',        light:[1.00,0.90,0.72], tone:'밝고 신나게' },
+  ok:   { ko:'보통',   greeting:'오늘도 같이 천천히 해 보자. 괜찮아!',              light:[0.94,0.95,1.00], tone:'차분하고 다정하게' },
+  low:  { ko:'힘들어', greeting:'오늘은 좀 지쳤구나. 쉬어도 돼, 내가 옆에 있을게.', light:[0.78,0.86,1.00], tone:'목소리를 낮추고 천천히, 다정하게' },
+};
+app.get('/api/mood/today', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const row = db.prepare('SELECT mood FROM mood_logs WHERE user_id=? AND day=?').get(u.id, today());
+  const m = row && MOODS[row.mood] ? row.mood : null;
+  res.json({ ok:true, mood:m, asked:!!m, ko:m?MOODS[m].ko:null,
+    greeting:m?MOODS[m].greeting:null, light:m?MOODS[m].light:null });
+});
+app.post('/api/mood', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const mood = String((req.body||{}).mood||'');
+  if(!MOODS[mood]) return res.status(400).json({error:'기분을 골라 주세요'});
+  db.prepare('INSERT INTO mood_logs(user_id,day,mood) VALUES(?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET mood=excluded.mood')
+    .run(u.id, today(), mood);
+  res.json(Object.assign({ ok:true, mood }, MOODS[mood]));
+});
+
+// ── ⑤ 같이 집중: 루미와 5~20분 몰입, 끝나면 작은 보상 ──
+app.post('/api/focus/start', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const minutes = [5,10,15,20].includes(Number((req.body||{}).minutes)) ? Number(req.body.minutes) : 10;
+  const pending = db.prepare('SELECT id,minutes FROM focus_sessions WHERE user_id=? AND day=? AND done=0').get(u.id, today());
+  if(pending) return res.json({ ok:true, sessionId:pending.id, minutes:pending.minutes, resumed:true });
+  const info = db.prepare('INSERT INTO focus_sessions(user_id,day,minutes,started_at) VALUES(?,?,?,?)')
+    .run(u.id, today(), minutes, new Date().toISOString());
+  res.json({ ok:true, sessionId:Number(info.lastInsertRowid), minutes });
+});
+app.post('/api/focus/finish', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const s = db.prepare('SELECT * FROM focus_sessions WHERE id=? AND user_id=? AND done=0').get(Number(b.sessionId)||0, u.id);
+  if(!s) return res.status(400).json({error:'진행 중인 집중이 없어요'});
+  // ★ 타이머 우회 방지: 실제 경과 시간이 목표의 80% 미만이면 보상 없이 되묻는다.
+  const elapsed = s.started_at ? (Date.now() - Date.parse(s.started_at))/60000 : 0;
+  if(elapsed < s.minutes*0.8) return res.status(400).json({error:'조금만 더 집중해 볼까?'});
+  const done = safeCount('SELECT COUNT(*) c FROM focus_sessions WHERE user_id=? AND day=? AND done=1', [u.id, today()]);
+  let reward = 0;
+  if(done < 3){ reward = 4 + Math.min(6, Math.floor(s.minutes/5)*2); grantCell(u.id, reward, 'focus'); }
+  db.prepare('UPDATE focus_sessions SET done=1, reward=?, finished_at=? WHERE id=?')
+    .run(reward, new Date().toISOString(), s.id);
+  res.json({ ok:true, reward, minutes:s.minutes,
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance,
+    note: reward ? '루미가 옆에 앉아 있었어! 잘했어' : '오늘 집중 보상은 다 받았어. 내일 또 하자!' });
+});
+app.get('/api/focus/summary', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const all = db.prepare('SELECT COUNT(*) n, COALESCE(SUM(minutes),0) m FROM focus_sessions WHERE user_id=? AND done=1').get(u.id);
+  const t = db.prepare('SELECT COUNT(*) n, COALESCE(SUM(minutes),0) m FROM focus_sessions WHERE user_id=? AND day=? AND done=1').get(u.id, today());
+  res.json({ ok:true, total:all.n, totalMin:all.m, today:t.n, todayMin:t.m });
+});
+
+// ── ⑥ 시즌 보드: 주간 미션 3개를 기존 로그에서 실시간 집계 ──
+const SEASON_TASKS = [
+  { key:'review', title:'복습 카드 1장',   icon:'🔁' },
+  { key:'lesson', title:'지혜의 샘 1곳',   icon:'📖' },
+  { key:'friend', title:'친구에게 응원 1번', icon:'💌' },
+];
+function seasonBoardRow(u){
+  const wk = weekStartKST(), end = weekEndOf(wk);
+  const review = safeCount('SELECT COUNT(*) c FROM review_cards WHERE user_id=? AND done=1 AND due_date>=? AND due_date<?', [u.id,wk,end]);
+  const lesson = safeCount('SELECT COUNT(*) c FROM world_lessons WHERE user_id=? AND day>=? AND day<? AND solved=1', [u.id,wk,end]);
+  const friend = safeCount('SELECT COUNT(*) c FROM cheers WHERE from_user=? AND day>=? AND day<?', [u.id,wk,end])
+               + safeCount('SELECT COUNT(*) c FROM guestbook WHERE from_user=? AND substr(created_at,1,10)>=? AND substr(created_at,1,10)<?', [u.id,wk,end]);
+  const vals = { review, lesson, friend };
+  const tasks = SEASON_TASKS.map(t=>Object.assign({}, t, { done: Math.min(1, vals[t.key]), count: vals[t.key] }));
+  const s = db.prepare('SELECT * FROM seasons WHERE start_week<=? AND end_week>=? ORDER BY id DESC LIMIT 1').get(wk,wk);
+  const claimed = !!db.prepare('SELECT 1 FROM season_claims WHERE user_id=? AND week=?').get(u.id, wk);
+  return { weekStart:wk, name:s?s.name:'기본 시즌', tasks, done:tasks.filter(t=>t.done).length,
+           total:SEASON_TASKS.length, claimed, reward:s?(s.reward_cell||30):30 };
+}
+app.get('/api/season/board', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  res.json(Object.assign({ ok:true }, seasonBoardRow(u)));
+});
+app.post('/api/season/claim', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = seasonBoardRow(u);
+  if(b.done < b.total) return res.status(400).json({error:'아직 미션이 남았어!'});
+  if(b.claimed) return res.status(400).json({error:'이번 주 보상은 이미 받았어'});
+  try{ db.prepare('INSERT INTO season_claims(user_id,week,reward) VALUES(?,?,?)').run(u.id, b.weekStart, b.reward); }
+  catch(e){ return res.status(400).json({error:'이번 주 보상은 이미 받았어'}); }
+  grantCell(u.id, b.reward, 'season');
+  try{ addExp(u.id, 12); }catch(e){}
+  sendMail(u.id, { title:'🏅 이번 주 시즌 보상', body:`${b.name} 미션 3개를 모두 끝냈어요!`,
+                   cell:b.reward, tag:'season:'+b.weekStart });
+  res.json({ ok:true, reward:b.reward,
+             balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
 });
 
 // ---- Admin CRUD: items / quests / season ----
@@ -3158,6 +4279,83 @@ app.post('/api/admin/season', (req,res)=>{
   res.json({ ok:true, id:r.lastInsertRowid });
 });
 
+
+// ───────── v1.39 «자기 생각 × 도로랜드» — 생각 조각 API (4개) ─────────
+//  · GET  /api/story             : 이번 주 챕터 서사 + 조각 목록 + 통계 (수첩 화면 1회 로드)
+//  · GET  /api/thoughts/summary  : 3D «별빛 저장고» 용 최소 정보
+//  · POST /api/thoughts          : 막힌 순간 + 처음 생각 기록
+//  · POST /api/thoughts/fix      : 고쳐 쓴 생각 → fixed + 별빛 셀 + 저장고 점등
+//  보상은 «정답» 이 아니라 «고침» 에 준다. 그래서 여기 어디에도 채점 로직이 없다.
+app.get('/api/story', (req, res) => {
+  const u = authUser(req);
+  if (!u) return res.status(401).json({ error: '로그인이 필요해요' });
+  const t = currentTopic();
+  const ch = STORY_CHAPTERS[t.chapter] || STORY_CHAPTERS[1];
+  const items = db.prepare(`SELECT id, day, chapter, topic, stuck, guess, revised, prompt_key,
+      status, cell_reward, created_at, fixed_at
+    FROM thought_shards WHERE user_id=? ORDER BY id DESC LIMIT 30`).all(u.id);
+  res.json({
+    ok: true,
+    week: t.week, chapter: t.chapter, topic: t.topic, keywords: t.keywords || '',
+    badge: ch.badge, line: ch.line, vow: ch.vow,
+    prompts: REFLECT_PROMPTS,
+    items, stats: thoughtStats(u.id),
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance
+  });
+});
+
+app.get('/api/thoughts/summary', (req, res) => {
+  const u = authUser(req);
+  if (!u) return res.status(401).json({ error: '로그인이 필요해요' });
+  res.json({ ok: true, stats: thoughtStats(u.id) });
+});
+
+app.post('/api/thoughts', (req, res) => {
+  const u = authUser(req);
+  if (!u) return res.status(401).json({ error: '로그인이 필요해요' });
+  const b = req.body || {};
+  const stuck = String(b.stuck || '').trim().slice(0, 60);
+  const guess = String(b.guess || '').trim().slice(0, 120);
+  if (stuck.length < 2 || guess.length < 2) return res.status(400).json({ error: '두 칸 모두 조금만 더 적어 줘' });
+  if (!isSafeText(stuck) || !isSafeText(guess)) return res.status(400).json({ error: '루미가 읽기 어려운 글이야. 다시 적어 줄래?' });
+  const st = thoughtStats(u.id);
+  if (st.todayNew >= THOUGHT_NEW_CAP) return res.status(400).json({ error: '오늘은 생각을 많이 모았어. 내일 또 적자!' });
+  const t = currentTopic();
+  const r = db.prepare('INSERT INTO thought_shards(user_id,day,chapter,topic,stuck,guess) VALUES(?,?,?,?,?,?)')
+    .run(u.id, today(), t.chapter, t.topic, stuck, guess);
+  res.json({ ok: true, id: Number(r.lastInsertRowid), stats: thoughtStats(u.id) });
+});
+
+app.post('/api/thoughts/fix', (req, res) => {
+  const u = authUser(req);
+  if (!u) return res.status(401).json({ error: '로그인이 필요해요' });
+  const b = req.body || {};
+  const id = Math.round(Number(b.id) || 0);
+  const revised = String(b.revised || '').trim().slice(0, 120);
+  const row = db.prepare('SELECT * FROM thought_shards WHERE id=? AND user_id=?').get(id, u.id);
+  if (!row) return res.status(404).json({ error: '그 조각을 찾을 수 없어요' });
+  // 이미 고친 조각은 «조용히 0셀» 로 돌려준다 — 두 번 눌러도 셀이 두 번 나가지 않는다.
+  if (row.status === 'fixed') {
+    return res.json({ ok: true, already: true, reward: 0, stats: thoughtStats(u.id),
+      balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+  }
+  if (revised.length < 4) return res.status(400).json({ error: '고쳐 쓴 생각을 조금 더 길게 적어 줘' });
+  if (!isSafeText(revised)) return res.status(400).json({ error: '루미가 읽기 어려운 글이야. 다시 적어 줄래?' });
+  const norm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+  if (norm(revised) === norm(row.guess)) return res.status(400).json({ error: '처음 생각과 똑같아. 달라진 걸 적어 볼래?' });
+  const prompt = REFLECT_PROMPTS.find(p => p.key === String(b.promptKey || '')) || REFLECT_PROMPTS[0];
+  const st = thoughtStats(u.id);
+  const reward = st.todayFixed < THOUGHT_DAILY_CAP ? THOUGHT_CELL : 0;
+  db.prepare(`UPDATE thought_shards
+      SET revised=?, prompt_key=?, status='fixed', cell_reward=?, fixed_at=datetime('now','+9 hours')
+    WHERE id=? AND user_id=?`).run(revised, prompt.key, reward, id, u.id);
+  if (reward) grantCell(u.id, reward, 'thought_fix');
+  res.json({
+    ok: true, already: false, id, reward, prompt: prompt.q,
+    stats: thoughtStats(u.id),
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance
+  });
+});
 
 // 마지막 에러 핸들러 — 스택/내부 정보 노출 방지
 app.use((err,_req,res,_next)=>{ console.error('💥', err); res.status(500).json({error:'서버 오류가 났어요'}); });

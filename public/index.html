@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261102f">
+<link rel="stylesheet" href="style.css?v=20261110b">
 </head>
 <body>
 
@@ -55,6 +55,24 @@
     <path d="M40 24l7-8" stroke="#8b5a3c" stroke-width="4" stroke-linecap="round"/>
     <circle cx="49" cy="14" r="4" fill="#ffb020"/>
     <path d="M49 5v5M59 14h-5M56 7l-3 3" stroke="#ffb020" stroke-width="2.5" stroke-linecap="round"/>
+  </symbol>
+  <!-- v1.37: 금벌레 — 0.5초만 떠 있는 «지금 25점» 목표 -->
+  <symbol id="mole-gold" viewBox="0 0 64 64">
+    <ellipse cx="32" cy="58" rx="20" ry="4" fill="#000" opacity=".18"/>
+    <ellipse cx="32" cy="40" rx="21" ry="20" fill="#e0a92c"/>
+    <circle cx="12" cy="28" r="7" fill="#f2c65a"/>
+    <circle cx="52" cy="28" r="7" fill="#f2c65a"/>
+    <circle cx="12" cy="28" r="3.5" fill="#fff0b8"/>
+    <circle cx="52" cy="28" r="3.5" fill="#fff0b8"/>
+    <ellipse cx="32" cy="42" rx="15" ry="12" fill="#f7d97e"/>
+    <circle cx="24" cy="38" r="3" fill="#3f2d08"/>
+    <circle cx="40" cy="38" r="3" fill="#3f2d08"/>
+    <circle cx="25" cy="37" r="1" fill="#fff"/>
+    <circle cx="41" cy="37" r="1" fill="#fff"/>
+    <ellipse cx="32" cy="46" rx="4.5" ry="3.2" fill="#ff9ab0"/>
+    <path d="M27 51 Q32 55 37 51" stroke="#6b4a10" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    <path d="M50 10l1.7 4.6 4.6 1.7-4.6 1.7-1.7 4.6-1.7-4.6-4.6-1.7 4.6-1.7z" fill="#fff6c9"/>
+    <path d="M14 13l1.1 3 3 1.1-3 1.1-1.1 3-1.1-3-3-1.1 3-1.1z" fill="#fff6c9" opacity=".85"/>
   </symbol>
 </svg>
 
@@ -211,10 +229,41 @@
             <p>로봇이 살아있는 나만의 공간</p>
           </div>
           <div class="screen-actions">
+            <button id="btn-story" class="btn ghost">🪛 정비사 수첩</button>
+            <button id="btn-growth" class="btn ghost">📈 성장 지도</button>
+            <button id="btn-codex" class="btn ghost">📖 지식 도감</button>
             <button id="btn-world" class="btn ghost">🌍 AI 마을</button>
             <button id="btn-rank" class="btn ghost">🏆 랭킹</button>
             <button id="btn-share" class="btn ghost">📸 자랑하기</button>
           </div>
+        </div>
+
+        <!-- ★ 2026-11-04: 루미가 먼저 말 걸기 + 오늘 기분 체크 -->
+        <div id="nudge-bubble" class="nudge-bubble hidden">
+          <span class="nb-avatar" id="nb-avatar">🤖</span>
+          <div class="nb-body"><b id="nb-name">루미</b><span id="nb-text"></span></div>
+          <button id="nb-cta" class="btn primary small">가기</button>
+          <button id="nb-close" class="nb-x" title="닫기">✕</button>
+        </div>
+
+        <div id="mood-card" class="mood-card hidden">
+          <span class="mood-q">오늘 기분은 어때?</span>
+          <div class="mood-opts">
+            <button data-mood="good">😄 신나</button>
+            <button data-mood="ok">🙂 보통</button>
+            <button data-mood="low">😔 힘들어</button>
+          </div>
+          <button id="mood-skip" class="mood-skip">나중에</button>
+        </div>
+
+        <div id="comeback-card" class="comeback-card hidden">
+          <span class="cb-ico" id="cb-ico">📖</span>
+          <div class="cb-body">
+            <b>루미</b>
+            <span id="cb-text"></span>
+            <div class="cb-dots hidden" id="cb-dots"></div>
+          </div>
+          <button id="cb-cta" class="btn primary small">마을 가기</button>
         </div>
 
         <div class="myroom-layout">
@@ -230,6 +279,7 @@
             <div class="room-dock">
               <button class="dock-btn" data-act="feed">🍪<span>간식</span></button>
               <button class="dock-btn" data-act="praise">💗<span>칭찬</span></button>
+              <button class="dock-btn" id="btn-focus">⏱<span>같이 집중</span></button>
               <button class="dock-btn" id="btn-games">🎮<span>미니게임</span></button>
             </div>
           </div>
@@ -253,6 +303,12 @@
                   <div id="goals-list"></div>
                   <div class="plan-foot"><span id="goals-progress">0/0</span><span class="hint">이번 주가 끝나면 새 목표</span></div>
                   <div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>
+                </div>
+                <div class="panel season-panel">
+                  <div class="panel-head"><h3>이번 주 시즌 미션</h3><span class="mini-chip" id="season-name">시즌</span></div>
+                  <div id="season-tasks" class="season-tasks"></div>
+                  <div class="season-bar"><i id="season-bar-fill" style="width:0%"></i></div>
+                  <div class="plan-foot"><span id="season-progress">0 / 3</span><button id="season-claim" class="btn primary small">보상 받기</button></div>
                 </div>
                 <div class="panel quest-panel">
                   <div class="panel-head"><h3>오늘의 과제</h3><span class="mini-chip">DAILY</span></div>
@@ -281,32 +337,59 @@
           <div>
             <span class="eyebrow">MINI GAMES</span>
             <h2>미니게임</h2>
-            <p>오늘의 기분에 맞는 게임을 골라요. 하루 1번씩 보상!</p>
+            <p>정비사 임무는 우리가 직접 만든 놀이예요. 훈련은 손과 기억을 준비하는 연습장이에요. 하루 1번씩 보상!</p>
           </div>
         </div>
 
-        <div class="game-menu">
-          <button class="mg-card" id="btn-mole">
-            <span class="mg-tag new">NEW</span>
-            <span class="mg-art">🐞</span>
-            <b>버그 두더지</b>
-            <span class="mg-desc">30초 안에 구멍에서 나오는 버그를 잡아요. 폭탄은 피해요!</span>
-            <span class="mg-reward">+10~80셀</span>
+        <!-- ★ v1.41 «고장 탐정» — 교수 피드백 «전부 유명한 게임» 에 대한 자체 장르.
+             관찰 → 진단(처음 생각) → 복구. 오답은 감점이 아니라 «제외» 다. -->
+        <div class="game-group">
+          <div class="game-group-head">
+            <span class="eyebrow">DOROLAND 정비 임무</span>
+            <span class="game-group-note">다른 게임에 없는 규칙 — 틀린 곳이 «단서» 가 돼요</span>
+          </div>
+          <button class="mg-card mg-hero" id="btn-repair">
+            <span class="mg-tag new">NEW · 직접 만든 장르</span>
+            <span class="mg-art">🛠️</span>
+            <span class="mg-hero-body">
+              <b>고장 탐정 · 미리 고치기</b>
+              <span class="mg-desc">기계가 멈추기 전에 이상한 부품을 찾아요. 먼저 «처음 생각» 으로 하나를 고르고, 틀리면 그 자리가 제외되어 후보가 줄어요. 3대의 기계를 90초 안에 고쳐요.</span>
+              <span class="mg-rules">
+                <i>① 관찰</i><i>② 처음 생각</i><i>③ 고쳐 쓰기</i><i>④ 복구</i>
+              </span>
+            </span>
+            <span class="mg-reward">+10~120셀</span>
           </button>
-          <button class="mg-card" id="btn-puzzle">
-            <span class="mg-tag">3문제</span>
-            <span class="mg-art">🧩</span>
-            <b>오늘의 퍼즐</b>
-            <span class="mg-desc">4지선다 3문제. 힌트 3개로 개념을 확인해요.</span>
-            <span class="mg-reward">+30셀</span>
-          </button>
-          <button class="mg-card" id="btn-shooter">
-            <span class="mg-tag">60초</span>
-            <span class="mg-art">🚀</span>
-            <b>버그 슈터</b>
-            <span class="mg-desc">코드 우주를 지켜라! 콤보와 보스전이 있는 슈팅 게임.</span>
-            <span class="mg-reward">+10~110셀</span>
-          </button>
+        </div>
+
+        <div class="game-group">
+          <div class="game-group-head">
+            <span class="eyebrow">정비사 훈련</span>
+            <span class="game-group-note">손빠르기 · 기억 · 개념 확인 (연습용)</span>
+          </div>
+          <div class="game-menu">
+            <button class="mg-card" id="btn-mole">
+              <span class="mg-tag">손빠르기</span>
+              <span class="mg-art">🐞</span>
+              <b>버그 두더지</b>
+              <span class="mg-desc">30초 안에 구멍에서 나오는 버그를 잡아요. 폭탄은 피해요!</span>
+              <span class="mg-reward">+10~80셀</span>
+            </button>
+            <button class="mg-card" id="btn-puzzle">
+              <span class="mg-tag">3문제</span>
+              <span class="mg-art">🧩</span>
+              <b>오늘의 퍼즐</b>
+              <span class="mg-desc">4지선다 3문제. 힌트 3개로 개념을 확인해요.</span>
+              <span class="mg-reward">+30셀</span>
+            </button>
+            <button class="mg-card" id="btn-shooter">
+              <span class="mg-tag">집중력</span>
+              <span class="mg-art">🚀</span>
+              <b>버그 슈터</b>
+              <span class="mg-desc">60초 동안 콤보를 이어 가는 슈팅 연습이에요.</span>
+              <span class="mg-reward">+10~110셀</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -437,6 +520,24 @@
           </div>
         </div>
         <div id="board-stats" class="stats-grid"></div>
+
+        <!-- v1.40 «대화 저장 → 분석» : 저장된 대화가 모두 분석된다는 증거를 리포트에 바로 노출 -->
+        <div class="panel ca-panel">
+          <div class="panel-head">
+            <h3>💬 루미와 나눈 대화 분석</h3>
+            <span class="mini-chip" id="ca-coverage">저장 0건 · 분석 0건</span>
+          </div>
+          <p class="ca-note" id="ca-summary">대화를 불러오는 중이에요.</p>
+          <div class="ca-kpis" id="ca-kpis"></div>
+          <div class="ca-week" id="ca-week"></div>
+          <div class="ca-subjects" id="ca-subjects"></div>
+          <div class="ca-actions">
+            <button id="btn-ca-detail" class="btn ghost small">대화 기록 자세히 보기</button>
+            <button id="btn-ca-schema" class="btn ghost small">데이터베이스 설계(DDL) 보기</button>
+          </div>
+          <pre id="ca-ddl" class="ca-ddl hidden"></pre>
+        </div>
+
         <div class="panel">
           <div class="panel-head"><h3>최근 7일 접속 추이</h3><span class="mini-chip">7 DAYS</span></div>
           <div id="board-trend" class="trend"></div>
@@ -445,6 +546,7 @@
           <div class="panel-head"><h3>셀 사용 내역</h3><span class="sub-inline">최근 20건</span></div>
           <table id="tx-table"><thead><tr><th>내용</th><th>금액</th><th>시간</th></tr></thead><tbody></tbody></table>
         </div>
+        <p class="report-credit">만든 사람 · 이멍멍 <span>한양대 ERICA 인공지능학과</span></p>
       </section>
 
     </div><!-- /content -->
@@ -484,6 +586,103 @@
     </div>
   </div>
 
+  <!-- ══════════ 성장 지도 (2026-11-04) ══════════ -->
+  <div id="growth-modal" class="modal hidden">
+    <div class="modal-card growth-card">
+      <div class="row-between">
+        <div><h3>📈 내 성장 지도</h3><p class="hint">최근 6주 · 루미와 함께 쌓은 기록</p></div>
+        <button id="growth-close" class="btn ghost small">닫기</button>
+      </div>
+      <div id="growth-summary" class="growth-summary"></div>
+      <div id="growth-chart" class="growth-chart"></div>
+      <div class="growth-legend"><span>성장 지수</span><span>스스로 해결 · 지혜의 샘 · 복습 · 집중을 더한 값</span></div>
+      <div id="growth-weak" class="growth-weak"></div>
+    </div>
+  </div>
+
+  <!-- ══════════ 루미랑 같이 집중 (2026-11-04) ══════════ -->
+  <div id="focus-modal" class="modal hidden">
+    <div class="modal-card focus-card">
+      <button class="preview-close" data-close="focus-modal" title="닫기">✕</button>
+      <h3>⏱ 루미랑 같이 집중</h3>
+      <p class="desc">루미가 옆에 앉아 있을게요. 끝나면 작은 선물이 있어요!</p>
+      <div class="focus-pick" id="focus-pick">
+        <button data-min="5">5분</button><button data-min="10" class="on">10분</button>
+        <button data-min="15">15분</button><button data-min="20">20분</button>
+      </div>
+      <div id="focus-clock" class="focus-clock">10:00</div>
+      <div class="focus-bot"><span id="focus-bot-ico">🤖</span><span id="focus-bot-text">준비됐어? 시작하자!</span></div>
+      <div class="focus-actions">
+        <button id="focus-start" class="btn primary big">집중 시작</button>
+        <button id="focus-stop" class="btn ghost big hidden">오늘은 그만</button>
+      </div>
+      <p class="hint" id="focus-summary">오늘 집중 0회 · 누적 0분</p>
+    </div>
+  </div>
+
+  <div id="codex-modal" class="modal hidden">
+    <div class="modal-card codex-card">
+      <div class="row-between">
+        <div><h3>지식 도감</h3><p class="hint">지혜의 샘에서 문제를 맞히면 카드가 열려요</p></div>
+        <button id="codex-close" class="btn ghost small">닫기</button>
+      </div>
+      <div class="codex-bar"><i id="codex-bar-fill" style="width:0%"></i></div>
+      <p class="codex-count" id="codex-count">0 / 0</p>
+      <div id="codex-grid" class="codex-grid"></div>
+    </div>
+  </div>
+
+  <!-- v1.40 대화 분석 상세 — 원문 JOIN + 분류 결과 -->
+  <div id="chat-analysis-modal" class="modal hidden">
+    <div class="modal-card ca-modal">
+      <button id="ca-close" class="preview-close" data-close="chat-analysis-modal" title="닫기">✕</button>
+      <h3>대화 기록 · 분석 결과</h3>
+      <p class="hint">루미와 주고받은 모든 대화가 저장되고, 한 턴씩 분석돼요.</p>
+      <div id="ca-list" class="ca-list"></div>
+    </div>
+  </div>
+
+  <!-- v1.39 «자기 생각 × 도로랜드» — 공작소 · 정비사 수첩.
+       틀린 답을 지우는 대신 «처음 생각» 을 남기고, 나중에 스스로 «고쳐 쓴 생각» 을 적는다. -->
+  <div id="story-modal" class="modal hidden">
+    <div class="modal-card story-card">
+      <button id="story-close" class="preview-close" data-close="story-modal" title="닫기">✕</button>
+      <div class="story-head">
+        <span class="story-badge" id="story-badge">새내기 정비사</span>
+        <h3>공작소 · 정비사 수첩</h3>
+        <p class="story-ch" id="story-ch">CH.1 · 도로랜드에 처음 간 날</p>
+      </div>
+      <p class="story-line" id="story-line"></p>
+      <div class="story-vow"><span>오늘의 다짐</span><b id="story-vow"></b></div>
+      <div class="story-stats" id="story-stats"></div>
+
+      <div class="story-new">
+        <h4>오늘 막힌 순간을 적어 볼까?</h4>
+        <input id="thought-stuck" maxlength="60" placeholder="어디가 막혔어? (예: 분수 더하기가 헷갈려)">
+        <textarea id="thought-guess" maxlength="120" rows="2" placeholder="처음엔 이렇게 생각했어…"></textarea>
+        <button id="thought-save" class="btn primary small">생각 조각 남기기</button>
+      </div>
+
+      <div class="story-list-head"><b>내 생각 조각</b><span id="story-list-count"></span></div>
+      <div id="story-list" class="story-list"></div>
+    </div>
+  </div>
+
+  <div id="gb-modal" class="modal hidden">
+    <div class="modal-card gb-card">
+      <div class="row-between">
+        <div><h3 id="gb-name">친구 마을</h3><p class="hint" id="gb-sub"></p></div>
+        <button id="gb-close" class="btn ghost small">닫기</button>
+      </div>
+      <div class="gb-stats" id="gb-stats"></div>
+      <div class="gb-list" id="gb-list"></div>
+      <div class="gb-input">
+        <input id="gb-text" maxlength="40" placeholder="한 줄 남기기 (예: 나무 많다! 멋져)">
+        <button id="gb-send" class="btn primary small">남기기</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <div id="world-screen" class="world-screen hidden">
@@ -499,6 +698,10 @@
     <div class="world-hud">
       <span id="world-stars" class="world-chip">⭐ 0 / 3</span>
       <span id="world-lessons" class="world-chip">📖 0 / 3</span>
+      <span id="world-village" class="world-chip">🌳 0</span>
+      <span id="world-treasure" class="world-chip">🎁 5</span>
+      <span id="world-friends" class="world-chip">👥 0</span>
+      <span id="world-quests" class="world-chip">🛠 0 / 3</span>
       <span id="world-hint" class="world-chip">드래그로 둘러보고, WASD로 걸어요</span>
     </div>
     <button id="world-prompt" class="world-prompt hidden">
@@ -514,6 +717,47 @@
         <p class="wq-q" id="wq-q"></p>
         <div class="wq-opts" id="wq-opts"></div>
         <div class="wq-feed hidden" id="wq-feed"></div>
+      </div>
+    </div>
+    <button id="world-peer-tip" class="world-peer-tip hidden">
+      <span class="wpt-ico">👋</span>
+      <span class="wpt-txt"><b>친구</b><span>E 키로 인사해요</span></span>
+    </button>
+    <!-- v1.38 이스터에그: 길이 끊기는 자리에 서 있는 낡은 이정표 -->
+    <div id="world-secret" class="world-secret hidden">
+      <div class="ws-card">
+        <button id="ws-close" class="wq-x" title="닫기">✕</button>
+        <div class="ws-head">
+          <span class="ws-ico">🪧</span>
+          <div class="ws-title"><b>오래된 이정표</b><span>RooMi 마을 · 2026</span></div>
+        </div>
+        <p class="ws-quote">“로봇이랑 노는 아이가<br>한 명만 더 늘어도 좋겠다”</p>
+        <p class="ws-note">그 작은 숙제 하나가 이 마을의 시작이었어요.</p>
+        <div class="ws-rows">
+          <div class="ws-row"><span>만든 사람</span><b>이멍멍</b></div>
+          <div class="ws-row"><span>공부하는 곳</span><b>한양대학교 ERICA · 인공지능학과</b></div>
+          <div class="ws-row"><span>함께한 곳</span><b>㈜도로 × 한양대 ERICA IC-PBL 2026-2</b></div>
+        </div>
+        <p class="ws-kid">이 글을 읽은 사람은 아주 드물어. 조용히 찾아와 줘서 고마워.</p>
+        <div id="ws-reward" class="ws-reward"></div>
+      </div>
+    </div>
+    <!-- v1.39 «별빛 저장고» — 고쳐 쓴 생각 수만큼 등이 켜지는 대세계 장치 -->
+    <div id="world-vault" class="world-secret hidden">
+      <div class="ws-card vault-card">
+        <button id="wv-close" class="wq-x" title="닫기">✕</button>
+        <div class="ws-head">
+          <span class="ws-ico">🏮</span>
+          <div class="ws-title"><b>별빛 저장고</b><span>고쳐 쓴 생각이 여기에 쌓여요</span></div>
+        </div>
+        <p class="ws-quote" id="wv-quote">아직 등이 하나도 안 켜져 있어요.</p>
+        <div class="vault-lamps" id="wv-lamps"></div>
+        <div class="ws-rows">
+          <div class="ws-row"><span>고쳐 쓴 생각</span><b id="wv-fixed">0개</b></div>
+          <div class="ws-row"><span>켜진 등</span><b id="wv-lit">0 / 8</b></div>
+        </div>
+        <p class="ws-note">생각을 고칠 때마다 이 저장고의 등이 하나씩 켜져요.</p>
+        <button id="wv-go" class="btn primary small">수첩에서 생각 고치기</button>
       </div>
     </div>
     <div class="world-dpad" id="world-dpad">
@@ -538,7 +782,7 @@
         <p><b>쓰는 곳</b><br>내 로봇과 성장 기록을 저장해 두었다가 다음에 접속했을 때 그대로 보여주는 데만 씁니다.</p>
         <p><b>모으지 않는 것</b><br>실명 · 전화번호 · 주소 · 학교 · 사진 · 위치 정보는 <b>일절 수집하지 않습니다.</b></p>
         <p><b>보관과 삭제</b><br>이 프로토타입의 데이터는 시연용으로만 보관되며, 화면의 버튼(처음부터 다시 시작)으로 언제든지 내 기록을 지울 수 있습니다.</p>
-        <p><b>보호자에게</b><br>이 서비스는 초등 고학년~중학생을 대상으로 한 <b>체험용 프로토타입</b>입니다. 하루 이용은 <b>40분</b>으로 제한되며, 상점 구매 전에는 <b>보호자 확인 문제</b>가 나옵니다.</p>
+        <p><b>보호자에게</b><br>이 서비스는 초등 저학년~고학년을 대상으로 한 <b>체험용 프로토타입</b>입니다. 하루 이용은 <b>40분</b>으로 제한되며, 상점 구매 전에는 <b>보호자 확인 문제</b>가 나옵니다.</p>
       </div>
       <button class="btn primary big" data-close="privacy-modal">확인했어요</button>
     </div>
@@ -627,12 +871,37 @@
     </div>
   </div>
 
+  <!-- ★ v1.41 «고장 탐정 · 미리 고치기» — 관찰 → 진단(처음 생각) → 복구.
+       오답을 지우지 않고 «제외» 로 남겨 후보를 줄인다. 점수는 줄지 않는다. -->
+  <div id="game-repair" class="modal hidden">
+    <div class="modal-card game-card repair-card">
+      <button class="preview-close" data-close="game-repair" title="닫기">✕</button>
+      <h3>🛠️ 고장 탐정 · 미리 고치기</h3>
+      <p class="hint">기계가 멈추기 전에, 이상한 부품을 찾아요. 틀려도 괜찮아요 — 틀린 곳은 «제외» 되어 후보가 줄어요.</p>
+      <div class="repair-hud">
+        <span>점수 <b id="rp-score">0</b></span>
+        <span>남은 시간 <b id="rp-time">90</b></span>
+        <span>고친 부품 <b id="rp-fixed">0</b></span>
+        <span>기계 <b id="rp-machines">1/3</b></span>
+      </div>
+      <div class="repair-wrap">
+        <div id="repair-banner" class="repair-banner">준비되면 «시작하기» 를 눌러요</div>
+        <div id="repair-machine" class="repair-machine"></div>
+      </div>
+      <p id="repair-note" class="repair-note">빨갛게 떨리는 부품이 «고장» 이에요. 잠깐 보여 주고 사라져요.</p>
+      <!-- 정산 문구(#repair-banner)를 덮지 않도록 보상은 별도 줄에 쓴다 -->
+      <p id="repair-result" class="repair-result"></p>
+      <button class="btn primary big" id="repair-go">시작하기</button>
+    </div>
+  </div>
+
   <div id="parent-dashboard" class="modal hidden">
     <div class="modal-card pd-card">
       <button class="preview-close" data-close="parent-dashboard" title="닫기">✕</button>
       <h3>🛡 보호자 대시보드</h3>
       <p class="desc">오늘의 학습 · 플레이 요약</p>
       <div id="pd-body" class="pd-grid"></div>
+      <div id="pd-letter" class="pd-letter hidden"></div>
       <p class="hint" style="margin-top:10px">이 화면은 보호자/교사 확인용입니다.</p>
     </div>
   </div>
@@ -686,7 +955,7 @@
       <div class="memory-add">
         <select id="memory-kind">
           <option value="fact">사실</option>
-          <option value="preference">偏好</option>
+          <option value="preference">선호</option>
           <option value="learning">학습</option>
           <option value="goal">목표</option>
           <option value="event">일정</option>
@@ -786,6 +1055,22 @@
     </div>
   </div>
 
+  <!-- v1.38 주인공 카드 — 로고를 1.2초 누르거나 ↑↑↓↓←→←→BA 로 열린다 -->
+  <div id="credits-modal" class="modal hidden">
+    <div class="modal-card credits-card">
+      <button class="preview-close" data-close="credits-modal" title="닫기">✕</button>
+      <div class="big-emoji">🛠️</div>
+      <h3>이 마을을 만든 사람</h3>
+      <p class="credits-name">이멍멍</p>
+      <p class="credits-sub">한양대학교 ERICA · 인공지능학과</p>
+      <div class="credits-body">
+        <p>“로봇이랑 노는 아이가 한 명만 더 늘어도 좋겠다”<br>는 작은 숙제에서 시작한 마을이에요.</p>
+      </div>
+      <p class="credits-foot">㈜도로 × 한양대 ERICA IC-PBL 2026-2학기<br>RooMi · 루미 AI 학습 파트너</p>
+      <button class="btn primary big" data-close="credits-modal">닫기</button>
+    </div>
+  </div>
+
   <div id="onboard" class="modal hidden">
     <div class="modal-card center-card">
       <div id="ob-emoji" class="big-emoji"></div>
@@ -801,7 +1086,16 @@
 <script src="https://cdn.jsdelivr.net/npm/babylonjs@7/babylon.js" defer onload="window.__bjsReady=true;window.dispatchEvent(new Event('bjsready'))" onerror="window.__bjsFailed=true"></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@7/babylonjs.loaders.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-materials@7/babylonjs.materials.min.js" defer></script>
-<script src="app.js?v=20261102b"></script>
-<script src="world.js?v=20261102e"></script>
+<script src="app.js?v=20261110b"></script>
+<script src="world.js?v=20261110b"></script>
 </body>
 </html>
+
+<!--
+  RooMi · 루미 — 아이와 로봇이 같이 자라는 마을
+  만든 사람 : 이멍멍 (한양대학교 ERICA · 인공지능학과)
+  함께한 곳 : ㈜도로 × 한양대 ERICA IC-PBL 2026-2학기
+
+  여기까지 내려온 사람에게만 : 마을 남서쪽 길이 끊기는 자리(-34, -39)에
+  아주 작은 돌이 하나 서 있어요. 아이가 그 앞에 서면 읽을 수 있습니다.
+-->
