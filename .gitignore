@@ -64,3 +64,8 @@ docs/중간발표-*.md
 docs/*준비정리.md
 docs/중간발표-10월26일/중간발표-8분-v13.pptx
 docs/중간발표-10월26일/중간발표-8분-v14.pptx
+
+# Internal documents and presentation material (kept locally, never committed)
+docs/
+CODEX_CONTEXT.md
+assets/bot-render.png
