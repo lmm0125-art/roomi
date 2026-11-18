@@ -10,6 +10,7 @@ node_modules/
 # API 키 (절대 커밋 금지)
 gemini_key.txt
 deepseek_key.txt
+primary_key.txt
 .env
 .env.*
 
@@ -69,3 +70,6 @@ docs/중간발표-10월26일/중간발표-8분-v14.pptx
 docs/
 CODEX_CONTEXT.md
 assets/bot-render.png
+
+# context-memo (project memos)
+.context/

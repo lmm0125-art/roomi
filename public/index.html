@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261110b">
+<link rel="stylesheet" href="style.css?v=20261118a">
 </head>
 <body>
 
@@ -84,7 +84,7 @@
   <aside id="sidebar" class="sidebar hidden">
     <div class="brand">
       <div class="brand-mark"><svg viewBox="0 0 48 48"><use href="#roomi-logo"/></svg></div>
-      <div class="brand-text"><b>Roo<span>Mi</span></b><span>루미 · AI 학습 파트너</span></div>
+      <div class="brand-text"><b>Roo<span>Mi</span><em class="ver">v1.66</em></b><span>루미 · AI 학습 파트너</span></div>
     </div>
 
     <nav class="side-nav">
@@ -256,16 +256,6 @@
           <button id="mood-skip" class="mood-skip">나중에</button>
         </div>
 
-        <div id="comeback-card" class="comeback-card hidden">
-          <span class="cb-ico" id="cb-ico">📖</span>
-          <div class="cb-body">
-            <b>루미</b>
-            <span id="cb-text"></span>
-            <div class="cb-dots hidden" id="cb-dots"></div>
-          </div>
-          <button id="cb-cta" class="btn primary small">마을 가기</button>
-        </div>
-
         <div class="myroom-layout">
           <div class="room-stage panel">
             <canvas id="room3d" class="hidden"></canvas>
@@ -294,21 +284,18 @@
               <div class="room-pane on" data-room-pane="today">
                 <div class="panel plan-panel">
                   <div class="panel-head"><h3>오늘의 학습 계획</h3><div class="plan-head-right"><span class="mini-chip" id="plan-source">AI</span><button id="btn-prefs" class="mini-chip" title="학습 설정">⚙</button></div></div>
+                  <p id="plan-focus" class="plan-focus hidden"></p>
                   <div id="plan-list"></div>
                   <div class="plan-foot"><span id="plan-progress">0/0</span><span class="hint" id="tomorrow-note">내일 오면 새 계획이 기다려</span></div>
                   <div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>
                 </div>
-                <div class="panel goals-panel">
-                  <div class="panel-head"><h3>이번 주 목표</h3><span class="mini-chip" id="goals-source">AI</span></div>
+                <div class="panel week-panel">
+                  <div class="panel-head"><h3>이번 주</h3><div class="plan-head-right"><span class="mini-chip" id="goals-source">AI</span><span class="mini-chip" id="season-name">시즌</span></div></div>
+                  <div class="week-sub"><span>주간 목표</span><span class="mini" id="goals-progress">0/0</span></div>
                   <div id="goals-list"></div>
-                  <div class="plan-foot"><span id="goals-progress">0/0</span><span class="hint">이번 주가 끝나면 새 목표</span></div>
-                  <div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>
-                </div>
-                <div class="panel season-panel">
-                  <div class="panel-head"><h3>이번 주 시즌 미션</h3><span class="mini-chip" id="season-name">시즌</span></div>
+                  <div class="week-sub"><span>시즌 미션</span><span class="mini" id="season-progress">0 / 3</span></div>
                   <div id="season-tasks" class="season-tasks"></div>
-                  <div class="season-bar"><i id="season-bar-fill" style="width:0%"></i></div>
-                  <div class="plan-foot"><span id="season-progress">0 / 3</span><button id="season-claim" class="btn primary small">보상 받기</button></div>
+                  <div class="plan-foot"><span class="hint" id="week-reward">3개 모두 달성하면 +30셀</span><button id="season-claim" class="btn primary small">보상 받기</button></div>
                 </div>
                 <div class="panel quest-panel">
                   <div class="panel-head"><h3>오늘의 과제</h3><span class="mini-chip">DAILY</span></div>
@@ -331,63 +318,236 @@
         </div>
       </section>
 
-      <!-- ══════════ 미니게임 ══════════ -->
+      <!-- ══════════ 정비단 본부 (v1.44 크로스데이 핵심 시스템) ══════════ -->
       <section id="screen-games" class="screen hidden">
         <div class="screen-head">
           <div>
-            <span class="eyebrow">MINI GAMES</span>
-            <h2>미니게임</h2>
-            <p>정비사 임무는 우리가 직접 만든 놀이예요. 훈련은 손과 기억을 준비하는 연습장이에요. 하루 1번씩 보상!</p>
+            <span class="eyebrow">DOROLAND · MAINTENANCE</span>
+            <h2>멈춘 마을을 다시 켜기</h2>
+            <p>어제 고친 기계는 오늘도 돌고, 안 고친 건 조금 더 낡아가요. 오늘은 어디를 고쳐 볼까요?</p>
           </div>
         </div>
 
-        <!-- ★ v1.41 «고장 탐정» — 교수 피드백 «전부 유명한 게임» 에 대한 자체 장르.
-             관찰 → 진단(처음 생각) → 복구. 오답은 감점이 아니라 «제외» 다. -->
-        <div class="game-group">
-          <div class="game-group-head">
-            <span class="eyebrow">DOROLAND 정비 임무</span>
-            <span class="game-group-note">다른 게임에 없는 규칙 — 틀린 곳이 «단서» 가 돼요</span>
+        <div class="camp-top">
+          <div class="camp-grade panel">
+            <span class="eyebrow">정비사 등급</span>
+            <b id="camp-badge">새내기 정비사</b>
+            <div class="camp-grade-bar"><i id="camp-grade-fill"></i></div>
+            <span class="camp-grade-note" id="camp-grade-note"></span>
           </div>
-          <button class="mg-card mg-hero" id="btn-repair">
-            <span class="mg-tag new">NEW · 직접 만든 장르</span>
-            <span class="mg-art">🛠️</span>
-            <span class="mg-hero-body">
-              <b>고장 탐정 · 미리 고치기</b>
-              <span class="mg-desc">기계가 멈추기 전에 이상한 부품을 찾아요. 먼저 «처음 생각» 으로 하나를 고르고, 틀리면 그 자리가 제외되어 후보가 줄어요. 3대의 기계를 90초 안에 고쳐요.</span>
-              <span class="mg-rules">
-                <i>① 관찰</i><i>② 처음 생각</i><i>③ 고쳐 쓰기</i><i>④ 복구</i>
+          <div class="camp-tomorrow">
+            <span class="eyebrow">TOMORROW · 내일 예고</span>
+            <p id="camp-tomorrow-note">불러오는 중…</p>
+            <span class="camp-today" id="camp-today-count"></span>
+          </div>
+        </div>
+
+        <div class="camp-act">
+          <div class="camp-act-head">
+            <b id="camp-act-title">사건 파일</b>
+            <span id="camp-chapter"></span>
+          </div>
+          <p id="camp-act-body"></p>
+        </div>
+
+        <div class="camp-facilities" id="camp-facilities"></div>
+
+        <div class="camp-bottom">
+          <div class="panel camp-journal">
+            <div class="panel-head"><h3>정비 기록</h3><span class="mini-chip" id="camp-journal-count">0건</span></div>
+            <div id="camp-journal-list"></div>
+          </div>
+          <div class="panel camp-codex">
+            <div class="panel-head"><h3>별빛 저장고</h3><span class="mini-chip" id="camp-shards">0 / 8</span></div>
+            <p class="camp-codex-note">고친 기계 하나마다 등이 하나 켜져요. 대세계의 저장고에도 그대로 남아요.</p>
+            <div class="camp-lamps" id="camp-lamps"></div>
+          </div>
+        </div>
+
+        <!-- ══════════ ★ v1.47 게임 라운지 ══════════
+             유저 피드백 «아래 게임도 위처럼 보이게, 접지 말고 / 커버 다시 만들어 달라».
+             details 접이식을 없애고 메인 1 + 훈련 4 를 전부 같은 깊이로 나란히 펼친다.
+             모든 카드는 «직접 그린 SVG 커버» 를 갖는다(이모지 의존 제거). -->
+        <div class="game-lounge">
+          <div class="gl-head">
+            <span class="eyebrow">GAME LOUNGE · 오늘의 놀이</span>
+            <h3>게임 라운지</h3>
+            <p>큰 게임 하나와 짧은 연습 네 개. 접힌 곳 없이 전부 바로 열 수 있어요.</p>
+          </div>
+
+          <!-- 주 게임 : 큰 커버 카드 -->
+          <div class="panel sort-entry">
+            <button class="gl-feature" id="btn-sort" type="button">
+              <span class="gl-feature-cover" aria-hidden="true">
+                <span class="gl-cover-glow"></span>
+                <svg class="gl-cover-art" viewBox="0 0 320 168" preserveAspectRatio="xMidYMid meet">
+                  <defs>
+                    <linearGradient id="glGlass" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0" stop-color="#8fc4ff" stop-opacity=".38"/>
+                      <stop offset=".48" stop-color="#182a58" stop-opacity=".16"/>
+                      <stop offset="1" stop-color="#8fc4ff" stop-opacity=".30"/>
+                    </linearGradient>
+                    <linearGradient id="glGold" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0" stop-color="#ffe8a3"/><stop offset="1" stop-color="#f5b942"/>
+                    </linearGradient>
+                  </defs>
+                  <g opacity=".65" fill="#fff">
+                    <circle cx="34" cy="26" r="1.7"/><circle cx="86" cy="14" r="1.2"/>
+                    <circle cx="268" cy="30" r="1.6"/><circle cx="298" cy="76" r="1.1"/>
+                    <circle cx="18" cy="112" r="1.2"/><circle cx="150" cy="12" r="1.1"/>
+                  </g>
+                  <!-- 세 병 + 보관 병 -->
+                  <g transform="translate(34,26)">
+                    <rect x="10" y="0" width="20" height="12" rx="4" fill="none" stroke="#8fbfff" stroke-width="3"/>
+                    <rect x="2" y="10" width="36" height="112" rx="12" fill="url(#glGlass)" stroke="#8fbfff" stroke-width="3"/>
+                    <clipPath id="glClip1"><rect x="4" y="12" width="32" height="108" rx="10"/></clipPath>
+                    <g clip-path="url(#glClip1)">
+                      <rect x="4" y="94" width="32" height="28" fill="#7ed957"/>
+                      <rect x="4" y="66" width="32" height="28" fill="#ffd43b"/>
+                      <rect x="4" y="38" width="32" height="28" fill="#3b82f6"/>
+                      <rect x="4" y="10" width="32" height="28" fill="#fb5b78"/>
+                    </g>
+                    <path d="M9 20 Q9 92 9 108" stroke="#fff" stroke-opacity=".6" stroke-width="3" fill="none" stroke-linecap="round"/>
+                  </g>
+                  <g transform="translate(96,26)">
+                    <rect x="10" y="0" width="20" height="12" rx="4" fill="none" stroke="#8fbfff" stroke-width="3"/>
+                    <rect x="2" y="10" width="36" height="112" rx="12" fill="url(#glGlass)" stroke="#8fbfff" stroke-width="3"/>
+                    <clipPath id="glClip2"><rect x="4" y="12" width="32" height="108" rx="10"/></clipPath>
+                    <g clip-path="url(#glClip2)">
+                      <rect x="4" y="94" width="32" height="28" fill="#9b6cf0"/>
+                      <rect x="4" y="66" width="32" height="28" fill="#ff8c32"/>
+                      <rect x="4" y="38" width="32" height="28" fill="#7ed957"/>
+                    </g>
+                    <path d="M9 20 Q9 92 9 108" stroke="#fff" stroke-opacity=".6" stroke-width="3" fill="none" stroke-linecap="round"/>
+                  </g>
+                  <g transform="translate(158,26)">
+                    <rect x="10" y="0" width="20" height="12" rx="4" fill="none" stroke="#8fbfff" stroke-width="3"/>
+                    <rect x="2" y="10" width="36" height="112" rx="12" fill="url(#glGlass)" stroke="#8fbfff" stroke-width="3"/>
+                    <clipPath id="glClip3"><rect x="4" y="12" width="32" height="108" rx="10"/></clipPath>
+                    <g clip-path="url(#glClip3)">
+                      <rect x="4" y="94" width="32" height="28" fill="#ff7ac6"/>
+                      <rect x="4" y="66" width="32" height="28" fill="#3b82f6"/>
+                      <rect x="4" y="38" width="32" height="28" fill="#ffd43b"/>
+                      <rect x="4" y="10" width="32" height="28" fill="#9b6cf0"/>
+                    </g>
+                    <path d="M9 20 Q9 92 9 108" stroke="#fff" stroke-opacity=".6" stroke-width="3" fill="none" stroke-linecap="round"/>
+                  </g>
+                  <!-- 보관 병(신규 메커니즘 예고) -->
+                  <g transform="translate(224,44)">
+                    <rect x="12" y="0" width="22" height="12" rx="4" fill="none" stroke="url(#glGold)" stroke-width="3"/>
+                    <rect x="3" y="10" width="40" height="94" rx="12" fill="#2c2354" fill-opacity=".55" stroke="url(#glGold)" stroke-width="3"/>
+                    <circle cx="23" cy="56" r="11" fill="none" stroke="#ffe8a3" stroke-width="2.5"/>
+                    <path d="M23 50v12M17 56h12" stroke="#ffe8a3" stroke-width="2.5" stroke-linecap="round"/>
+                  </g>
+                  <path d="M24 146h244" stroke="#8fbfff" stroke-opacity=".28" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <span class="gl-cover-tag">LEVEL PUZZLE</span>
               </span>
-            </span>
-            <span class="mg-reward">+10~120셀</span>
-          </button>
-        </div>
-
-        <div class="game-group">
-          <div class="game-group-head">
-            <span class="eyebrow">정비사 훈련</span>
-            <span class="game-group-note">손빠르기 · 기억 · 개념 확인 (연습용)</span>
+              <span class="gl-feature-body">
+                <span class="gl-badge">MAIN · 오늘의 주 게임</span>
+                <b class="gl-title">빛의 병 정리</b>
+                <span class="gl-desc">섞인 빛을 같은 색끼리 모아요. <b>주문서</b>를 고르고, <b>빛 조각</b>으로 도구를 만들고, <b>보관 병</b>에 한 층 잠시 넣어 두세요. 금이 간 병은 꾹 눌러 고쳐요.</span>
+                <span class="gl-stats">
+                  <span>모은 별 <b id="sort-entry-stars">0</b></span>
+                  <span>완료 주문서 <b id="sort-entry-missions">0</b></span>
+                  <span>최고 레벨 <b id="sort-entry-best">1</b></span>
+                  <span class="gl-level-chip" id="sort-entry-level">레벨 1</span>
+                </span>
+                <span class="gl-cta">오늘의 병 풀기 <i>→</i></span>
+              </span>
+            </button>
           </div>
-          <div class="game-menu">
-            <button class="mg-card" id="btn-mole">
-              <span class="mg-tag">손빠르기</span>
-              <span class="mg-art">🐞</span>
-              <b>버그 두더지</b>
-              <span class="mg-desc">30초 안에 구멍에서 나오는 버그를 잡아요. 폭탄은 피해요!</span>
-              <span class="mg-reward">+10~80셀</span>
+
+          <div class="gl-section-head">
+            <b>정비사 훈련</b><span>연습용 · 하루 1번씩 보상</span>
+          </div>
+          <div class="gl-grid game-menu">
+            <button class="gl-card mg-card" id="btn-repair" type="button">
+              <span class="gl-cover gl-cover-repair" aria-hidden="true">
+                <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
+                  <g stroke="#7adcc0" stroke-width="2" fill="none" opacity=".85">
+                    <path d="M22 48h38M84 30h34M84 66h34M142 30v36M142 48h42M184 30v36"/>
+                  </g>
+                  <g fill="#122c47" stroke="#7adcc0" stroke-width="2.5">
+                    <circle cx="22" cy="48" r="10"/><circle cx="76" cy="30" r="10"/>
+                    <circle cx="76" cy="66" r="10"/><circle cx="142" cy="30" r="10"/>
+                    <circle cx="142" cy="66" r="10"/><circle cx="194" cy="30" r="10"/>
+                    <circle cx="194" cy="66" r="10"/>
+                  </g>
+                  <circle cx="76" cy="30" r="4" fill="#ffd166"/><circle cx="142" cy="30" r="4" fill="#ff7b7b"/>
+                  <circle cx="194" cy="66" r="4" fill="#7adcc0"/>
+                  <circle cx="22" cy="48" r="3" fill="#fff"/>
+                </svg>
+                <span class="gl-cover-label">DIAGNOSIS</span>
+              </span>
+              <span class="gl-card-body">
+                <span class="mg-tag">3대 연속</span>
+                <b>고장 탐정 · 사슬 연습</b>
+                <span class="mg-desc">90초 동안 3대를 이어 고치는 연습이에요. 본부 임무와 같은 규칙이에요.</span>
+                <span class="mg-reward">+10~120셀</span>
+              </span>
             </button>
-            <button class="mg-card" id="btn-puzzle">
-              <span class="mg-tag">3문제</span>
-              <span class="mg-art">🧩</span>
-              <b>오늘의 퍼즐</b>
-              <span class="mg-desc">4지선다 3문제. 힌트 3개로 개념을 확인해요.</span>
-              <span class="mg-reward">+30셀</span>
+            <button class="gl-card mg-card" id="btn-mole" type="button">
+              <span class="gl-cover gl-cover-mole" aria-hidden="true">
+                <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
+                  <path d="M0 68 Q60 54 120 68 T240 66 V96 H0Z" fill="#7cc47f" opacity=".75"/>
+                  <g fill="#2a3c26" opacity=".9"><ellipse cx="48" cy="74" rx="20" ry="9"/><ellipse cx="120" cy="78" rx="20" ry="9"/><ellipse cx="192" cy="74" rx="20" ry="9"/></g>
+                  <g transform="translate(108,42)">
+                    <ellipse cx="12" cy="20" rx="14" ry="16" fill="#e8564e"/>
+                    <path d="M12 5v30" stroke="#3a1d1d" stroke-width="2"/>
+                    <circle cx="6" cy="12" r="2.6" fill="#3a1d1d"/><circle cx="18" cy="12" r="2.6" fill="#3a1d1d"/>
+                    <circle cx="5" cy="24" r="2.6" fill="#3a1d1d"/><circle cx="19" cy="24" r="2.6" fill="#3a1d1d"/>
+                    <circle cx="12" cy="3" r="7" fill="#3a1d1d"/>
+                  </g>
+                  <g fill="#fff" opacity=".55"><circle cx="36" cy="20" r="2"/><circle cx="206" cy="26" r="2"/><circle cx="72" cy="14" r="1.5"/></g>
+                </svg>
+                <span class="gl-cover-label">REFLEX</span>
+              </span>
+              <span class="gl-card-body">
+                <span class="mg-tag">손빠르기</span>
+                <b>버그 두더지</b>
+                <span class="mg-desc">30초 안에 구멍에서 나오는 버그를 잡아요.</span>
+                <span class="mg-reward">+10~80셀</span>
+              </span>
             </button>
-            <button class="mg-card" id="btn-shooter">
-              <span class="mg-tag">집중력</span>
-              <span class="mg-art">🚀</span>
-              <b>버그 슈터</b>
-              <span class="mg-desc">60초 동안 콤보를 이어 가는 슈팅 연습이에요.</span>
-              <span class="mg-reward">+10~110셀</span>
+            <button class="gl-card mg-card" id="btn-puzzle" type="button">
+              <span class="gl-cover gl-cover-puzzle" aria-hidden="true">
+                <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
+                  <g transform="translate(78,12)">
+                    <path d="M0 0h34v10a7 7 0 0 0 14 0V0h34v34h-10a7 7 0 0 0 0 14h10v34H48v-10a7 7 0 0 0-14 0v10H0V48h10a7 7 0 0 0 0-14H0Z" fill="#a9e87c"/>
+                    <path d="M0 0h34v10a7 7 0 0 0 14 0V0h34v34h-10a7 7 0 0 0 0 14h10v34H48v-10a7 7 0 0 0-14 0v10H0V48h10a7 7 0 0 0 0-14H0Z" fill="none" stroke="#6fae4b" stroke-width="2"/>
+                  </g>
+                  <g fill="#fff" opacity=".6"><circle cx="30" cy="26" r="2.4"/><circle cx="210" cy="70" r="2.4"/><circle cx="196" cy="20" r="1.8"/></g>
+                </svg>
+                <span class="gl-cover-label">QUIZ</span>
+              </span>
+              <span class="gl-card-body">
+                <span class="mg-tag">3문제</span>
+                <b>오늘의 퍼즐</b>
+                <span class="mg-desc">4지선다 3문제로 개념을 확인해요.</span>
+                <span class="mg-reward">+30셀</span>
+              </span>
+            </button>
+            <button class="gl-card mg-card" id="btn-shooter" type="button">
+              <span class="gl-cover gl-cover-shooter" aria-hidden="true">
+                <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
+                  <g fill="#fff" opacity=".8"><circle cx="24" cy="18" r="1.6"/><circle cx="58" cy="62" r="1.3"/><circle cx="196" cy="18" r="1.6"/><circle cx="218" cy="70" r="1.2"/><circle cx="150" cy="12" r="1.2"/></g>
+                  <g transform="translate(96,18) rotate(38)">
+                    <path d="M16 0C26 10 30 22 30 38v18H2V38C2 22 6 10 16 0Z" fill="#eaf2ff"/>
+                    <path d="M2 40  -6 56 h10 l4 -10Z" fill="#ff8a4c"/><path d="M30 40l8 16h-10l-4-10Z" fill="#ff8a4c"/>
+                    <circle cx="16" cy="24" r="6" fill="#4f8ff0"/>
+                    <path d="M9 56h14l-4 12h-6Z" fill="#ffc94d"/>
+                  </g>
+                  <path d="M46 84 Q76 70 100 76" stroke="#ffc94d" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>
+                </svg>
+                <span class="gl-cover-label">ACTION</span>
+              </span>
+              <span class="gl-card-body">
+                <span class="mg-tag">집중력</span>
+                <b>버그 슈터</b>
+                <span class="mg-desc">60초 동안 콤보를 이어 가는 슈팅 연습이에요.</span>
+                <span class="mg-reward">+10~110셀</span>
+              </span>
             </button>
           </div>
         </div>
@@ -553,16 +713,19 @@
   </main><!-- /main -->
 
   <!-- ══════════ 대화 패널 ══════════ -->
-  <button id="chat-fab" class="chat-fab" title="루미와 대화">
+  <!-- ★ v1.48 대화 버튼 정밀화 : 이중 링 + 작은 크기 전용 배지 로봇 + 말풍선 꼬리 + hover 안내 -->
+  <button id="chat-fab" class="chat-fab" title="루미와 대화" aria-label="루미와 대화">
+    <span class="chat-fab-halo" aria-hidden="true"></span>
+    <span class="chat-fab-ring" aria-hidden="true"></span>
     <span id="chat-fab-bot" class="chat-fab-bot">🤖</span>
-    <span class="chat-fab-dot"></span>
+    <span class="chat-fab-tail" aria-hidden="true"></span>
+    <span class="chat-fab-tip" aria-hidden="true">루미와 대화</span>
   </button>
   <div id="chat-panel" class="chat-panel hidden">
     <div class="chat-head">
       <div class="chat-head-avatar" id="chat-head-avatar">🤖</div>
       <div class="chat-head-text"><b>루미</b><span>같이 생각하는 AI 친구</span></div>
       <span id="chat-und" class="chat-und">이해도 0</span>
-      <button id="chat-voice" class="chat-mem" title="음성 대화">🎧</button>
       <button id="chat-memory" class="chat-mem" title="루미의 기억">🧠</button>
       <button id="chat-close" class="chat-x" title="닫기">✕</button>
     </div>
@@ -876,22 +1039,67 @@
   <div id="game-repair" class="modal hidden">
     <div class="modal-card game-card repair-card">
       <button class="preview-close" data-close="game-repair" title="닫기">✕</button>
-      <h3>🛠️ 고장 탐정 · 미리 고치기</h3>
-      <p class="hint">기계가 멈추기 전에, 이상한 부품을 찾아요. 틀려도 괜찮아요 — 틀린 곳은 «제외» 되어 후보가 줄어요.</p>
+      <h3 id="repair-title">🛠️ 고장 탐정 · 멈춘 기계의 사슬</h3>
+      <p class="hint" id="repair-hint">전기가 지나가는 길을 따라가며 «가장 위에서 멈춘 부품» 을 찾아요. 찾았으면 그 부품을 «꾹 누르고» 초록 테두리가 다 찰 때까지 기다려요. 전력은 한정되어 있어요.</p>
       <div class="repair-hud">
         <span>점수 <b id="rp-score">0</b></span>
         <span>남은 시간 <b id="rp-time">90</b></span>
-        <span>고친 부품 <b id="rp-fixed">0</b></span>
+        <span>전력 <b id="rp-power">100</b></span>
         <span>기계 <b id="rp-machines">1/3</b></span>
       </div>
+      <div class="rp-powerbar"><i id="rp-powerfill"></i></div>
       <div class="repair-wrap">
         <div id="repair-banner" class="repair-banner">준비되면 «시작하기» 를 눌러요</div>
-        <div id="repair-machine" class="repair-machine"></div>
+        <div id="repair-machine" class="repair-chain"></div>
       </div>
-      <p id="repair-note" class="repair-note">빨갛게 떨리는 부품이 «고장» 이에요. 잠깐 보여 주고 사라져요.</p>
+      <p id="repair-note" class="repair-note">빨간 부품이 «멈춘 곳» 이에요. 위에서 아래로 흐르는 길을 보세요.</p>
       <!-- 정산 문구(#repair-banner)를 덮지 않도록 보상은 별도 줄에 쓴다 -->
       <p id="repair-result" class="repair-result"></p>
       <button class="btn primary big" id="repair-go">시작하기</button>
+    </div>
+  </div>
+
+  <!-- ★ v1.47 «빛의 병 정리» — 규칙 3종 추가: 주문서(2택1) · 빛 조각 제작소 · 보관 병.
+       모든 판은 solver 가 «풀 수 있음» 을 확인한 뒤에만 시작한다. -->
+  <div id="game-sort" class="modal hidden">
+    <div class="modal-card game-card sort-card">
+      <button class="preview-close" data-close="game-sort" title="닫기">✕</button>
+      <h3>💧 빛의 병 정리</h3>
+      <p class="desc">위쪽 빛만 <b>같은 색</b> 위에 또는 <b>빈 병</b>에 부어요. <b>주문서</b>를 고르고, 좋은 붓기로 <b>빛 조각</b>을 모아 도구를 만들고, <b>보관 병</b>에 한 층 잠시 넣어 두세요. 보관 병은 비워야 끝나요!</p>
+      <div class="sort-modes" role="tablist">
+        <button class="sort-mode on" data-mode="level" type="button" role="tab">레벨 모드</button>
+        <button class="sort-mode" data-mode="endless" type="button" role="tab">도전 모드 <span>90초</span></button>
+      </div>
+      <div class="sort-timer hidden" id="sort-timer">
+        <span>남은 시간 <b id="sort-time">90</b>초</span>
+        <span>연속 <b id="sort-streak">0</b>단계</span>
+        <span>최고 <b id="sort-best-streak">0</b>단계</span>
+      </div>
+      <div class="sort-timebar hidden" id="sort-timebar"><i id="sort-timefill"></i></div>
+      <div class="sort-hud">
+        <span>레벨 <b id="sort-level">1</b></span>
+        <span>옮김 <b id="sort-moves">0</b> / <b id="sort-par">0</b></span>
+        <span>별 <b id="sort-stars">☆☆☆</b></span>
+        <span>조각 <b id="sort-shards">0</b></span>
+        <span>전력 <b id="sort-power">100</b></span>
+      </div>
+      <div class="sort-pressure"><i id="sort-pressurefill"></i><span id="sort-pressure-label">압력 0%</span></div>
+      <div id="sort-orders" class="sort-orders"></div>
+      <div id="sort-order-now" class="sort-order-now hidden"></div>
+      <div class="sort-board-wrap">
+        <div id="sort-board" class="sort-board"></div>
+        <div id="sort-note" class="sort-note">병을 하나 고르고, 옮길 병을 다시 눌러요.</div>
+      </div>
+      <p class="sort-craft-note">도구가 없으면 <b>빛 조각</b>으로 그 자리에서 만들어요. 좋은 붓기 +2 · 병 완성 +3 · 주문서 완료 +5</p>
+      <div class="sort-tools">
+        <button class="sort-tool" id="sort-undo" type="button"><i>↶</i><span>되돌리기</span><em id="sort-undo-n">1</em><small>4조각</small></button>
+        <button class="sort-tool" id="sort-shuffle" type="button"><i>⇄</i><span>다시 섞기</span><em id="sort-shuffle-n">1</em><small>6조각</small></button>
+        <button class="sort-tool" id="sort-bottle" type="button"><i>+</i><span>빈 병 추가</span><em id="sort-bottle-n">1</em><small>8조각</small></button>
+        <button class="sort-tool hint" id="sort-hint" type="button"><i>💡</i><span>길 알려줘</span><em id="sort-hint-n">1</em><small>5조각</small></button>
+        <button class="sort-tool charge" id="sort-charge" type="button"><i>⚡</i><span>전력 충전</span><em id="sort-charge-n">1</em><small>6조각</small></button>
+      </div>
+      <p class="sort-result" id="sort-result"></p>
+      <button class="btn primary big" id="sort-go">처음부터 다시</button>
     </div>
   </div>
 
@@ -990,6 +1198,7 @@
       <div class="pref-row"><span>선호 시간</span><div class="pref-chips" id="pref-time"><button data-time="morning">아침</button><button data-time="afternoon">방과 후</button><button data-time="evening">저녁</button></div></div>
       <div class="pref-row"><span>관심 주제</span><div class="pref-chips" id="pref-subjects"><button data-subject="AI">AI</button><button data-subject="코딩">코딩</button><button data-subject="수학">수학</button><button data-subject="과학">과학</button><button data-subject="게임">게임</button></div></div>
       <div class="pref-row"><span>난이도</span><div class="pref-chips" id="pref-diff"><button data-diff="easy">쉬움</button><button data-diff="normal">보통</button><button data-diff="hard">도전</button></div></div>
+      <div class="llm-usage" id="llm-usage"><span class="hint">LLM 사용량 불러오는 중…</span></div>
       <button id="prefs-save" class="btn primary big">저장하기</button>
     </div>
   </div>
@@ -1086,8 +1295,8 @@
 <script src="https://cdn.jsdelivr.net/npm/babylonjs@7/babylon.js" defer onload="window.__bjsReady=true;window.dispatchEvent(new Event('bjsready'))" onerror="window.__bjsFailed=true"></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@7/babylonjs.loaders.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-materials@7/babylonjs.materials.min.js" defer></script>
-<script src="app.js?v=20261110b"></script>
-<script src="world.js?v=20261110b"></script>
+<script src="app.js?v=20261118a"></script>
+<script src="world.js?v=20261118a"></script>
 </body>
 </html>
 
