@@ -1194,6 +1194,62 @@
     banner_1:  { kind: 'banner',  x: 4.2, z: 14.2, s: 1.0 },
     fountain:  { kind: 'fountain',x: 0.0, z: 6.6, s: 1.0 }
   };
+
+  // ★ v1.44 «멈춘 마을» — 본부에서 고친 시설은 마을에 등으로 남는다.
+  //   village_props 에 영구 저장되므로 «다음 날 다시 와도» 그대로 보인다.
+  //   (기존 relic_* 은 데이터만 남고 렌더는 당일 questDone 만 봤던 틈을 여기서 피한다.)
+  const CAMP_SPOTS = {
+    well:      { x: 0.5,  z: -8.5 },
+    mill:      { x: 26.5, z: -13.5 },
+    bell:      { x: -20,  z: -2 },
+    laundry:   { x: 8,    z: 12 },
+    generator: { x: 9,    z: 9.5 }
+  };
+  W.campaignRelics = [];
+  W.campaignFixed = 0;
+  function applyCampaignVisuals(scene, keys){
+    const S = scene || W.scene;
+    if(!S) return;
+    W.campaignRelics.forEach(n => { try{ n.dispose(); }catch(e){ } });
+    W.campaignRelics = [];
+    const best = {};
+    (keys || []).forEach(k => {
+      const m = /^campaign_([a-z]+)_lv(\d+)$/.exec(String(k));
+      if(!m) return;
+      const key = m[1], lv = Number(m[2]);
+      if(!best[key] || best[key] < lv) best[key] = lv;
+    });
+    Object.keys(best).forEach(key => {
+      const sp = CAMP_SPOTS[key];
+      if(!sp) return;
+      const lv = best[key];
+      const y = heightAt(sp.x, sp.z);
+      const color = lv >= 3 ? '#ffd873' : (lv >= 2 ? '#8fe0b8' : '#7fc7ee');
+      // 레벨이 오를수록 등이 커진다 — «내가 고친 만큼 마을이 밝아진다»
+      const core = BABYLON.MeshBuilder.CreateSphere('campaignOrb_' + key,
+        { diameter: 0.34 + lv * 0.12, segments: 10 }, S);
+      core.position.set(sp.x, y + 1.35, sp.z);
+      core.material = questMat(S, 'campaignMat_' + key, color, 0.95);
+      core.isPickable = false;
+      W.campaignRelics.push(core);
+      const halo = BABYLON.MeshBuilder.CreateSphere('campaignHalo_' + key,
+        { diameter: 0.85 + lv * 0.22, segments: 8 }, S);
+      halo.position.copyFrom(core.position);
+      halo.material = questMat(S, 'campaignHaloMat_' + key, color, 0.16);
+      halo.isPickable = false;
+      W.campaignRelics.push(halo);
+    });
+    W.campaignFixed = Object.keys(best).length;
+  }
+  // 본부에서 정비를 마치면 «월드 전체를 다시 만들지 않고» 등만 갱신한다.
+  async function refreshCampaignVisuals(){
+    if(typeof api !== 'function' || !W.scene) return;
+    try{
+      const r = await api('/api/world/village');
+      if(r && r.props) applyCampaignVisuals(W.scene, r.props);
+    }catch(e){ /* 로그인 전이면 생략 */ }
+  }
+
   function makeVillageProp(scene, slot, key) {
     const x = slot.x, z = slot.z, y = heightAt(x, z);
     const node = new BABYLON.TransformNode('vp' + key, scene);
@@ -1313,16 +1369,20 @@
       const r = await api('/api/world/village');
       const keys = (r && r.props) || [];
       W.villageKeys = keys;
-      keys.forEach((k) => {
-        const slot = VILLAGE_SLOTS[k];
-        if (!slot) return;
-        if (slot.kind !== 'lantern' && slot.kind !== 'banner' && slot.kind !== 'fountain') {
-          if (blockReason(slot.x, slot.z)) return;   // 이미 다른 소품이 있으면 건너뛴다
-          spawn(slot.kind, slot.x, slot.z, slot.s, rnd() * 6.28, { shadow: true });
-        } else {
-          makeVillageProp(scene, slot, k);
-        }
-      });
+      // ★ 다른 소품 spawn 이 하나라도 실패해도 «정비 등» 은 반드시 켜지게 맨 먼저 그린다.
+      applyCampaignVisuals(scene, keys);
+      try {
+        keys.forEach((k) => {
+          const slot = VILLAGE_SLOTS[k];
+          if (!slot) return;
+          if (slot.kind !== 'lantern' && slot.kind !== 'banner' && slot.kind !== 'fountain') {
+            if (blockReason(slot.x, slot.z)) return;   // 이미 다른 소품이 있으면 건너뛴다
+            spawn(slot.kind, slot.x, slot.z, slot.s, rnd() * 6.28, { shadow: true });
+          } else {
+            makeVillageProp(scene, slot, k);
+          }
+        });
+      } catch (e) { /* 소품 하나 실패는 마을 전체를 멈추지 않게 */ }
       const el = $('#world-village');
       if (el) el.textContent = `🌳 ${keys.length}`;
     } catch (e) { /* 로그인 전이면 생략 */ }
@@ -3362,7 +3422,9 @@
     window.__worldProbe = { blockReason, heightAt, colliders: COLL, secret: SECRET_SPOT, vault: () => VAULT_SPOT, vaultLit: () => W.vaultLit };
     // v1.37: «세계 → 게임 → 세계» 브리지. world.js 는 IIFE 라 이 창구가 필요하다.
     // v1.39: 수첩에서 생각을 고치면 세계의 등을 다시 켠다.
-    window.World = { open: openWorld, close: closeWorld, refresh: loadWorldQuests, refreshThoughts: loadThoughtSummary };
+    // v1.44: 정비 완료 직후 마을의 등만 다시 켠다.
+    window.World = { open: openWorld, close: closeWorld, refresh: loadWorldQuests,
+      refreshThoughts: loadThoughtSummary, refreshVillage: refreshCampaignVisuals };
   } catch (e) { }
 
   $('#world-prompt')?.addEventListener('click', () => {

@@ -9,11 +9,11 @@ let state = { user:null, robot:null, template:'roundy', palette:{}, color:'#e74c
               quests:{ list:[], done:[] }, parts:[], decors:[], skins:[], shards:[],
               itemQty:{}, shardProgress:null, shardTargets:[], overLimit:false, playMinutes:0, overplayDismissed:false,
               warned30:false, shopFilter:'all', voiceAuto:false, voiceChat:false, voiceWarned:false,
-              plan:null, planToastShown:false, lastPlanStep:null, nudgeOptIn:true,
+              plan:null, planToastShown:false, lastPlanStep:null, nudgeOptIn:true, nudgeDismissed:false,
               goals:null, goalToastShown:false, prefs:null, friendsChatEnabled:true, memories:[],
               reviewDue:0, reviewCards:[], reviewIndex:0,
               growth:{ level:1, exp:0, expNeeded:100, stage:1, streak:0 },
-              room:null, chatMode:'chat', chatBusy:false, pz:null, shooter:null };
+              room:null, chatMode:'chat', chatBusy:false, pz:null, shooter:null, explainMode:null };
 
 const COLORABLE = ['antenna','head','body','arms','legs'];
 const PALETTE = ['#e74c3c','#ff8c42','#f1c40f','#ffd93d','#2ecc71','#8bc34a',
@@ -112,6 +112,32 @@ function robotSVG(template, pal){
       ${legs(216)}`;
   }
   return `<svg viewBox="0 0 200 250" xmlns="http://www.w3.org/2000/svg">${s}</svg>`;
+}
+// ★ v1.48 «작은 크기 전용» 배지 로봇. 200×250 전체 로봇을 54px 원에 넣으면
+//   다리·팔·안테나가 뭉개져 «아이콘이 흐릿하다». 머리+몸통+큰 눈만 남긴 100×100 도형으로
+//   다시 그려 44px 에서도 표정이 읽히게 한다(대화 버튼 · 헤더 아바타는 전체 로봇 유지).
+function botBadgeSVG(template, pal){
+  const c = Object.assign({}, DEFAULT_PAL, PAL_BASE[template]||{}, pal||{});
+  const eye='#25324a', cheek='#f7b2c1';
+  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="50" cy="90" rx="20" ry="4.6" fill="#1d3a63" opacity=".13"/>
+    <line x1="50" y1="15" x2="50" y2="26" stroke="${c.antenna}" stroke-width="3.6" stroke-linecap="round"/>
+    <circle cx="50" cy="13" r="5" fill="${c.antenna}"/>
+    <circle cx="48.3" cy="11.3" r="1.6" fill="#fff" opacity=".78"/>
+    <rect x="26" y="25" width="48" height="35" rx="15" fill="${c.head}"/>
+    <ellipse cx="37" cy="34" rx="8" ry="5.4" fill="#fff" opacity=".22"/>
+    <rect x="32" y="59" width="36" height="28" rx="12" fill="${c.body}"/>
+    <rect x="26.5" y="62" width="6.6" height="17" rx="3.3" fill="${c.arms}"/>
+    <rect x="66.9" y="62" width="6.6" height="17" rx="3.3" fill="${c.arms}"/>
+    <ellipse cx="41.4" cy="42.4" rx="4.7" ry="6" fill="${eye}"/>
+    <ellipse cx="58.6" cy="42.4" rx="4.7" ry="6" fill="${eye}"/>
+    <circle cx="42.9" cy="40.1" r="1.7" fill="#fff"/>
+    <circle cx="60.1" cy="40.1" r="1.7" fill="#fff"/>
+    <path d="M43.8 52 Q50 56.4 56.2 52" stroke="${eye}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+    <circle cx="33" cy="50" r="3.4" fill="${cheek}" opacity=".85"/>
+    <circle cx="67" cy="50" r="3.4" fill="${cheek}" opacity=".85"/>
+    <circle cx="50" cy="70" r="3.6" fill="#fff" opacity=".32"/>
+  </svg>`;
 }
 
 // ---------- 유틸 ----------
@@ -271,6 +297,75 @@ function bubble(text, ai){
   }
   b.classList.remove('hidden');
   clearTimeout(b._t); b._t=setTimeout(()=>b.classList.add('hidden'), 4500); }
+// ★ v1.58 «같이 공부하는 로봇» — 기능 안내가 아니라 «기억하는 것» 으로 먼저 말을 건다.
+async function loadRobotHello(){
+  try{
+    const h = await api('/api/robot/hello', undefined, 8000, 'GET');
+    // 규칙으로 만든 «기억» 문장이라 AI 생성 표기를 붙이지 않는다(로봇이 직접 말하는 느낌).
+    if(h && h.line){ bubble(h.line); return; }
+  }catch(e){}
+  if(state.robot && state.robot.greeting) bubble(state.robot.greeting);
+}
+// ★ v1.63: 아이가 가르쳐 준 개념을 «다시 설명해 달라» 고 먼저 물어본다.
+//   LLM 없이 서버 규칙(/api/robot/recall)이 문장을 만든다.
+async function loadRobotRecall(){
+  try{
+    const r = await api('/api/robot/recall', undefined, 8000, 'GET');
+    if(!r || !r.ask) return;
+    bubble(r.line);
+    robotGesture('tilt');
+    state.recallConcept = r.concept;
+  }catch(e){}
+}
+// ★ v1.61 «자리를 비웠다 돌아오면» — 로봇이 먼저 알아본다(하루 한 번, 5분 이상 비웠을 때만).
+let _awayAt = 0, _backSaidDay = '';
+function todayKey(){ const d = new Date(); return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`; }
+function setupPresence(){
+  try{ _backSaidDay = localStorage.getItem('roomi_back_day') || ''; }catch(e){}
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden){ _awayAt = Date.now(); return; }
+    if(!_awayAt) return;
+    const mins = Math.round((Date.now() - _awayAt) / 60000);
+    _awayAt = 0;
+    if(mins < 5) return;
+    const day = todayKey();
+    if(_backSaidDay === day) return;
+    try{ _backSaidDay = day; localStorage.setItem('roomi_back_day', day); }catch(e){}
+    if(mins >= 30){ bubble('다녀왔어? 나 여기 있었어.'); robotGesture('wave'); }
+    else { bubble('다녀왔구나! 이어서 해 볼까?'); robotGesture('nod'); }
+  });
+  // 테스트용(무해): 자리를 비운 시간을 흉내 낸다
+  window.__presenceAway = ms=>{ _awayAt = Date.now() - ms; };
+}
+
+// ★ v1.61 «조금 쉬었다 하자» — 15분 넘게 앉아 있으면 로봇이 먼저 권한다(15·30·45분).
+let _studyTimer = null, _studyStart = 0, _studyNudges = 0;
+function startStudyTimer(){
+  stopStudyTimer();
+  _studyStart = Date.now();
+  _studyTimer = setInterval(checkStudy, 15000);
+}
+function stopStudyTimer(){
+  if(_studyTimer){ clearInterval(_studyTimer); _studyTimer = null; }
+  _studyStart = 0; _studyNudges = 0;
+}
+function checkStudy(){
+  if(!_studyStart) return;
+  const mins = (Date.now() - _studyStart) / 60000;
+  const need = _studyNudges === 0 ? 15 : _studyNudges === 1 ? 30 : 45;
+  if(mins < need) return;
+  _studyNudges++;
+  if(_studyNudges <= 2){
+    bubble('조금 쉬었다 하자. 물 한 모금 마시고 와!');
+    toast('15분 넘게 앉아 있었어요', 4000);
+  }else{
+    bubble('오늘은 여기까지 하자. 내일 또 같이 하자!');
+    toast('오늘 학습은 여기까지', 4000);
+  }
+  robotGesture('stretch');
+}
+function breakNow(){ checkStudy(); }   // 테스트용
+
 // ★ 2026-10-28: 화면 어디서든 보이는 짧은 알림
 function toast(text, ms=3500){
   const t=$('#toast'); if(!t) return;
@@ -308,10 +403,56 @@ function splitSpeech(text){
   return chunks;
 }
 let _speakSeq = 0;
+// ★ v1.51 «말 끊기(barge-in)» — 루미가 말하는 중에 아이가 입을 열면 루미가 먼저 멈춘다.
+//   예전엔 TTS 가 끝나야 마이크가 열려서, 아이가 «아니 그게» 라고 말해도 들리지 않았다.
+let _barge = null, _bargeSeq = 0;
+async function startBargeIn(){
+  if(_barge || !state.voiceChat) return;
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  const seq = ++_bargeSeq;
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+    });
+    if(seq !== _bargeSeq){ stream.getTracks().forEach(t=>t.stop()); return; }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser(); an.fftSize = 512; src.connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    const startedAt = Date.now();
+    let hits = 0;
+    const timer = setInterval(()=>{
+      if(Date.now() - startedAt < 700) return;      // 시작 구간의 잡음·에코는 무시
+      an.getByteTimeDomainData(buf);
+      let sum = 0;
+      for(const v of buf){ const x = (v - 128) / 128; sum += x * x; }
+      const rms = Math.sqrt(sum / buf.length);
+      if(rms > 0.075){
+        if(++hits >= 3){
+          stopBargeIn();
+          try{ window.speechSynthesis.cancel(); }catch(e){}
+          setTimeout(()=>{ if(state.voiceChat) startMic(true); }, 260);
+        }
+      }else hits = 0;
+    }, 90);
+    _barge = { stream, ctx, timer };
+  }catch(e){ stopBargeIn(); }
+}
+function stopBargeIn(){
+  _bargeSeq++;
+  if(!_barge) return;
+  try{ clearInterval(_barge.timer); }catch(e){}
+  try{ _barge.ctx.close(); }catch(e){}
+  try{ _barge.stream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  _barge = null;
+}
 function speak(text, onend){
   if(!('speechSynthesis' in window)) return toast('이 브라우저는 읽어주기를 지원하지 않아요.');
   const seq = ++_speakSeq;
   try{ window.speechSynthesis.cancel(); }catch(e){}
+  stopBargeIn();
+  if(state.voiceChat) startBargeIn();
   const chunks = splitSpeech(text);
   if(!chunks.length) return;
   const voice = pickVoice();
@@ -323,7 +464,7 @@ function speak(text, onend){
   let i = 0;
   const next = ()=>{
     if(seq !== _speakSeq) return;
-    if(i >= chunks.length){ if(typeof onend === 'function') onend(); return; }
+    if(i >= chunks.length){ stopBargeIn(); if(typeof onend === 'function') onend(); return; }
     const u = new SpeechSynthesisUtterance(chunks[i++]);
     u.lang = 'ko-KR';
     if(voice) u.voice = voice;
@@ -349,24 +490,10 @@ async function loadVoiceOptions(){
   sel.innerHTML = opts.join('');
   if(cur && !vs.some(v=>v.name===cur)) sel.value = '';
 }
-function syncVoiceChatBtn(){
-  const b = $('#chat-voice'); if(!b) return;
-  b.classList.toggle('on', !!state.voiceChat);
-  b.title = state.voiceChat ? '음성 대화 끄기' : '음성 대화 켜기';
-}
 function setVoiceChat(on){
   state.voiceChat = !!on;
   localStorage.setItem('roomi_voice_chat', on ? '1' : '0');
   const cb = $('#set-voice-chat'); if(cb) cb.checked = !!on;
-  syncVoiceChatBtn();
-}
-function toggleVoiceChat(){
-  setVoiceChat(!state.voiceChat);
-  toast(state.voiceChat ? '🎧 음성 대화를 켰어. 말해 봐!' : '음성 대화를 껐어.');
-  if(state.voiceChat){
-    if($('#chat-panel').classList.contains('hidden')) chatOpen();
-    setTimeout(()=>startMic(true), 350);
-  }
 }
 async function api(path, body, timeoutMs, method){
   const o = { headers:{} };
@@ -375,7 +502,9 @@ async function api(path, body, timeoutMs, method){
   const tk = localStorage.getItem(SK.token); // 세션 토큰 — uid 위조 방지
   if(tk) o.headers['X-Token'] = tk;
   const ac = new AbortController(); o.signal = ac.signal;
-  const t = setTimeout(()=>ac.abort(), timeoutMs||25000);
+  // ★ v1.43: 1차 LLM(EXAONE)은 추론 때문에 20초 이상 걸릴 수 있다.
+  //   프론트가 먼저 끊으면 «모델은 답했는데 아이 화면엔 실패» 가 되므로 여유를 둔다.
+  const t = setTimeout(()=>ac.abort(), timeoutMs||40000);
   try{
     const r = await fetch(API+path,o);
     const txt = await r.text();
@@ -473,17 +602,20 @@ function goNav(name){
   $('#side-user')?.classList.toggle('on', name==='board');
   show(name);
   if(name==='shop') loadShop();
+  // ★ v1.46: 앱 시작 시 토큰이 갱신되므로, 초기화 시점에 진행도를 부르면 401 이 난다.
+  //   «게임 화면에 들어올 때» 지연 로딩해야 현재 토큰으로 조회된다.
+  if(name==='games'){ loadCampaign(); sortLoadProgress(); }
   if(name==='board'){ loadBoard(); loadChatAnalysis(); }
   if(name==='workshop') loadWorkshop();
   if(name==='mail') loadMailbox();
   if(name==='friends') loadFriends();
-  if(name==='myroom'){ if(state.robot) renderMyroom(); setTimeout(loadComeback, 400); }
+  if(name==='myroom'){ if(state.robot) renderMyroom(); }
 }
 async function regeneratePersonality(){
   const b = $('#ws-regen');
   b.disabled = true;
   try{
-    const r = await api('/api/workshop/regenerate', {}, 30000);
+    const r = await api('/api/workshop/regenerate', {}, 40000);
     if(state.robot){ state.robot.personality = r.personality; state.robot.greeting = r.greeting; }
     bubble(` 새 성격: ${r.personality}`);
     loadWorkshop();
@@ -928,9 +1060,9 @@ function renderTopic(){
 }
 
 function renderMyroom(){
-  loadNudge();                    // ★ 2026-11-04: 루미가 먼저 말 걸기 (성공 시 컴백 카드 대체)
+  if(!state.presenceReady){ state.presenceReady = true; setupPresence(); }
+  loadNudge();                    // ★ 2026-11-04: 루미가 먼저 말 걸기 (없으면 계획 다음 단계로 폴백)
   loadMood(); loadSeason(); loadFocusSummary();
-  loadComeback();                 // ★ 2026-11-03: 기존 규칙 카드 (넛지 폴백)
   loadClassCard();          // ★ V15 수업 출석 카드(회사 기대효과 ②)
   refreshMailBadge();       // ★ V15 우편함 미수령 배지
   const r = state.robot; if(!r) return;
@@ -968,8 +1100,28 @@ function renderMyroom(){
   try{ loadStoryChip(); }catch(e){ console.error('[loadStoryChip]', e); }  // ★ v1.39 정비사 수첩 배지
 
   setTimeout(()=>loadRoomState(), 1500);  // 3D 씬이 준비된 뒤 조명 한 번 더 반영
-  bubble(r.greeting, true);
-  setTimeout(()=>{ if(bjs.ready) bubble('드래그로 돌려 보고, 휠로 확대해 보세요'); }, 4600);
+  // ★ v1.49 «같은 말 반복 줄이기»: 방에 들어올 때마다 같은 인사를 다시 하지 않는다(하루 1번).
+  //   드래그 안내도 처음 한 번만 — 이제 아는 아이에게 매번 뜨는 문구는 소음이다.
+  const _d = new Date();
+  const _dayKey = `${_d.getFullYear()}-${_d.getMonth()+1}-${_d.getDate()}`;
+  let _saidDay = '';
+  try{ _saidDay = localStorage.getItem('roomi_room_greet_day') || ''; }catch(e){}
+  if(_saidDay !== _dayKey){
+    // ★ v1.58: 첫 방문 팁(«드래그로 돌려 보세요»)이 먼저 뜨고, 그 뒤에 로봇이 «기억» 으로 말을 건다.
+    setTimeout(loadRobotHello, 1300);
+    setTimeout(loadRobotRecall, 6200);   // ★ v1.63: 인사가 사라진 뒤 «그때 그거» 를 물어본다
+    try{ localStorage.setItem('roomi_room_greet_day', _dayKey); }catch(e){}
+  }
+  let _tipShown = '';
+  try{ _tipShown = localStorage.getItem('roomi_room_tip') || ''; }catch(e){}
+  if(!_tipShown){
+    // 예약 시점에 «봤음» 으로 표시한다. 4.6초 안에 나갔다 들어와도 타이머가 두 번 걸리지 않게.
+    try{ localStorage.setItem('roomi_room_tip', '1'); }catch(e){}
+    setTimeout(()=>{
+      // ★ v1.58: 로봇의 «기억 인사» 를 가리지 않도록 조작 팁은 토스트로 내린다.
+      if(bjs.ready) toast('드래그로 돌려 보고, 휠로 확대해 보세요', 4200);
+    }, 4600);
+  }
 }
 
 // ============================================================
@@ -990,6 +1142,10 @@ const SKIN_PALETTES = {
   '민트 포커 스킨': { body:'#5cc9a7', head:'#a8e6d0', antenna:'#ff9f43', arms:'#3d9e80', legs:'#2a7a63' },
   '노랑 포커 스킨': { body:'#f2c94c', head:'#fae08a', antenna:'#eb5757', arms:'#d1a53a', legs:'#a8842b' },
   '보라 포커 스킨': { body:'#9b7fe0', head:'#cbbaf2', antenna:'#56ccf2', arms:'#7a5fc0', legs:'#5d4795' },
+  // ★ v1.64: 한정 판매 스킨 + «무지개 스킨» 팔레트(그전엔 팔레트가 없어 사도 색이 그대로였다).
+  '하늘 스킨':   { body:'#6fb7e8', head:'#bfe0f7', antenna:'#ffd54f', arms:'#4f93c4', legs:'#356f99' },
+  '복숭아 스킨': { body:'#f3a683', head:'#fbd7c4', antenna:'#ff7b7b', arms:'#d98763', legs:'#b06a4b' },
+  '무지개 스킨': { body:'#8e7cf0', head:'#b9d6ff', antenna:'#ffd54f', arms:'#f08fb0', legs:'#5cc9a7' },
 };
 // 스킨 적용 대상: 사용자가 '팔레트'로 고른 색만 건드린다.
 // 고르지 않은 부위(팔/다리/안테나)는 원래 공용 색을 유지한다.
@@ -1022,7 +1178,9 @@ const PART_INFO = {
   '별 스티커':   { emoji:'', desc:'방을 꾸미는 별 스티커예요 (로봇에 직접 입히진 않아요).' },
   '선물 상자':   { emoji:'', desc:'특별한 선물 상자예요 (장식품).' },
 };
-const ITEM_EMOJI = {'안테나 리본':'','로켓 부스터':'','나사 장식':'','별 스티커':'','선물 상자':''};
+const ITEM_EMOJI = {'안테나 리본':'💗','로켓 부스터':'🚀','나사 장식':'🔩','별 스티커':'⭐','선물 상자':'🎁',
+  '파란 포커 스킨':'🔵','핑크 포커 스킨':'🌸','민트 포커 스킨':'🍃','노랑 포커 스킨':'🌻','보라 포커 스킨':'🟣',
+  '하늘 스킨':'🌤️','복숭아 스킨':'🍑','무지개 스킨':'🌈','부품 조각':'🔧'};
 
 // 미세 입자(점토 질감) 노멀맵 — 씬마다 1장만 만들고 모든 재질이 공유 (순색 플라스틱 느낌 제거)
 // 주의: 구/캡슐 메시에 일반 UV 로 붙이면 UV 늘림으로 세로 줄무늬가 생긴다
@@ -1423,6 +1581,20 @@ function updateIdle(refs, t, talk){
       { const e=S(u); armL=armR=A0 + 2.55*e; stretchY=0.055*e; rotX=-0.05*e; } break;
   }
 
+  // ★ v1.58: «같이 앉아 공부하는» 자세 — 앞으로 살짝, 팔은 무릎 위로 모은다.
+  // ★ v1.62: 시선 추종 — lookX 에만 부드럽게 더한다(y 는 절대 금지).
+  _gazeCur += (_gazeX * 0.030 - _gazeCur) * 0.12;
+  lookX = Math.max(-0.055, Math.min(0.055, lookX + _gazeCur));
+
+  if(state.robotMode === 'focus'){
+    // ★ v1.60: 0.09rad 는 정면에서 보이지 않는다. 10도 이상 기울이고,
+    //   두 손을 앞으로 들어 «책을 받쳐 든» 모양으로 만든다.
+    rotX += 0.18;
+    armL = 0.82; armR = 0.82;
+    // ★ v1.60 버그 수정: lookY 를 건드리면 pupil 이 사라진다(원인 불명, 아래 2차 점검).
+    //   «아래를 보는» 느낌은 rotX 만으로도 충분하다.
+  }
+
   // ── ② 기본 자세 + 동작 오버레이(매 프레임 재대입 → 드리프트 없음) ──
   if(refs.model){
     refs.model.scaling.y = (refs.growthScale||1) * (1 + Math.sin(t*1.6)*0.013 + stretchY);
@@ -1447,8 +1619,14 @@ function updateIdle(refs, t, talk){
     refs.pupilR.position.x=(refs.eyeBaseX||0.235)+lookX;
     refs.pupilR.position.y=(refs.eyeBaseY||0)+lookY;
   }
-  if(refs.antBall && refs.antBall.material)                              // 안테나 에너지 펄스
-    refs.antBall.material.emissiveColor = refs.antBase.scale(0.42 + 0.26*Math.sin(t*3));
+  if(refs.antBall && refs.antBall.material){                             // 안테나 에너지 펄스
+    // ★ v1.60: «같이 공부» 중에는 안테나가 주황색으로 바뀐다 — 모드가 눈에 보이는 신호.
+    if(state.robotMode === 'focus'){
+      refs.antBall.material.emissiveColor = new BABYLON.Color3(1,0.55,0.12).scale(0.55 + 0.3*Math.sin(t*4));
+    } else {
+      refs.antBall.material.emissiveColor = refs.antBase.scale(0.42 + 0.26*Math.sin(t*3));
+    }
+  }
   if(refs.core && refs.core.material && refs.coreBase){
     refs.core.material.emissiveColor = refs.coreBase.scale(0.55 + 0.30*Math.sin(t*2.6));
   }
@@ -1651,10 +1829,43 @@ function jumpRobot(){
   bjs.scene.beginDirectAnimation(bob,[a],0,f,false,()=>{ bjs._jumping = false; });
 }
 
+// ★ v1.58 «같이 공부하는 자세» — 학습 중에는 로봇이 살짝 앞으로 기울고 팔을 모은다.
+//   'cheer' 는 한 번만: 점프하고 잠시 뒤 idle 로 돌아온다(완료·정답 순간).
+function setRobotMode(mode){
+  const next = (mode === 'focus' || mode === 'cheer') ? mode : 'idle';
+  state.robotMode = next;
+  if(next === 'cheer'){
+    jumpRobot();
+    setTimeout(()=>{ if(state.robotMode === 'cheer') state.robotMode = 'idle'; }, 1600);
+  }
+}
+// ★ v1.62 «시선 추종» — 마우스를 따라 눈동자가 움직인다.
+//   반드시 x 만! lookY 를 건드리면 pupil 이 사라진다(v1.60.1 에서 확인).
+let _gazeX = 0, _gazeCur = 0;
+
+// ★ v1.61: «지금 이 동작을 해라» — 인사·기지개 등 로봇의 의도를 즉시 보이게 한다.
+function robotGesture(name){
+  if(!bjs || !bjs.ready || !bjs.refs) return;
+  const A = bjs.refs._act || (bjs.refs._act = { cur:'none', t0:0, dur:0, next:1.8, first:true });
+  A.cur = name; A.t0 = bjs._t; A.dur = ACT_DUR[name] || 1.8;
+  A.next = bjs._t + A.dur + 8;   // 직후에 다른 랜덤 동작이 끼어들지 않게
+}
+
 // 로봇 클릭 → 말하기 + 점프 (입 벌림 애니메이션 포함)
   function talkToRobot(robot){
   bjs.talkUntil = Date.now() + 1100;
   walkTo([0, -0.2], 0.55);      // 대화하러 카메라 앞으로 이동
+  // ★ v1.63: «그때 네가 가르쳐 준 거» 를 물어본 직후라면, 클릭으로 바로 이어서 설명하게 한다.
+  if(state.recallConcept){
+    const c = state.recallConcept; state.recallConcept = null;
+    bubble(`«${c}» 이야기, 같이 해 볼까?`);
+    jumpRobot();
+    setTimeout(()=>{
+      chatOpen(); chatModeSet('learn');
+      const i = $('#chat-text'); if(i){ i.value = `${c}에 대해 설명해 볼게`; i.focus(); }
+    }, 900);
+    return;
+  }
   bubble(robot.greeting); jumpRobot();
   }
 
@@ -1678,8 +1889,10 @@ function jumpRobot(){
     _walk.timer = setTimeout(()=>{ _walk.active=false; _walk.walking=false; }, 12000);
   }
   // 대기 중 랜덤 산책(아이가 지켜볼 만한 장면)
+  bjs.walkTo = walkTo;          // ★ v1.60: 밖에서 «아이 곁으로 걸어오기» 를 부를 수 있게
   function idleWander(){
     if(!bjs.ready) return;
+    if(state.robotMode === 'focus') return;   // 같이 공부하는 중에는 자리를 비우지 않는다
     const x = (Math.random()*2-1) * WALK.X;
     const z = WALK.ZB + Math.random()*(WALK.ZF - WALK.ZB);
     // ★ V17 도착 시 70% 확률로 카메라(+z)를 바라본다 → 화면에 얼굴이 보이는 시간이 길어진다.
@@ -1689,6 +1902,13 @@ function jumpRobot(){
   function updateWalk(dt){
     if(!bjs.ready || !bjs.root) return;
     const r = bjs.root;
+    // ★ v1.60 «같이 공부하는 자리» — focus 동안에는 스스로 아이 곁(정면 앞쪽)으로 돌아온다.
+    //   밖에서 walkTo 를 호출하면 bjs 재생성 시점에 참조가 깨지므로, 루프 안에서 판단한다.
+    if(state.robotMode === 'focus' && !_walk.active && r.position.z < 0.7){
+      _walk.tx = 0; _walk.tz = 0.85; _walk.face = 0;
+      _walk.active = true; _walk.walking = true;
+      clearTimeout(_walk.timer);
+    }
     // 1) 도착까지 이동
     if(_walk.active){
       const dx = _walk.tx - r.position.x, dz = _walk.tz - r.position.z;
@@ -2938,6 +3158,14 @@ async function startBabylon(canvas, robot, fallback){
 
         // 왼쪽 드래그=회전 / 오른쪽 드래그=카메라 이동(팬) / 클릭=말하기·부품 설명
         canvas.addEventListener('contextmenu', e=>e.preventDefault());
+        // ★ v1.62: 마우스가 방 안을 움직이면 눈동자가 따라간다(터치는 무시).
+        canvas.addEventListener('pointermove', e=>{
+          if(e.pointerType && e.pointerType !== 'mouse') return;
+          const r = canvas.getBoundingClientRect();
+          if(!r.width) return;
+          _gazeX = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
+        });
+        canvas.addEventListener('pointerleave', ()=>{ _gazeX = 0; });
         let dragging=false, lastX=0, moved=0;
         bjs._userDragging=false;   // 사용자가 회전 중이면 산책을 멈춘다
         let panning=false, panX=0, panY=0;
@@ -3084,6 +3312,9 @@ function closeGame(id){
   // ★ v1.41: 고장 탐정은 interval(전체 시계) + setTimeout(관찰/다음 기계) 두 종류를 쓴다.
   //   창을 중간에 닫아도 타이머가 살아 있으면 «유령 판» 이 계속 점수를 만든다.
   if(id==='game-repair') rpStop();
+  // ★ v1.46: 꾹 누르기 interval 이 창을 닫아도 살아 있으면 «유령 충전» 이 돈다.
+  // ★ v1.48: 도전 모드 시계까지 함께 멈춘다(닫았는데 시간이 흐르면 기록이 망가진다).
+  if(id==='game-sort') sortHalt();
   // ★ 2026-10-29: 친구 채팅 폴링 정리 + 읽음 배지 갱신
   if(id==='friend-chat'){ stopFriendChat(); loadFriends(); }
   // 버튼 복구(다음 실행에서 '계속하기' 등으로 굳지 않도록)
@@ -3453,7 +3684,7 @@ $$('.modal').forEach(m=>{
   if(m.id === 'preview-modal' || m.id === 'modal') return;   // 기존 모달은 별도 처리
   m.addEventListener('click', e=>{ if(e.target === m) closeGame(m.id); });
 });
-document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); closeGame("game-shooter"); closeGame("game-puzzle"); closeGame("game-mole"); } });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); closeGame("game-shooter"); closeGame("game-puzzle"); closeGame("game-mole"); closeGame("game-repair"); closeGame("game-sort"); } });
 // ---------- 상점 ----------
 const ITEM_KIND = { part:'로봇 부품', decor:'방 장식', skin:'색칠 스킨', shard:'부품 조각' };
 async function loadShop(){
@@ -3470,18 +3701,28 @@ async function loadShop(){
     // ★ V11 주말 한정: 오늘이 판매일이 아니면 '잠금' 상태로 보여준다.
     //   숨기지 않고 보여줘야 "주말에 다시 오자"는 예고가 된다.
     const locked = it.available === false;
+    // ★ v1.64: «한정 D-N»(기간 한정) 과 «주말 한정» 을 구분해서 보여준다.
+    const ended = locked && it.limited === 'time';
+    const timeLeft = it.limited === 'time' && !ended ? `한정 D-${it.remainingDays}` : '';
+    // ★ v1.65: 이번 주 특가(8할) — 서버가 고른 2개. 원가와 함께 보여준다.
+    const weekly = !!it.weekly && !ended;
+    const weeklyBadge = weekly ? `<span class="owned-badge weekly">이번 주 특가 D-${it.weeklyDays}</span>` : '';
+    const badge = ended ? '<span class="owned-badge weekend">판매 종료</span>'
+      : (weeklyBadge || (timeLeft ? `<span class="owned-badge time">${timeLeft}</span>`
+      : (locked ? '<span class="owned-badge weekend">주말 한정</span>'
+      : (repeatable ? '<span class="owned-badge repeat">반복 구매 가능</span>' : ''))));
     return `<div class="item-card ${t.cls}${owned?' owned':''}${locked?' locked':''}">
       <div class="em">${ITEM_EMOJI[it.name]||''}</div>
       ${owned?'<span class="owned-badge">보유 </span>':''}
-      ${locked?'<span class="owned-badge weekend"> 주말 한정</span>':(repeatable?'<span class="owned-badge repeat">반복 구매 가능</span>':'')}
+      ${badge}
       <span class="tier ${t.cls}">${t.label}</span>
       <div class="nm">${esc(it.name)}</div>
       <div class="kind">${esc(kind)}</div>
-      <div class="price"> ${it.price}</div>
-      ${locked?'<div class="lock-hint">토·일요일에만 살 수 있어요</div>':''}
+      <div class="price"> ${weekly ? it.weeklyPrice : it.price}${weekly ? ` <s>${it.price}</s>` : ''}</div>
+      ${ended?'<div class="lock-hint">판매가 끝났어요</div>':(locked?'<div class="lock-hint">토·일요일에만 살 수 있어요</div>':'')}
       <div class="btn-row">
         ${(it.type==='skin'||it.type==='shard'||locked)?'':`<button class="btn ghost" data-preview="${it.id}">미리보기</button>`}
-        <button class="btn primary" data-buy="${it.id}" ${(owned||locked)?'disabled':''}>${locked?'주말 한정':(owned?'보유 중':'구매')}</button>
+        <button class="btn primary" data-buy="${it.id}" ${(owned||locked)?'disabled':''}>${ended?'판매 종료':(locked?'주말 한정':(owned?'보유 중':'구매'))}</button>
       </div></div>`;
   }).join('');
   $$('#shop-list [data-buy]').forEach(b=>b.addEventListener('click', async ()=>{
@@ -4287,10 +4528,18 @@ function renderPlan(){
       <button class="btn primary" data-plan-start="${s.id}">${s.done?'완료':'시작'}</button>
     </div>`).join('');
   const src = $('#plan-source'); if(src) src.textContent = r.source === 'ai' ? '루미' : '기본';
+  // ★ v1.50: 왜 이 계획인지 한 줄. «루미가 어제 막힌 곳을 기억한다» 를 눈으로 보게 한다.
+  const pf = $('#plan-focus');
+  if(pf){
+    if(r.focus && r.focus.label){
+      pf.textContent = `🧠 ${r.focus.reason} · ${r.focus.label}`;
+      pf.className = 'plan-focus' + (r.focus.kind === 'mood' ? ' mood' : '');
+    }else{ pf.className = 'plan-focus hidden'; pf.textContent = ''; }
+  }
   const prog = $('#plan-progress'); if(prog) prog.textContent = `${r.done||0}/${steps.length} 완료`;
   $$('#plan-list [data-plan-done]').forEach(cb=>cb.addEventListener('change', ()=>togglePlanStep(cb.dataset.planDone, cb.checked)));
   $$('#plan-list [data-plan-start]').forEach(b=>b.addEventListener('click', ()=>startPlanStep(b.dataset.planStart)));
-  try{ loadComeback(); }catch(e){}
+  try{ showPlanNudge(); }catch(e){}
 }
 async function togglePlanStep(id, done){
   try{
@@ -4308,7 +4557,8 @@ async function startPlanStep(id){
   if(s.type === 'puzzle'){ openPuzzle(); return; }
   if(s.type === 'game'){ goNav('games'); return; }
   await chatOpen();
-  chatModeSet('learn');
+  // ★ v1.50: 기분이 가라앉은 날의 «3분 이야기» 는 학습 모드가 아니라 수다 모드로 연다.
+  chatModeSet(s.type === 'chat' ? 'chat' : 'learn');
   const input = $('#chat-text');
   if(input) input.value = s.message || `${s.title} 같이 볼까?`;
   sendChat(false);
@@ -4337,12 +4587,17 @@ function renderGoals(){
       <div class="goal-bar"><i style="width:${Math.min(100,pct)}%"></i></div>
     </div>`;
   }).join('');
-  let extra = '<div class="goal-teaser">3개 모두 달성하면 +30셀</div>';
+  // ★ v1.59: 보상 문장은 패널 하단(#week-reward) 한 곳에만 — 통합 패널에서 중복 노출을 막는다.
+  let extra = '';
   if(r.allDone && !r.claimed) extra = '<button id="goal-claim" class="btn primary goal-claim">🎁 주간 보상 +30셀</button>';
   else if(r.claimed) extra = '<div class="goal-done">🎉 이번 주 목표 달성! 보상 받았어요</div>';
   box.innerHTML = rows + extra;
   const src = $('#goals-source'); if(src) src.textContent = r.source === 'ai' ? '루미' : '기본';
   const prog = $('#goals-progress'); if(prog) prog.textContent = `${r.done||0}/${(r.goals||[]).length} 달성`;
+  // ★ v1.59: 통합 패널의 보상 문장도 함께 갱신한다.
+  const wr = $('#week-reward');
+  if(wr) wr.textContent = r.claimed ? '🎉 주간 목표 달성! 보상 받았어요'
+    : (r.allDone ? '🎉 모두 달성했어! 보상을 받아 줘' : '3개 모두 달성하면 +30셀');
   $('#goal-claim')?.addEventListener('click', claimGoals);
 }
 async function claimGoals(){
@@ -4355,11 +4610,28 @@ async function claimGoals(){
 }
 async function openPrefs(){
   $('#prefs-modal').classList.remove('hidden');
+  loadLLMUsage();
   try{
     const p = await api('/api/prefs');
     state.prefs = p;
     renderPrefs();
   }catch(e){ toast(e.message); }
+}
+// ★ v1.66: «얼마나 아꼈나» 를 설정 화면에 숫자로 보여준다.
+async function loadLLMUsage(){
+  const box = $('#llm-usage'); if(!box) return;
+  try{
+    const r = await api('/api/llm/usage');
+    const t = r.today || {};
+    const n = v => Number(v || 0).toLocaleString('ko-KR');
+    box.innerHTML = `<b>LLM 사용량</b>
+      <div class="llm-row"><span>오늘</span><span>${n(t.calls)}회 · ${n(t.totalTokens)}토큰</span></div>
+      <div class="llm-row"><span>턴당 평균</span><span>${n(r.avgPerTurn)}토큰</span></div>
+      <div class="llm-row"><span>이번 주</span><span>${n(r.weekTotal)}토큰</span></div>
+      <div class="llm-save">v1.51 대비 -${n(r.savedPct)}% 절약 (기준 ${n(r.baselinePerTurn)}토큰/턴)</div>`;
+  }catch(e){
+    box.innerHTML = '<span class="hint">LLM 사용량을 불러오지 못했어요.</span>';
+  }
 }
 function renderPrefs(){
   const p = state.prefs || { minutes:10, time:'afternoon', subjects:[], difficulty:'normal' };
@@ -4517,10 +4789,13 @@ function robotPalette(){
 function updateChatFab(){
   const r = state.robot;
   if(!r) return;
-  const svg = robotSVG(r.template, effectiveColors(r.template, robotPalette()));
-  ['#chat-fab-bot','#chat-head-avatar','#side-avatar'].forEach(sel=>{
-    const el = $(sel); if(el) el.innerHTML = svg;
+  const pal = effectiveColors(r.template, robotPalette());
+  const full = robotSVG(r.template, pal);
+  ['#chat-head-avatar','#side-avatar'].forEach(sel=>{
+    const el = $(sel); if(el) el.innerHTML = full;
   });
+  // 대화 버튼만 «작은 크기 전용 배지» 를 쓴다(54px 원에서도 표정이 읽히게).
+  const fabBot = $('#chat-fab-bot'); if(fabBot) fabBot.innerHTML = botBadgeSVG(r.template, pal);
   const sl = $('#side-level');
   if(sl) sl.textContent = `Lv.${(state.growth && state.growth.level) || 1}`;
 }
@@ -4528,7 +4803,7 @@ function renderHeroBot(){
   const svg = robotSVG('doro', PAL_BASE.doro);
   const el = $('#hero-bot'); if(el) el.innerHTML = svg;
   if(!state.robot){
-    const fab = $('#chat-fab-bot'); if(fab) fab.innerHTML = svg;
+    const fab = $('#chat-fab-bot'); if(fab) fab.innerHTML = botBadgeSVG('doro', PAL_BASE.doro);
     const sa = $('#side-avatar'); if(sa) sa.innerHTML = svg;
   }
 }
@@ -4571,6 +4846,9 @@ async function chatOpen(){
   const panel = $('#chat-panel');
   panel.classList.remove('hidden');
   panel.classList.toggle('in-world', inWorld);
+  // ★ v1.48: 대화가 열리면 버튼은 «한 걸음 물러난» 상태가 된다(중복 클릭·가림 방지).
+  const fab = $('#chat-fab');
+  if(fab){ fab.classList.add('is-open'); fab.setAttribute('aria-expanded','true'); }
   if (ws) ws.classList.toggle('chatting', inWorld);
   // world.js 의 걷기 입력 잠금 상태를 맞춘다
   if (window.__worldState) window.__worldState.chatOpen = inWorld;
@@ -4579,16 +4857,28 @@ async function chatOpen(){
   refreshMemoryChips();
   refreshReviewChip();
   loadRoomState();
+  setRobotMode('focus');   // ★ v1.60: focus 동안 로봇이 스스로 아이 곁으로 걸어와 기울어진다
 }
 function chatClose(){
+  // ★ v1.51: 창을 닫으면 읽어주기와 «말 끊기» 감시도 함께 멈춘다(마이크가 남아 있지 않게).
+  try{ window.speechSynthesis.cancel(); }catch(e){}
+  stopBargeIn();
   const panel = $('#chat-panel');
   panel.classList.add('hidden');
   panel.classList.remove('in-world');
+  const fab = $('#chat-fab');
+  if(fab){ fab.classList.remove('is-open'); fab.setAttribute('aria-expanded','false'); }
   const ws = $('#world-screen'); if (ws) ws.classList.remove('chatting');
   if (window.__worldState) window.__worldState.chatOpen = false;
+  setRobotMode('idle');    // ★ v1.58: 대화가 닫히면 다시 자유롭게
+  stopStudyTimer();        // ★ v1.61: 학습 시간도 멈춘다
 }
 function chatModeSet(mode){
   state.chatMode = mode;
+  // ★ v1.61: «같이 공부» 모드에서만 학습 시간을 잰다.
+  const panel = $('#chat-panel');
+  const open = panel && !panel.classList.contains('hidden');
+  if(open && mode === 'learn') startStudyTimer(); else stopStudyTimer();
   $$('.chat-modes .chip').forEach(b=>b.classList.toggle('on', b.dataset.mode===mode));
   $('#chat-solved').classList.toggle('hidden', mode!=='learn');
   const hint = $('#chat-mode-hint');
@@ -4612,6 +4902,119 @@ function chatAdd(role, text, hint){
   log.appendChild(d);
   log.scrollTop = log.scrollHeight;
   return d;
+}
+// ★ v1.51 «한 문장씩» — 20초를 기다렸다가 한 덩어리로 쏟아내면 읽을 엄두가 안 난다.
+//   서버는 한 번에 만들지만 화면에는 문장 단위로 흘려보낸다(첫 문장이 먼저 도착한 것처럼 보인다).
+function chatAddStream(role, text, hint){
+  const d = chatAdd(role, '', hint);
+  const span = d.querySelector('span');
+  const full = String(text || '');
+  const parts = full.match(/[^.!?\n]+[.!?]?/g) || [full];
+  let i = 0;
+  d.classList.add('streaming');
+  const tick = ()=>{
+    if(i >= parts.length){ d.classList.remove('streaming'); return; }
+    span.textContent += (i ? ' ' : '') + parts[i++].trim();
+    const log = $('#chat-log'); if(log) log.scrollTop = log.scrollHeight;
+    setTimeout(tick, 85);
+  };
+  tick();
+  const sp = d.querySelector('.msg-speak');
+  if(sp) sp.onclick = ()=>speak(full);
+  return d;
+}
+// ★ v1.54 «진짜 토큰 스트리밍» — SSE 의 delta 를 받는 즉시 화면에 붙인다.
+//   기존 chatAddStream 은 «다 만든 뒤 85ms 간격으로 흉내» 였고, 이건 모델이 쓰는 대로 나온다.
+function chatAddLive(role, hint){
+  const d = chatAdd(role, '', hint);
+  const span = d.querySelector('span');
+  d.classList.add('streaming');
+  return {
+    el: d, span,
+    push(t){
+      span.textContent += t;
+      const log = $('#chat-log'); if(log) log.scrollTop = log.scrollHeight;
+    },
+    end(full){
+      d.classList.remove('streaming');
+      const sp = d.querySelector('.msg-speak');
+      if(sp && full) sp.onclick = ()=>speak(full);
+    }
+  };
+}
+async function chatStreamRequest(body, onDelta){
+  const headers = { 'Content-Type':'application/json' };
+  const tk = localStorage.getItem(SK.token);
+  if(tk) headers['X-Token'] = tk;
+  const res = await fetch(API + '/api/chat/stream', { method:'POST', headers, body: JSON.stringify(body) });
+  if(!res.ok || !res.body) throw new Error('stream ' + res.status);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', donePayload = null;
+  while(true){
+    const { done, value } = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, { stream:true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() || '';
+    for(const part of parts){
+      const line = part.trim();
+      if(!line.startsWith('data:')) continue;
+      let j = null;
+      try{ j = JSON.parse(line.slice(5).trim()); }catch(e){ continue; }
+      if(j.type === 'delta' && j.text) onDelta(j.text);
+      else if(j.type === 'done') donePayload = j;
+    }
+  }
+  if(!donePayload) throw new Error('stream no done');
+  return donePayload;
+}
+// 반환: 'ok' | 'partial' | 'fail' — fail 일 때만 기존 비스트리밍 경로로 되돌린다.
+async function chatStreamOnce(text, solved){
+  let live = null, partial = '';
+  let r = null;
+  try{
+    r = await chatStreamRequest({ mode: state.chatMode, message: text, solved: !!solved }, (d)=>{
+      if(!live){ chatTyping(false); live = chatAddLive('assistant', false); }
+      partial += d; live.push(d);
+    });
+  }catch(e){
+    if(live){ live.end(partial); return 'partial'; }
+    return 'fail';
+  }
+  chatTyping(false);
+  const lvl = Number(r.hintLevel) || 0;
+  if(!live) chatAdd('assistant', r.reply, lvl > 1);
+  else live.end(r.reply || partial);
+  if(state.voiceAuto || state.voiceChat) speak(r.reply);
+  if(state.chatMode === 'learn' && lvl){
+    const meta = document.createElement('div'); meta.className = 'msg-meta';
+    const badge = document.createElement('span'); badge.className = 'hint-badge';
+    badge.textContent = lvl === 1 ? 'L1 · 되묻기' : lvl === 2 ? 'L2 · 비유' : 'L3 · 다음 단계';
+    meta.appendChild(badge);
+    if(lvl < 3){
+      const more = document.createElement('button'); more.className = 'msg-more'; more.textContent = '힌트 한 단계 더';
+      more.onclick = ()=>{ const i=$('#chat-text'); if(i) i.value='힌트 한 단계 더 주세요'; sendChat(false); };
+      meta.appendChild(more);
+    }
+    // 개념명이 비어도(카드 미매칭) 버튼은 보여 준다 — 화면이 «방금 배운 것» 으로 부른다.
+    if(lvl >= 3 && r.explain){
+      const ex = document.createElement('button'); ex.className = 'msg-more explain'; ex.textContent = '내 말로 설명하기';
+      ex.onclick = ()=>startExplain(r.explain);
+      meta.appendChild(ex);
+    }
+    const quiz = document.createElement('button'); quiz.className = 'msg-more'; quiz.textContent = '문제로 확인';
+    quiz.onclick = ()=>openPuzzle();
+    meta.appendChild(quiz);
+    (live ? live.el : $('#chat-log')).appendChild(meta);
+  }
+  if(r.solved) setRobotMode('cheer');   // ★ v1.58: 스스로 해결한 순간 로봇이 같이 기뻐한다
+  if(r.wrapUp) chatAdd('assistant', '⏳ ' + r.wrapUp, true);
+  const und = $('#chat-und'); if(und) und.textContent = `이해도 ${r.understanding||0}`;
+  const left = $('#chat-left');
+  if(left) left.textContent = r.left > 0 ? `오늘 ${r.left}번 더 이야기할 수 있어요` : '오늘은 여기까지!';
+  if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
+  return 'ok';
 }
 function chatTyping(on){
   let t = $('#chat-typing');
@@ -4689,16 +5092,26 @@ async function sendChat(solved){
   const input = $('#chat-text');
   const msg = (input.value||'').trim();
   if(!msg && !solved) return;
+  // ★ v1.50: «내 말로 설명하기» 가 켜져 있으면 학습 질문이 아니라 설명으로 보낸다.
+  if(state.explainMode && !solved){ return sendExplain(); }
   const text = solved ? '내가 해봤어요! 스스로 해결했어요.' : msg;
   if(!solved) input.value='';
   state.chatBusy = true;
   chatAdd('user', text);
   chatTyping(true);
   $('#chat-send').disabled = true;
+  // ★ v1.54: 진짜 스트리밍을 먼저 시도한다. 첫 글자도 못 받았을 때만 아래 비스트리밍 경로로 폴백.
+  let streamState = 'fail';
+  try{ streamState = await chatStreamOnce(text, solved); }catch(e){ streamState = 'fail'; }
+  if(streamState !== 'fail'){
+    state.chatBusy = false; $('#chat-send').disabled = false; input.focus();
+    return;
+  }
   try{
-    const r = await api('/api/chat', { mode: state.chatMode, message: text, solved: !!solved }, 30000);
+    const r = await api('/api/chat', { mode: state.chatMode, message: text, solved: !!solved }, 40000);
     chatTyping(false);
-    const msgEl = chatAdd('assistant', r.reply, Number(r.hintLevel)>1);
+    // ★ v1.51: 문장 단위로 흘려보낸다.
+    const msgEl = chatAddStream('assistant', r.reply, Number(r.hintLevel)>1);
     if(state.voiceAuto || state.voiceChat){
       speak(r.reply, ()=>{ if(state.voiceChat && !state.chatBusy) startMic(true); });
     }
@@ -4714,17 +5127,28 @@ async function sendChat(solved){
         more.onclick = ()=>{ const input=$('#chat-text'); if(input) input.value='힌트 한 단계 더 주세요'; sendChat(false); };
         meta.appendChild(more);
       }
+      // ★ v1.50: 힌트를 다 받은 뒤 «설명» 으로 넘어간다. 옮겨 적기로 끝나지 않게.
+      // 개념명이 비어도(카드 미매칭) 버튼은 보여 준다 — 화면이 «방금 배운 것» 으로 부른다.
+      if(lvl >= 3 && r.explain){
+        const ex = document.createElement('button');
+        ex.className = 'msg-more explain';
+        ex.textContent = '내 말로 설명하기';
+        ex.onclick = ()=>startExplain(r.explain);
+        meta.appendChild(ex);
+      }
       const quiz = document.createElement('button');
       quiz.className = 'msg-more'; quiz.textContent = '문제로 확인';
       quiz.onclick = ()=>openPuzzle();
       meta.appendChild(quiz);
       msgEl.appendChild(meta);
     }
+    if(r.wrapUp) chatAdd('assistant', '⏳ ' + r.wrapUp, true);
     if(r.followUp) chatAdd('assistant', '💡 다음 질문: ' + r.followUp, true);
     if(r.remembered && r.remembered.length){
       toast('🧠 루미가 기억했어: ' + r.remembered.join(', '));
     }
     if(r.solved){
+      setRobotMode('cheer');   // ★ v1.58: 스스로 해결 → 로봇이 같이 기뻐한다
       chatAdd('assistant', '🌱 이해도 +3! 방이 조금 더 밝아졌어요.', true);
       if(r.summary) chatAdd('assistant', '📘 오늘의 한 줄\n' + r.summary, true);
       loadRoomState();
@@ -4746,6 +5170,45 @@ async function sendChat(solved){
 function chatSolved(){
   if(state.chatMode!=='learn') chatModeSet('learn');
   sendChat(true);
+}
+// ★ v1.50 «아이가 루미를 가르친다» — 설명은 채점하지 않는다.
+//   루미는 아이가 쓴 표현을 그대로 되받고 한 가지만 묻는다. 그 설명은 taught 기억으로 남는다.
+function startExplain(ex){
+  state.explainMode = ex || {};
+  const input = $('#chat-text'); if(!input) return;
+  const concept = state.explainMode.concept || '방금 배운 것';
+  input.value = '';
+  input.placeholder = `${concept} 이야기를 네 말로 설명해 줘`;
+  input.focus();
+  chatAdd('assistant', `${concept} 이야기를 네 말로 설명해 줄래? 루미가 들을게.`, true);
+}
+async function sendExplain(){
+  if(state.chatBusy) return;
+  const ex = state.explainMode || {};
+  const input = $('#chat-text');
+  const text = (input.value || '').trim();
+  if(text.length < 8){ toast('조금만 더 자세히 설명해 줄래?'); return; }
+  state.chatBusy = true;
+  input.value = '';
+  chatAdd('user', text);
+  chatTyping(true);
+  $('#chat-send').disabled = true;
+  try{
+    const r = await api('/api/chat/explain', { concept: ex.concept, text }, 35000);
+    chatTyping(false);
+    chatAdd('assistant', r.reply, true);
+    if(state.voiceAuto || state.voiceChat) speak(r.reply);
+    state.explainMode = null;
+    input.placeholder = '루미에게 말을 걸어 보세요';
+    toast('🧠 네 설명을 루미가 기억했어');
+  }catch(e){
+    chatTyping(false);
+    chatAdd('assistant', e.message || '설명을 받지 못했어. 다시 해 볼까?');
+  }finally{
+    state.chatBusy = false;
+    $('#chat-send').disabled = false;
+    input.focus();
+  }
 }
 
 // ★ 2026-10-28: 음성 입력(Web Speech API). 지원 브라우저에서만 동작.
@@ -5458,7 +5921,6 @@ function applySettings(){
   const rate = Math.min(1.15, Math.max(0.7, Number(localStorage.getItem('roomi_voice_rate')) || 0.9));
   const rr = $('#set-voice-rate'); if(rr) rr.value = rate;
   const rv = $('#voice-rate-val'); if(rv) rv.textContent = rate.toFixed(2);
-  syncVoiceChatBtn();
   loadVoiceOptions();
 }
 async function openParentDashboard(){
@@ -5499,6 +5961,11 @@ async function openParentDashboard(){
         <span>${(r.weekly&&r.weekly.studyDays)||0}일 공부 · ${(r.weekly&&r.weekly.solved)||0}개 해결 · ${(r.weekly&&r.weekly.chats)||0}회 대화 · ${(r.weekly&&r.weekly.games)||0}회 게임</span>
         <span class="hint">다음 주: ${(r.weekly&&r.weekly.suggestion)||'새 주제 1개 읽기'}</span>
       </div>
+      ${(r.conversationStarters && r.conversationStarters.length) ? `
+      <div class="pd-stat pd-wide pd-talk">
+        <b>오늘 아이와 나눌 말</b>
+        <ul>${r.conversationStarters.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
+      </div>` : ''}
       <div class="pd-stat pd-wide"><span>최근 7일 접속</span><div class="pd-bars">${bars}</div></div>`;
     const fc = $('#pd-fchat');
     if(fc) fc.addEventListener('change', async ()=>{
@@ -5512,236 +5979,1319 @@ async function openParentDashboard(){
   }catch(e){ box.innerHTML = `<div class="pd-stat pd-wide"><span>${e.message}</span></div>`; }
 }
 
-// ---------- ★ v1.41 고장 탐정 · 미리 고치기 ----------
-//   교수 피드백 «미니게임이 전부 유명한 장르» 에 대한 자체 장르.
-//   규칙: ① 관찰 ② 첫 판단(«처음 생각») ③ 오답은 «제외» 로 후보를 줄인다(감점 없음) ④ 복구.
-//   오답을 벌하지 않는 이유: 이 게임의 주제가 «고쳐 쓰기» 이기 때문이다.
-const RP_MACHINES = [
-  { name:'오래된 세탁기', fault:'돌리다 만 꿈',    parts:6, faults:2, decoys:0, observe:3200, amp:5.0 },
-  { name:'마을 시계탑',   fault:'늦어지는 종소리', parts:8, faults:2, decoys:1, observe:2600, amp:3.6 },
-  { name:'별빛 발전기',   fault:'꺼져 가는 불',    parts:9, faults:3, decoys:2, observe:2200, amp:2.6 }
+// ---------- ★ v1.44 정비단 본부 : «멈춘 마을을 다시 켜기» ----------
+//   한 판 게임이 아니라 날짜가 넘어가도 이어지는 마을 상태를 화면에 보여 준다.
+//   - 어제 고친 시설은 «오늘 고침» 으로 남고, 안 고친 시설은 상태 바가 더 줄어든다.
+//   - 정비는 기존 «인과 사슬» 진단을 그대로 재사용한다( rpStart({campaign:true}) ).
+//   - 셀 은 주지 않는다. 대신 등급·기록·별빛·세계 변화·내일 예고가 남는다.
+const camp = { state:null, busy:false, key:null, level:1 };
+
+async function loadCampaign(){
+  const box = $('#camp-facilities');
+  if(!box) return;
+  try{
+    const r = await api('/api/campaign/state', undefined, 15000);
+    camp.state = r;
+    renderCampaign(r);
+  }catch(e){
+    box.innerHTML = `<div class="camp-empty">마을 상태를 불러오지 못했어요. ${esc(e.message)}</div>`;
+  }
+}
+function renderCampaign(r){
+  const g = r.grade;
+  const GRADE_AT = [0, 3, 8, 15, 25];
+  const prev = g.index === 1 ? 0 : GRADE_AT[g.index-2];
+  const pct = g.nextAt ? Math.min(100, Math.round((g.repairs-prev)/(g.nextAt-prev)*100)) : 100;
+  const badge = $('#camp-badge'); if(badge) badge.textContent = g.badge;
+  const fill = $('#camp-grade-fill'); if(fill) fill.style.width = pct + '%';
+  const note = $('#camp-grade-note');
+  if(note) note.textContent = g.nextAt
+    ? `정비 ${g.repairs}회 · 다음 등급까지 ${Math.max(0, g.nextAt-g.repairs)}회`
+    : `정비 ${g.repairs}회 · 최고 등급이에요!`;
+
+  const tn = $('#camp-tomorrow-note'); if(tn) tn.textContent = r.tomorrowNote;
+  const tc = $('#camp-today-count');
+  if(tc) tc.textContent = `오늘 정비 ${r.todayCount} / ${r.dailyLimit}회 · ${r.day}`;
+
+  const at = $('#camp-act-title'); if(at) at.textContent = r.act.title;
+  const ch = $('#camp-chapter'); if(ch) ch.textContent = `CH.${r.chapter.chapter} · ${r.chapter.topic}`;
+  const ab = $('#camp-act-body'); if(ab) ab.textContent = `${r.chapter.line} ${r.act.body}`;
+
+  const box = $('#camp-facilities');
+  if(box){
+    box.innerHTML = r.facilities.map(f => {
+      const cls = f.condition >= 70 ? 'good' : (f.condition >= 40 ? 'mid' : 'bad');
+      const canFix = f.abnormal && r.todayCount < r.dailyLimit;
+      const tag = f.solvedToday ? '<span class="camp-tag done">오늘 고침 ✓</span>'
+                : f.abnormal ? '<span class="camp-tag warn">이상 발견!</span>' : '';
+      const label = f.solvedToday ? '오늘 완료'
+                  : f.abnormal ? (r.todayCount >= r.dailyLimit ? '내일 또 고치자' : '정비 시작 →')
+                  : '이상 없음';
+      const blurb = f.solvedToday ? '오늘은 다시 켜졌어! 내일도 돌고 있을 거야.'
+                  : f.abnormal ? f.blurb : '지금은 잘 돌고 있어요.';
+      return `<div class="camp-card ${f.abnormal ? 'abnormal' : ''} ${f.solvedToday ? 'solved' : ''}">
+        ${tag}
+        <div class="camp-card-top"><span class="ic">${f.icon}</span><b>${esc(f.name)}</b>
+          <span class="camp-lv">Lv.${f.level}</span></div>
+        <div class="camp-cond"><i class="${cls}" style="width:${f.condition}%"></i></div>
+        <div class="camp-meta"><span>상태 ${f.condition}%</span><span>정비 ${f.repairs}회</span></div>
+        <p class="camp-blurb">${esc(blurb)}</p>
+        <button class="btn primary small camp-btn" data-key="${f.key}" ${canFix ? '' : 'disabled'}>${label}</button>
+      </div>`;
+    }).join('');
+    $$('#camp-facilities .camp-btn').forEach(btn => btn.addEventListener('click', ()=>{
+      if(!btn.disabled) openCampaignRepair(btn.dataset.key);
+    }));
+  }
+
+  const list = $('#camp-journal-list');
+  if(list) list.innerHTML = r.journal.length
+    ? r.journal.map(j => `<div class="camp-row"><b>${esc(String(j.day).slice(5))}</b>
+        <span>${esc(j.title || '')} · ${esc(j.body || '')}</span><i>${j.lamps}등 · ${j.score}점</i></div>`).join('')
+    : '<div class="camp-empty">아직 정비 기록이 없어요. 오늘 한 곳부터 고쳐 보세요.</div>';
+  const jc = $('#camp-journal-count'); if(jc) jc.textContent = r.journal.length + '건';
+
+  const sh = $('#camp-shards'); if(sh) sh.textContent = `${r.shards} / 8`;
+  const lamps = $('#camp-lamps');
+  if(lamps) lamps.innerHTML = Array.from({length:8}, (_,i)=>
+    `<span class="camp-lamp ${i < r.shards ? 'on' : ''}">${i < r.shards ? '✦' : ''}</span>`).join('');
+}
+
+async function openCampaignRepair(key){
+  if(camp.busy) return;
+  camp.busy = true;
+  try{
+    const r = await api('/api/campaign/facility?key=' + encodeURIComponent(key), undefined, 15000);
+    camp.key = key;
+    camp.level = r.level;
+    const title = $('#repair-title');
+    if(title) title.textContent = `🛠️ ${r.facility.name} 정비 · Lv.${r.level}`;
+    const hint = $('#repair-hint');
+    if(hint) hint.textContent = '가장 위에서 멈춘 부품부터 바꿔요. 고치면 마을이 다시 켜져요.';
+    const modal = $('#game-repair');
+    if(modal) modal.classList.remove('hidden');
+    rpStart({ campaign:true, key, level:r.level });
+  }catch(e){ toast(e.message); }
+  finally{ camp.busy = false; }
+}
+
+async function submitCampaignRepair(){
+  const lamps = rp.lit ? rp.lit.size : 0;
+  const score = rp.score;
+  const spares = rp.spares;
+  const rr = $('#repair-result');
+  try{
+    const r = await api('/api/campaign/repair',
+      { key:camp.key, score, lamps, spares: 0 }, 15000);
+    rpBanner(`✓ 정비 완료 · 상태 ${r.condition}% (Lv.${r.level})`, 'ok');
+    rpNote(r.gradeUp ? `등급이 올랐어요! ${r.grade.badge}` : '정비 기록에 남겼어요. 내일도 그대로 돌고 있을 거예요.');
+    if(rr) rr.textContent = `✓ ${r.levelUp ? '레벨 업! ' : ''}${r.gradeUp ? '등급 승급! ' : ''}마을이 다시 켜졌어요`;
+    bubble(r.gradeUp ? `등급 승급! ${r.grade.badge}` : '마을이 다시 켜졌어요!');
+    await loadCampaign();
+    if(window.World && typeof window.World.refreshVillage === 'function') window.World.refreshVillage();
+    setTimeout(()=>closeGame('game-repair'), 1900);
+  }catch(e){
+    if(rr) rr.innerHTML = `<span style="color:#c92a2a">${esc(e.message)}</span>`;
+    rpNote(e.message);
+  }
+}
+
+// ---------- ★ v1.42 고장 탐정 · 멈춘 기계의 사슬 ----------
+//   피드백 «여전히 기억력 게임» → «관찰 3초 → 기억 → 점 선택» 을 버리고 «인과 진단» 으로 바꿨다.
+//   전기는 왼쪽(발전기)에서 오른쪽(램프)으로 흐르고, 고장 부품은 그 자리에서 길을 막아
+//   뒤쪽을 모두 세운다. 아이는 «가장 위에서 멈춘 부품» 을 찾고, 새 부품은 고장 수보다 적어
+//   «어느 가지를 살릴지» 선택해야 한다. 화면의 정보는 사라지지 않으므로 기억력은 쓰이지 않는다.
+const RP_TOTAL = 90;
+const RP_LAMP_SCORE = 150, RP_CLEAR_SCORE = 120, RP_SPARE_SCORE = 60, RP_TIME_SCORE = 2;
+
+// ★ v1.46 난이도: «초록 구간» 안에서 손을 떼야 성공. 레벨이 오를수록 구간이 좁고 빨라진다.
+//   speed = 100ms 당 충전량(6 = 초당 60) · heat = 초당 과열 · power = 전력 상한
+const RP_ZONES = [
+  { lo:55, hi:95, speed:6,  heat:5,  power:100 },   // Lv.1 — 넓고 느림(학습)
+  { lo:68, hi:92, speed:8,  heat:8,  power:85  },   // Lv.2 — 좁아지고 빨라짐
+  { lo:75, hi:90, speed:10, heat:12, power:70  }    // Lv.3 — 좁고 빠르고 뜨거움
 ];
-const RP_ICONS = ['⚙️','🔧','💡','🔌','🧲','⏱️','🔩','🧪','🔋'];
-const RP_TOTAL = 90;   // 3대를 합쳐 90초 — 한 판이 길어지지 않게
+function rpCfg(){ return RP_ZONES[Math.max(0, Math.min(2, rp.idx))] || RP_ZONES[0]; }
+
+const RP_MACHINES = [
+  {
+    name: '오래된 세탁기', spares: 2, faults: ['b'],
+    nodes: [
+      { id:'p',  x:8,  y:50, kind:'power', icon:'⚡', label:'전원' },
+      { id:'a',  x:26, y:50, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'b',  x:47, y:24, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'c',  x:47, y:76, kind:'pump',  icon:'💧', label:'펌프' },
+      { id:'L1', x:77, y:24, kind:'lamp',  icon:'💡', label:'램프' },
+      { id:'L2', x:77, y:76, kind:'lamp',  icon:'💡', label:'램프' }
+    ],
+    edges: [['p','a'],['a','b'],['a','c'],['b','L1'],['c','L2']]
+  },
+  {
+    name: '마을 시계탑', spares: 2, faults: ['c','d'],
+    nodes: [
+      { id:'p',  x:7,  y:50, kind:'power', icon:'⚡', label:'전원' },
+      { id:'a',  x:22, y:50, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'b',  x:42, y:20, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'c',  x:42, y:50, kind:'valve', icon:'🔧', label:'밸브' },
+      { id:'d',  x:58, y:50, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'e',  x:42, y:80, kind:'pump',  icon:'💧', label:'펌프' },
+      { id:'L1', x:74, y:20, kind:'lamp',  icon:'💡', label:'종' },
+      { id:'L2', x:83, y:50, kind:'lamp',  icon:'💡', label:'램프' },
+      { id:'L3', x:74, y:80, kind:'lamp',  icon:'💡', label:'램프' }
+    ],
+    edges: [['p','a'],['a','b'],['a','c'],['a','e'],['b','L1'],['c','d'],['d','L2'],['e','L3']]
+  },
+  {
+    name: '별빛 발전기', spares: 2, faults: ['b','d','e'],
+    nodes: [
+      { id:'p',  x:6,  y:50, kind:'power', icon:'⚡', label:'전원' },
+      { id:'a',  x:19, y:50, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'b',  x:37, y:15, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'c',  x:37, y:50, kind:'valve', icon:'🔧', label:'밸브' },
+      { id:'d',  x:53, y:50, kind:'pump',  icon:'💧', label:'펌프' },
+      { id:'e',  x:37, y:85, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'f',  x:53, y:85, kind:'gear',  icon:'⚙️', label:'기어' },
+      { id:'g',  x:67, y:85, kind:'valve', icon:'🔧', label:'밸브' },
+      { id:'L1', x:72, y:15, kind:'lamp',  icon:'💡', label:'램프' },
+      { id:'L2', x:80, y:50, kind:'lamp',  icon:'💡', label:'램프' },
+      { id:'L3', x:88, y:85, kind:'lamp',  icon:'💡', label:'램프' }
+    ],
+    edges: [['p','a'],['a','b'],['a','c'],['a','e'],['b','L1'],['c','d'],['d','L2'],
+            ['e','f'],['f','g'],['g','L3']]
+  }
+];
 
 const rp = {
-  idx:0, score:0, fixed:0, tries:0, miss:0, firstHits:0, machinesDone:0,
-  phase:'idle', faults:[], decoys:[], ruled:[],
-  time:RP_TOTAL, clock:null, observeT:null, timers:[], submitted:false
+  idx: 0, score: 0, time: RP_TOTAL, spares: 0, litCount: 0,
+  // training = 3대 90초 연습 / campaign = 본부에서 호출한 «한 대» 정비 임무
+  phase: 'idle', mode: 'training', campKey: null,
+  fixed: new Set(), lit: new Set(),
+  // v1.45 «손으로 고치기»: 점선택이 아니라 «꾹 눌러 충전» + 전력/과열 관리
+  power: 100, powerMax: 100, heat: {}, locked: new Set(), repair: null,
+  clock: null, timers: [], submitted: false
 };
 
-function rpShuffle(a){
-  for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
-  return a;
-}
-// 검증용 상태 노출(대세계의 window.__worldState 와 같은 방식)
-function rpSym(){
-  try{
+function rpMachine() { return RP_MACHINES[rp.idx] || RP_MACHINES[0]; }
+function rpNode(id) { return rpMachine().nodes.find(n => n.id === id) || null; }
+function rpLabelOf(id) { const n = rpNode(id); return n ? n.label : id; }
+// 검증용 상태 — 대세계의 window.__worldState 와 같은 방식
+function rpSym() {
+  try {
+    const m = rpMachine();
+    const s = rpSolve(m);
     window.__repairState = {
-      phase:rp.phase, idx:rp.idx, score:rp.score, fixed:rp.fixed,
-      tries:rp.tries, firstHits:rp.firstHits, machinesDone:rp.machinesDone,
-      faults:rp.faults.slice(), decoys:rp.decoys.slice(), ruled:rp.ruled.slice(),
-      miss:rp.miss,
-      time:Math.round(rp.time*10)/10, parts:(RP_MACHINES[rp.idx]||{}).parts||0
+      phase: rp.phase, idx: rp.idx, score: rp.score, spares: rp.spares,
+      mode: rp.mode, campKey: rp.campKey,
+      power: Math.round(rp.power), heat: Object.assign({}, rp.heat),
+      locked: [...rp.locked],
+      repair: rp.repair ? { id: rp.repair.id, p: Math.round(rp.repair.p), holding: rp.repair.holding } : null,
+      time: Math.round(rp.time * 10) / 10,
+      faults: m.faults.slice(), fixed: [...rp.fixed], lit: [...rp.lit],
+      live: [...s.live], faultSet: [...s.faultSet],
+      parts: m.nodes.length, lamps: m.nodes.filter(n => n.kind === 'lamp').length,
+      litCount: rp.litCount
     };
-  }catch(e){}
+  } catch (e) { }
 }
-function rpBanner(text, kind){
+function rpBanner(text, kind) {
   const el = $('#repair-banner');
-  if(!el) return;
+  if (!el) return;
   el.className = 'repair-banner' + (kind ? ' ' + kind : '');
   el.textContent = text;
 }
-function rpNote(text){
+function rpNote(text) {
   const el = $('#repair-note');
-  if(el) el.textContent = text;
+  if (el) el.textContent = text;
 }
 let _rpAudio = null;
-function rpBeep(freq, dur, type){
-  // 소리는 «보상 피드백» 일 뿐이다. 재생 실패/무음 환경에서도 게임은 그대로 진행된다.
-  try{
-    if(!_rpAudio) _rpAudio = new (window.AudioContext || window.webkitAudioContext)();
+function rpBeep(freq, dur, type) {
+  // 소리는 «보상 피드백» 일 뿐이다. 무음/차단 환경에서도 게임은 그대로 돈다.
+  try {
+    if (!_rpAudio) _rpAudio = new (window.AudioContext || window.webkitAudioContext)();
     const o = _rpAudio.createOscillator(), g = _rpAudio.createGain();
     o.type = type || 'sine';
     o.frequency.value = freq;
     g.gain.value = 0.045;
     o.connect(g); g.connect(_rpAudio.destination);
     o.start(); o.stop(_rpAudio.currentTime + (dur || 0.09));
-  }catch(e){}
+  } catch (e) { }
 }
-function rpChime(){
-  [523, 659, 784].forEach((f, i)=>setTimeout(()=>rpBeep(f, 0.12, 'triangle'), i*110));
+function rpChime() {
+  [523, 659, 784].forEach((f, i) => setTimeout(() => rpBeep(f, 0.12, 'triangle'), i * 110));
 }
-function rpUpdateHud(){
-  const s = $('#rp-score'); if(s) s.textContent = String(rp.score);
-  const f = $('#rp-fixed'); if(f) f.textContent = String(rp.fixed);
-  const t = $('#rp-time'); if(t) t.textContent = String(Math.ceil(rp.time));
-  const m = $('#rp-machines'); if(m) m.textContent = `${Math.min(rp.idx+1, RP_MACHINES.length)}/${RP_MACHINES.length}`;
+function rpUpdateHud() {
+  const s = $('#rp-score'); if (s) s.textContent = String(rp.score);
+  const t = $('#rp-time'); if (t) t.textContent = String(Math.ceil(rp.time));
+  const p = $('#rp-power'); if (p) p.textContent = String(Math.round(rp.power));
+  const pf = $('#rp-powerfill'); if (pf) pf.style.width = Math.round(rp.power) + '%';
+  const m = $('#rp-machines'); if (m) m.textContent = `${rp.idx + 1}/${RP_MACHINES.length}`;
 }
-function rpStopClock(){ if(rp.clock){ clearInterval(rp.clock); rp.clock = null; } }
-function rpStopTimers(){
-  if(rp.observeT){ clearTimeout(rp.observeT); rp.observeT = null; }
-  (rp.timers || []).forEach(t=>clearTimeout(t));
+function rpStopClock() { if (rp.clock) { clearInterval(rp.clock); rp.clock = null; } }
+function rpStopTimers() {
+  (rp.timers || []).forEach(t => clearTimeout(t));
   rp.timers = [];
 }
-function rpStop(){
+function rpStop() {
   rpStopClock(); rpStopTimers();
   rp.phase = 'idle';
   rp.time = RP_TOTAL;
+  rp.power = 100; rp.heat = {}; rp.locked = new Set(); rp.repair = null;
   rpSym();
 }
-function openRepair(){
+// 전원에서 시작해 «고장 부품을 만나면 멈추는» BFS.
+// 고장 부품 자신은 live 에 들어간다(전기는 들어오지만 통과는 못 한다) → 빨간색으로 표시된다.
+function rpSolve(m) {
+  const faultSet = new Set(m.faults.filter(id => !rp.fixed.has(id)));
+  const adj = {};
+  m.edges.forEach(([a, b]) => { (adj[a] = adj[a] || []).push(b); });
+  const live = new Set(['p']);
+  const q = ['p'];
+  while (q.length) {
+    const cur = q.shift();
+    if (faultSet.has(cur)) continue;
+    for (const nx of adj[cur] || []) {
+      if (!live.has(nx)) { live.add(nx); q.push(nx); }
+    }
+  }
+  return { live, faultSet };
+}
+function rpUpstreamFaulty(id, m, faultSet) {
+  const rev = {};
+  m.edges.forEach(([a, b]) => { (rev[b] = rev[b] || []).push(a); });
+  const seen = new Set();
+  const q = [...(rev[id] || [])];
+  while (q.length) {
+    const cur = q.shift();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    if (faultSet.has(cur)) return cur;
+    (rev[cur] || []).forEach(x => q.push(x));
+  }
+  return null;
+}
+function rpFlash(id) {
+  const el = $(`.rp-node[data-id="${id}"]`);
+  if (!el) return;
+  el.classList.add('rp-flash');
+  rp.timers.push(setTimeout(() => el.classList.remove('rp-flash'), 700));
+}
+// 100ms 마다: 전력 회복 → 과열 → 수리 진행 → 화면 갱신
+function rpTick(){
+  if(rp.phase !== 'play') return;
+  const m = rpMachine();
+  const { faultSet } = rpSolve(m);
+  const holding = !!(rp.repair && rp.repair.holding);
+  // 전력을 쓰는 동안에는 회복하지 않는다 → «쉬어 가며 고치기» 가 생긴다
+  if(!holding) rp.power = Math.min(100, rp.power + 1.2);
+  const rate = [5, 7, 9][Math.max(0, Math.min(2, rp.idx))] || 5;
+  faultSet.forEach(id => {
+    const h = Math.min(100, (rp.heat[id] || 0) + rate * 0.1);
+    rp.heat[id] = h;
+    if(h >= 100) rp.locked.add(id);
+  });
+  if(rp.repair){
+    if(rp.repair.holding){
+      if(rp.power <= 0){
+        rp.repair.holding = false;
+        rpNote('전력이 떨어졌어요. 잠깐 쉬었다가 다시 눌러요.');
+      } else {
+        rp.power = Math.max(0, rp.power - 1.2);
+        // 과열로 «잠긴» 부품은 손이 두 배 더 든다 — 늦게 발견한 대가
+        rp.repair.p += rp.locked.has(rp.repair.id) ? 3 : 6;
+      }
+    } else {
+      rp.repair.p -= 9;
+    }
+    if(rp.repair.p >= 100){
+      const id = rp.repair.id;
+      rp.fixed.add(id);
+      rp.heat[id] = 0;
+      rp.locked.delete(id);
+      rp.repair = null;
+      rpBeep(760, 0.1, 'triangle');
+      const res = rpPaint();
+      rpNote(`«${rpLabelOf(id)}» 을 고쳤어요!`);
+      if(res.allLit) rpMachineClear();
+    } else if(rp.repair.p <= 0){
+      rp.repair = null;
+    }
+  }
+  rpPaintStatus();
+  rpUpdateHud();
+}
+function rpPaintStatus(){
+  const host = $('#repair-machine');
+  if(!host) return;
+  host.querySelectorAll('.rp-node').forEach(el => {
+    const id = el.dataset.id;
+    const ring = el.querySelector('.rp-ring');
+    if(ring) ring.style.setProperty('--p', String(rp.repair && rp.repair.id === id ? Math.round(rp.repair.p) : 0));
+    const heat = el.querySelector('.rp-heat');
+    if(heat) heat.style.setProperty('--h', String(Math.round(rp.heat[id] || 0)));
+    el.classList.toggle('locked', rp.locked.has(id));
+    el.classList.toggle('fixing', !!(rp.repair && rp.repair.id === id && rp.repair.holding));
+  });
+  rpSym();   // 100ms 마다 갱신되는 실제 상태를 검증/디버그에서도 볼 수 있게
+}
+function rpPressStart(id){
+  if(rp.phase !== 'play') return;
+  const n = rpNode(id);
+  if(!n) return;
+  if(n.kind === 'power') return rpNote('전원은 그대로예요.');
+  if(n.kind === 'lamp') return rpNote('램프는 고칠 수 없어요. 전기가 오는 길을 찾아보세요.');
+  if(rp.fixed.has(id)) return rpNote('이미 고친 부품이에요.');
+  const m = rpMachine();
+  const { faultSet } = rpSolve(m);
+  if(!faultSet.has(id)){
+    const up = rpUpstreamFaulty(id, m, faultSet);
+    if(up){ rpNote(`«${rpLabelOf(up)}» 이 먼저예요. 위에서 길이 막혀 있어요.`); rpFlash(up); }
+    else rpNote('여기는 전기가 지나가고 있어요. 다른 곳을 보세요.');
+    return;
+  }
+  const up = rpUpstreamFaulty(id, m, faultSet);
+  if(up){ rpNote(`«${rpLabelOf(up)}» 이 먼저예요. 그곳이 막고 있어요.`); rpFlash(up); return; }
+  if(rp.power < 10) return rpNote('전력이 부족해요. 잠깐 기다려요.');
+  if(rp.repair && rp.repair.id !== id) rp.repair = null;
+  rp.repair = { id, p: (rp.repair && rp.repair.id === id) ? rp.repair.p : 0, holding: true };
+  rpNote('꾹 누르고 있어요… 초록 테두리가 가득 차면 손을 떼요.');
+  rpPaintStatus();
+}
+function rpPressEnd(){
+  if(rp.repair) rp.repair.holding = false;
+}
+function rpBuild() {
+  const m = rpMachine();
+  const host = $('#repair-machine');
+  if (!host) return;
+  host.innerHTML = '';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'rp-links');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  m.edges.forEach(([a, b]) => {
+    const na = rpNode(a), nb = rpNode(b);
+    if (!na || !nb) return;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', na.x); line.setAttribute('y1', na.y);
+    line.setAttribute('x2', nb.x); line.setAttribute('y2', nb.y);
+    line.dataset.edge = a + '>' + b;
+    svg.appendChild(line);
+  });
+  host.appendChild(svg);
+  m.nodes.forEach(n => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'rp-node';
+    btn.dataset.id = n.id;
+    btn.style.left = n.x + '%';
+    btn.style.top = n.y + '%';
+    btn.setAttribute('aria-label', n.label);
+    if (n.kind === 'lamp') btn.classList.add('lamp');
+    if (n.kind === 'power') btn.classList.add('power');
+    btn.innerHTML = `<span aria-hidden="true">${n.icon}</span><small>${n.label}</small>
+      <i class="rp-ring" aria-hidden="true"></i><i class="rp-heat" aria-hidden="true"></i>`;
+    // v1.45: «꾹 누르기» — 누르고 있는 동안만 수리가 차오른다(손을 떼면 되돌아간다).
+    btn.addEventListener('pointerdown', e => { e.preventDefault(); rpPressStart(n.id); });
+    btn.addEventListener('pointerup', e => { e.preventDefault(); rpPressEnd(); });
+    btn.addEventListener('pointerleave', rpPressEnd);
+    btn.addEventListener('pointercancel', rpPressEnd);
+    host.appendChild(btn);
+  });
+}
+// 상태를 칠하고, 새로 켜진 등을 점수로 바꾼다. 반환값은 이번 판정 결과.
+function rpPaint() {
+  const m = rpMachine();
+  const { live, faultSet } = rpSolve(m);
+  const host = $('#repair-machine');
+  if (!host) return { lamps: [], allLit: false };
+  host.querySelectorAll('.rp-node').forEach(el => {
+    const id = el.dataset.id;
+    const n = rpNode(id);
+    if (!n) return;
+    el.classList.remove('live', 'dead', 'faulty', 'fixed', 'overload');
+    if (n.kind === 'power') { el.classList.add('live'); return; }
+    if (faultSet.has(id)) { el.classList.add('faulty'); return; }
+    if (rp.fixed.has(id)) { el.classList.add('fixed', 'live'); return; }
+    if (live.has(id)) { el.classList.add('live'); return; }
+    el.classList.add(n.kind === 'lamp' ? 'dead' : 'overload');
+  });
+  host.querySelectorAll('line').forEach(line => {
+    const [a, b] = String(line.dataset.edge || '').split('>');
+    // 선은 «양끝에 전기가 있고, 앞쪽이 고장이 아닐 때» 흐른다.
+    const on = live.has(a) && live.has(b) && !faultSet.has(a);
+    line.classList.toggle('live', on);
+  });
+  const lamps = m.nodes.filter(n => n.kind === 'lamp');
+  const litNow = lamps.filter(n => live.has(n.id)).map(n => n.id);
+  litNow.forEach(id => {
+    if (!rp.lit.has(id)) {
+      rp.lit.add(id);
+      rp.litCount++;
+      rp.score += RP_LAMP_SCORE;
+    }
+  });
+  rpUpdateHud(); rpPaintStatus(); rpSym();
+  return { lamps, allLit: litNow.length === lamps.length };
+}
+function openRepair() {
   const modal = $('#game-repair');
-  if(!modal) return;
+  if (!modal) return;
   rpStop();
-  rp.idx = 0; rp.score = 0; rp.fixed = 0; rp.tries = 0;
-  rp.firstHits = 0; rp.machinesDone = 0; rp.submitted = false;
-  const host = $('#repair-machine'); if(host) host.innerHTML = '';
-  const rr = $('#repair-result'); if(rr) rr.innerHTML = '';
-  const btn = $('#repair-go'); if(btn){ btn.textContent = '시작하기'; btn.disabled = false; }
+  rp.mode = 'training'; rp.campKey = null;
+  rp.idx = 0; rp.score = 0; rp.spares = 0; rp.litCount = 0;
+  rp.fixed = new Set(); rp.lit = new Set(); rp.submitted = false;
+  const title = $('#repair-title'); if (title) title.textContent = '🛠️ 고장 탐정 · 멈춘 기계의 사슬';
+  const hint = $('#repair-hint');
+  if (hint) hint.textContent = '전기가 지나가는 길을 따라가며 «가장 위에서 멈춘 부품» 을 찾아요. 위를 고치면 아래도 함께 살아나요. 대신 새 부품은 한정되어 있어요.';
+  const host = $('#repair-machine'); if (host) host.innerHTML = '';
+  const rr = $('#repair-result'); if (rr) rr.innerHTML = '';
+  const btn = $('#repair-go'); if (btn) { btn.textContent = '시작하기'; btn.disabled = false; }
   rpBanner('준비되면 «시작하기» 를 눌러요');
-  rpNote('빨갛게 떨리는 부품이 «고장» 이에요. 잠깐 보여 주고 사라져요.');
+  rpNote('빨간 부품이 «멈춘 곳» 이에요. 전원에서 램프까지 길을 따라가 보세요.');
   rpUpdateHud();
   rpSym();
   modal.classList.remove('hidden');
 }
-function rpStart(){
+function rpStart(opts) {
+  // 본부 임무는 «한 대만» 고친다. 90초 시계도, 3대 연속도 없다.
+  const isCamp = !!(opts && opts.campaign);
   rpStopTimers();
-  rp.idx = 0; rp.score = 0; rp.fixed = 0; rp.tries = 0;
-  rp.firstHits = 0; rp.machinesDone = 0; rp.submitted = false;
-  rp.time = RP_TOTAL;
-  // 진행 중에는 «다시 시작» 을 잠근다. 한 판 도중 실수로 눌러 판이 리셋되는 것을 막는다.
-  const btn = $('#repair-go'); if(btn){ btn.textContent = '진행 중…'; btn.disabled = true; }
-  const rr = $('#repair-result'); if(rr) rr.innerHTML = '';   // 지난 판의 보상 문구가 남지 않게
-  rpUpdateHud();
-  rpLoadMachine(0);
+  rp.mode = isCamp ? 'campaign' : 'training';
+  rp.campKey = isCamp ? opts.key : null;
+  rp.idx = isCamp
+    ? Math.max(0, Math.min(RP_MACHINES.length - 1, (Number(opts.level) || 1) - 1))
+    : 0;
+  rp.score = 0; rp.time = isCamp ? 60 : RP_TOTAL; rp.litCount = 0;
+  rp.power = 100; rp.heat = {}; rp.locked = new Set(); rp.repair = null;
+  rp.fixed = new Set(); rp.lit = new Set(); rp.submitted = false;
+  const btn = $('#repair-go');
+  if (btn) { btn.textContent = '진행 중…'; btn.disabled = true; }
+  const rr = $('#repair-result'); if (rr) rr.innerHTML = '';
+  rpLoadMachine();
   rpStopClock();
-  rp.clock = setInterval(()=>{
+  if (isCamp) {
+    const fac = ((camp.state && camp.state.facilities) || []).find(f => f.key === rp.campKey);
+    if (fac) rpBanner(`🔧 ${fac.name} 정비 · Lv.${rp.idx + 1}`, 'warn');
+  }
+  rp.clock = setInterval(() => {
+    if (rp.phase !== 'play') return;
     rp.time = Math.max(0, rp.time - 0.1);
-    const t = $('#rp-time'); if(t) t.textContent = String(Math.ceil(rp.time));
-    if(rp.time <= 0){ rpStopClock(); rpEnd(); }
+    const t = $('#rp-time'); if (t) t.textContent = String(Math.ceil(rp.time));
+    rpTick();
+    if (rp.time <= 0) { rpStopClock(); rpEnd(); }
   }, 100);
 }
-function rpLoadMachine(i){
-  const m = RP_MACHINES[i];
-  if(!m) return rpEnd();
-  rp.idx = i; rp.phase = 'observe';
-  rp.faults = []; rp.decoys = []; rp.ruled = [];
-  rp.machineFixed = 0;
-  // ★ «첫 판단» 보너스는 기계마다 새로 센다. 이전 기계의 오답이 다음 기계까지 끌려가면
-  //   한 번 틀린 아이가 남은 두 대에서 영구히 보너스를 못 받는다(실제로 그 버그가 있었다).
-  rp.miss = 0;
-  const host = $('#repair-machine');
-  if(!host) return;
-  host.innerHTML = '';
-
-  const core = document.createElement('div');
-  core.className = 'rp-core busy'; core.id = 'rp-core';
-  core.innerHTML = '<span aria-hidden="true">⚙️</span><small>기계</small>';
-  host.appendChild(core);
-
-  const order = rpShuffle([...Array(m.parts).keys()]);
-  rp.faults = order.slice(0, m.faults).sort((a, b)=>a-b);
-  rp.decoys = order.slice(m.faults, m.faults + m.decoys).sort((a, b)=>a-b);
-
-  const R = 41;
-  for(let k=0;k<m.parts;k++){
-    const ang = -Math.PI/2 + k * 2 * Math.PI / m.parts;
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'repair-part locked';
-    b.dataset.i = String(k);
-    b.style.left = (50 + Math.cos(ang) * R) + '%';
-    b.style.top = (50 + Math.sin(ang) * R) + '%';
-    b.setAttribute('aria-label', `${k+1}번 부품`);
-    b.innerHTML = `<span aria-hidden="true">${RP_ICONS[k % RP_ICONS.length]}</span>`;
-    if(rp.faults.includes(k)){
-      b.classList.add('shake');
-      b.style.setProperty('--amp', m.amp + 'px');
-    } else if(rp.decoys.includes(k)){
-      // 정상인데 살짝 흔들리는 «헷갈리는» 부품 — 진폭이 고장의 45% 라 비교해야 한다.
-      b.classList.add('decoy');
-      b.style.setProperty('--amp', (m.amp * 0.45).toFixed(1) + 'px');
-    }
-    b.addEventListener('click', ()=>rpPick(k, b));
-    host.appendChild(b);
-  }
-
-  rpBanner(`① 관찰 · ${m.name} — ${m.faults}곳이 이상해요`, 'warn');
-  rpNote(`«${m.fault}» · 빨갛게 떨리는 부품을 기억해 두세요.`);
-  rpUpdateHud();
+function rpLoadMachine() {
+  const m = rpMachine();
+  rp.phase = 'play';
+  rp.fixed = new Set();
+  rp.lit = new Set();
+  rp.spares = m.spares;
+  rp.power = 100; rp.heat = {}; rp.locked = new Set(); rp.repair = null;
+  rpBuild();
+  const res = rpPaint();
+  rpBanner(`① ${m.name} — 어디서 멈췄나요?`, 'warn');
+  rpNote(`전력 100 · 등 ${res.lamps.length}개 · 빨간 부품을 «꾹 눌러» 고쳐요.`);
   rpSym();
-
-  rp.observeT = setTimeout(()=>{
-    $$('#repair-machine .repair-part').forEach(el=>{
-      el.classList.remove('shake', 'decoy', 'locked');
-    });
-    const c = $('#rp-core'); if(c) c.classList.remove('busy');
-    rp.phase = 'diagnose';
-    rpBanner('② 진단 · 이상했던 부품을 하나씩 골라요');
-    rpNote('틀려도 괜찮아요. 틀린 곳은 «제외» 되어 후보가 줄어요. 점수는 그대로예요.');
-    rpSym();
-  }, m.observe);
 }
-function rpPick(i, el){
-  if(rp.phase !== 'diagnose' || !el) return;
-  if(el.classList.contains('fixed') || el.classList.contains('ruled')) return;
-  const clean = rp.miss === 0;   // «이 기계에서» 한 번도 틀리지 않았을 때만 첫 판단 보너스
-  if(rp.faults.includes(i)){
-    el.classList.remove('shake', 'decoy');
-    el.classList.add('fixed');
-    rp.fixed++; rp.machineFixed = (rp.machineFixed || 0) + 1;
-    let gain = 120;
-    if(clean){ gain += 60; rp.firstHits++; }
-    rp.score += gain;
-    rpBeep(680, 0.09, 'triangle');
-    rpNote(clean ? `정확해요! «처음 생각» 이 맞았어요. +${gain}점`
-                 : `고쳤어요! +${gain}점 — 틀린 것도 기억하고 있어요.`);
-    rpUpdateHud(); rpSym();
-    if(rp.machineFixed >= rp.faults.length) rpMachineClear();
-  }else{
-    el.classList.add('ruled');
-    rp.ruled.push(i); rp.tries++; rp.miss++;
-    rpBeep(196, 0.10, 'sine');
-    const left = Math.max(0, RP_MACHINES[rp.idx].parts - rp.ruled.length - rp.fixed);
-    rpNote(`여기는 아니었어요. «제외» 했어요 — 남은 후보 ${left}곳. 점수는 줄지 않아요.`);
-    rpUpdateHud(); rpSym();
-  }
-}
-function rpMachineClear(){
-  if(rp.phase === 'machineDone' || rp.phase === 'over') return;
+// v1.45: 예전 «한 번 클릭» 호출과의 호환용. 실제 수리는 «꾹 누르기» 로만 진행된다.
+function rpTap(id) { rpPressStart(id); }
+function rpMachineClear() {
+  if (rp.phase !== 'play') return;
   rp.phase = 'machineDone';
-  rp.machinesDone++;
-  rp.score += 100;
-  const m = RP_MACHINES[rp.idx];
-  rpBanner(`✓ 복구 완료 · ${m.name}`, 'ok');
-  rpNote('기계가 다시 움직여요. 완전 복구 보너스 +100점.');
+  rp.score += RP_CLEAR_SCORE;
+  rpBanner(`✓ ${rpMachine().name} 복구 완료`, 'ok');
+  rpNote(`남은 전력 ${Math.round(rp.power)} · 다음 기계도 «꾹 눌러» 고쳐요.`);
   rpUpdateHud(); rpSym();
   rpChime();
-  rp.timers.push(setTimeout(()=>{
-    if(rp.idx + 1 < RP_MACHINES.length) rpLoadMachine(rp.idx + 1);
-    else rpEnd();
-  }, 1500));
+  rp.timers.push(setTimeout(rpNext, 1600));
 }
-function rpEnd(){
-  if(rp.phase === 'over') return;
+function rpMachineGiveUp() {
+  if (rp.phase !== 'play') return;
+  rp.phase = 'machineDone';
+  rpBanner(`전력이 바닥났어요 · ${rpMachine().name}`, 'warn');
+  rpNote('다음 기계에서는 «가장 위» 부품부터, 전력을 아끼며 고쳐 보세요.');
+  rpUpdateHud(); rpSym();
+  rp.timers.push(setTimeout(rpNext, 1600));
+}
+function rpNext() {
+  if (rp.mode === 'campaign') return rpEnd();
+  if (rp.idx + 1 < RP_MACHINES.length) {
+    rp.idx++;
+    rpLoadMachine();
+  } else {
+    rpEnd();
+  }
+}
+function rpEnd() {
+  if (rp.phase === 'over') return;
   rpStopClock(); rpStopTimers();
   rp.phase = 'over';
-  const left = Math.max(0, Math.round(rp.time));
-  const bonus = left * 4;
+  const isCamp = rp.mode === 'campaign';
+  const bonus = isCamp ? 0 : Math.max(0, Math.round(rp.time)) * RP_TIME_SCORE;
   rp.score += bonus;
-  rpBanner(`정산 · ${rp.score}점 (남은 시간 +${bonus})`, 'ok');
-  rpNote(`처음 생각 ${rp.tries + rp.fixed}번 · 바로 맞힌 부품 ${rp.firstHits}개 · 복구한 기계 ${rp.machinesDone}/3대`);
+  const totalLamps = isCamp
+    ? rpMachine().nodes.filter(n => n.kind === 'lamp').length
+    : RP_MACHINES.reduce((a, m) => a + m.nodes.filter(n => n.kind === 'lamp').length, 0);
+  if (!isCamp) rpBanner(`정산 · ${rp.score}점 (남은 시간 +${bonus})`, 'ok');
+  rpNote(`켠 등 ${rp.litCount}/${totalLamps} · 남은 전력 ${Math.round(rp.power)}`);
   rpUpdateHud(); rpSym();
   const btn = $('#repair-go');
-  if(btn){ btn.disabled = false; btn.textContent = '다시 시작'; }
-  if(!rp.submitted && rp.score >= 100){
+  if (btn) { btn.disabled = false; btn.textContent = '다시 시작'; }
+  if (isCamp) {
+    // 본부 임무는 /api/game/result 가 아니라 «마을 상태» 를 갱신한다.
+    rp.submitted = true;
+    submitCampaignRepair();
+    return;
+  }
+  if (!rp.submitted && rp.score >= 100) {
     rp.submitted = true;
     submitGameResult('repair', { score: rp.score }, btn);
   }
 }
+// ══════════════════════════════════════════════════════════════════════════
+// ★ v1.46 «빛의 병 정리» — 참고 이미지(레벨 16 · 색 층 병 · 되돌리기/섞기/빈 병 추가)
+//   의 «물병 색 맞추기» 규칙을 도로랜드로 가져온 레벨형 퍼즐.
+//
+//   그대로 가져온 규칙: 위쪽 같은 색 덩어리만 / 빈 병 또는 같은 색 위로 / 병 4층 / 색 모으면 완성.
+//   우리 규칙(복제가 되지 않게 얹은 두 가지):
+//     1) «고장 난 병»  : 빈 병 하나가 금이 가 있다. 꾹 눌러 고쳐야 열린다(v1.45 손으로 고치기 계승, 전력 30).
+//     2) «헤맨 부음»   : 판을 더 섞는 붓기는 감점 없이 기록되고, 3번마다 힌트 1개가 된다(v1.39 오답을 자산으로).
+//   난이도: 레벨이 오를수록 색 3→8, 빈 병 2→1, 고장 난 병 등장. 도구는 레벨마다 2/3/3/3.
+//   경제: 셀을 주지 않는다(일 상한 393 < 일회성 상품 400). 보상은 레벨·별·기록 자체다.
+//   ★ 무작위로 섞으면 «풀 수 없는 판» 이 나온다. 그래서 «이미 완성된 상태에서 역방향으로 붓기» 로
+//     판을 만들고, 매 판을 solver 로 다시 검증한 뒤에만 시작한다.
+// ══════════════════════════════════════════════════════════════════════════
+const SORT_CAP = 4;
+const SORT_VAULT_CAP = 2;                 // «보관 병» 은 어떤 색이든 2층까지만 잠시 담는다
+const SORT_TOOL_COST = { undo:4, shuffle:6, bottle:8, hint:5, charge:6 };
+const SORT_COLORS = [
+  { c:'#7ed957', sym:'●', name:'풀빛' }, { c:'#3b82f6', sym:'▲', name:'물빛' },
+  { c:'#ffd43b', sym:'■', name:'해빛' }, { c:'#fb5b78', sym:'◆', name:'불빛' },
+  { c:'#ff8c32', sym:'★', name:'노을빛' }, { c:'#9b6cf0', sym:'✿', name:'보라빛' },
+  { c:'#ff7ac6', sym:'⬟', name:'분홍빛' }, { c:'#8ea6d6', sym:'✦', name:'구름빛' }
+];
+const SORT_STORE = 'roomi_sort_progress_v1';
+const sort = {
+  phase:'idle', level:1, colors:3, bottles:[], locked:new Set(), broken:-1,
+  vault:-1,                                    // ★ v1.47 보관 병 index (L2+)
+  sel:null, moves:0, par:0, solution:[], guaranteed:[], stars:0,
+  tools:{ undo:1, shuffle:1, bottle:1, hint:1, charge:1 }, power:100,
+  shards:0, toolUses:0,                        // ★ 빛 조각 · 제작소
+  pressure:0, surges:0, blackout:0,           // ★ 서지 압력 · 정전(조각 획득 정지 수)
+  orders:[], order:null, orderDone:false, orderFailed:false, firstColor:-1, missions:0,
+  mode:'level', timeLeft:0, streak:0, bestStreak:0, clock:null,   // ★ v1.48 도전 모드
+  wanders:0, earnedHints:0, history:[], hintCells:[], pourTarget:-1,
+  repairing:null, timer:null, justRepaired:false, submitted:false,
+  serverProgress:null, note:''
+};
+
+function sortCfg(lv){
+  return {
+    colors: Math.min(8, 2 + Math.ceil(lv/2)),   // L1~2:3색, L3~4:4색 … L11~:8색
+    free: lv >= 9 ? 1 : 2,                     // 고레벨은 자유 빈 병이 하나 줄어든다
+    broken: lv >= 4 ? 1 : 0                    // L4부터 «금이 간 병» 등장
+  };
+}
+function sortPressureStep(lv){ return lv>=9 ? 12 : lv>=4 ? 10 : 8; }
+// 한 병 안의 «색 덩어리» 수.
+function sortRuns(b){ let r=0, p=-1; for(const c of b){ if(c!==p){ r++; p=c; } } return r; }
+// ★ 합법적인 붓기는 색 덩어리 수를 «절대 늘리지 않는다»(덩어리가 합쳐지거나 빈 병에 생길 뿐).
+//   그래서 «늘어남» 을 헤맨 부음으로 잡으면 영원히 발생하지 않는다. 대신
+//   «덩어리 수도 줄지 않고 병도 완성되지 않은 붓기» = 판이 나아지지 않은 한 수 로 정의한다.
+function sortBoardScore(b, vault=-1){
+  let runs=0, done=0;
+  b.forEach((x,i)=>{ runs+=sortRuns(x); if(i!==vault && sortComplete(x)) done++; });
+  // 보관 병에 무언가 남아 있으면 «아직 정리가 덜 됐다» 는 신호를 준다.
+  return runs*2 - done + (vault>=0 && b[vault] && b[vault].length ? 2 : 0);
+}
+// ★ 보관 병은 «비워야» 승리다. 일반 병은 4층 한 색으로 차야 한다.
+function sortWon(b, vault=-1){
+  if(vault>=0 && b[vault] && b[vault].length) return false;
+  return b.every((x,i)=> i===vault ? true
+    : (x.length===0 || (x.length===SORT_CAP && x.every(c=>c===x[0]))));
+}
+function sortComplete(b){ return b.length===SORT_CAP && b.every(c=>c===b[0]); }
+// ★ v1.47: vault 가 있으면 «어떤 색이든 1층 보관 / 1층 꺼내기» 수가 추가된다.
+//   이 수는 선택 사항이라 기존 «보장 경로» 를 절대 무효화하지 않는다.
+function sortMovesAll(b, locked, vault=-1){
+  const out=[];
+  const capOf = i => i===vault ? SORT_VAULT_CAP : SORT_CAP;
+  for(let i=0;i<b.length;i++){
+    if(locked && locked.has(i)) continue;
+    const s=b[i]; if(!s.length) continue;
+    if(i!==vault && sortComplete(s)) continue;
+    const c=s[s.length-1];
+    let run=1; for(let k=s.length-2;k>=0&&s[k]===c;k--) run++;
+    for(let j=0;j<b.length;j++){
+      if(i===j || (locked && locked.has(j))) continue;
+      const t=b[j], room=capOf(j)-t.length;
+      if(room<=0) continue;
+      if(j===vault){ out.push([i,j,1]); continue; }              // 보관: 아무 색 1층
+      if(t.length && t[t.length-1]!==c) continue;
+      if(!t.length && run===s.length && i!==vault) continue;    // 통째로 빈 병 이동은 무의미
+      out.push([i,j,i===vault ? 1 : Math.min(run,room)]);        // 꺼내기도 1층씩
+    }
+  }
+  return out;
+}
+// DFS + 방문 상태 정규화. 보관 병은 «특수 병» 이라 정렬 키에서 분리한다.
+function sortSolve(b, locked, limit, vault=-1){
+  const seen=new Set(); let nodes=0, answer=null;
+  const keyOf = st => (vault>=0 ? 'V'+st[vault].join('-')+'|' : '')
+    + st.filter((_,i)=>i!==vault).map(x=>x.join('-')).sort().join('|');
+  const gain = (m, st) => {
+    const [i,j,n]=m, s=st[i], t=st[j];
+    let v=n*2;
+    if(t.length) v+=6;
+    if(j!==vault && t.length && t.length+n===SORT_CAP && t.every(c=>c===s[s.length-1])) v+=14;
+    if(s.length===n) v+=2;
+    if(!t.length) v-=1;
+    if(j===vault) v-=9;          // 보관은 «우회» 다. solver 가 남용하지 않게 낮춘다.
+    if(i===vault) v+=3;
+    return v;
+  };
+  function dfs(st, path, depth){
+    if(answer) return true;
+    if(++nodes>limit) return false;
+    if(sortWon(st,vault)){ answer=path.slice(); return true; }
+    if(depth>72) return false;
+    const k=keyOf(st); if(seen.has(k)) return false; seen.add(k);
+    const mv=sortMovesAll(st,locked,vault).sort((a,z)=>gain(z,st)-gain(a,st));
+    for(const m of mv){
+      const nx=st.map(x=>x.slice());
+      for(let q=0;q<m[2];q++) nx[m[1]].push(nx[m[0]].pop());
+      path.push(m);
+      if(dfs(nx,path,depth+1)) return true;
+      path.pop();
+    }
+    return false;
+  }
+  dfs(b.map(x=>x.slice()),[],0);
+  return answer;
+}
+// «완성된 상태 → 역방향 붓기» 로 판을 만든다.
+//   정방향으로 되돌릴 수 있는 수만 고르므로 결과 판은 구조상 반드시 풀린다.
+//   steps 배열을 뒤집으면 그대로 «정답 경로» 가 된다(solver 실패 시에도 par 를 잃지 않는다).
+function sortBuild(lv){
+  const cfg=sortCfg(lv);
+  const b=[];
+  for(let c=0;c<cfg.colors;c++) b.push(Array(SORT_CAP).fill(c));
+  for(let e=0;e<cfg.free;e++) b.push([]);
+  const broken = cfg.broken ? b.length : -1;
+  if(cfg.broken) b.push([]);
+  const steps=[];
+  const totalSteps=12+cfg.colors*6;
+  for(let s=0;s<totalSteps;s++){
+    const cand=[];
+    for(let j=0;j<b.length;j++){
+      const t=b[j]; if(!t.length) continue;
+      const c=t[t.length-1];
+      let r=1; for(let k=t.length-2;k>=0&&t[k]===c;k--) r++;
+      for(let n=1;n<=r;n++){
+        const rest=r-n;
+        // j' 위에 다른 색이 남으면 정방향으로 다시 부을 수 없다.
+        if(rest===0 && t.length-n>0) continue;
+        for(let i=0;i<b.length;i++){
+          if(i===j) continue;
+          const src=b[i];
+          if(src.length+n>SORT_CAP) continue;
+          if(src.length && src[src.length-1]===c) continue;         // 덩어리 합쳐지면 역추적이 어긋난다
+          if(src.length===0 && rest===0) continue;                   // 통째 이동은 규칙상 막혀 있다
+          if(src.length+n===SORT_CAP && src.every(x=>x===c)) continue; // 완성 병은 규칙상 못 옮긴다
+          cand.push([j,i,n,c]);
+        }
+      }
+    }
+    if(!cand.length) break;
+    const pick=cand[Math.floor(Math.random()*cand.length)];
+    const [j,i,n,c]=pick;
+    for(let k=0;k<n;k++) b[i].push(c);
+    for(let k=0;k<n;k++) b[j].pop();
+    steps.push([i,j,n]);
+  }
+  if(steps.length<4) return null;
+  const guaranteed=steps.slice().reverse();
+  // 역방향 생성은 «이론상» 항상 풀리지만, 실제 규칙 구현과 한 번 더 맞대본다.
+  const solved=sortSolve(b,new Set(),24000);
+  if(!solved) return null;
+  return { cfg, bottles:b, broken, guaranteed, solved };
+}
+// ─────────── ★ v1.47 «주문서» : 한 판의 목표를 아이가 고른다 ───────────
+//   실패해도 감점·재시작 없이 «주문서만 놓친다». 다른 목표로 다시 올 수 있게 2택1.
+function sortMakeOrders(colors, par){
+  const first = Math.floor(Math.random()*colors);
+  const pool=[
+    { type:'speed', target:par+2, tag:'SPEED', label:`${par+2}수 안에 끝내기`,
+      desc:`기준 ${par}수보다 조금 여유가 있어요. 헤맨 부음을 줄이면 좋아요.` },
+    { type:'thrifty', target:2, tag:'SAVE', label:'도구 2개 이하로 끝내기',
+      desc:'되돌리기·힌트·빈 병·충전을 합쳐 2번만 써요. 조각을 아끼는 판이에요.' },
+    { type:'order', target:first, tag:'ORDER', label:`${SORT_COLORS[first].name}을 가장 먼저 완성`,
+      desc:'다른 색보다 먼저 이 빛을 한 병에 4층 모아요. 순서를 정하는 재미!' }
+  ];
+  const a=Math.floor(Math.random()*pool.length);
+  const b=(a+1+Math.floor(Math.random()*(pool.length-1)))%pool.length;
+  return [pool[a],pool[b]];
+}
+function sortOrderText(){
+  const o=sort.order; if(!o) return '';
+  const tail=sort.orderDone?'✓ 완료':sort.orderFailed?'· 놓쳤어요(괜찮아요!)':
+    o.type==='speed'?`${sort.moves}/${o.target}수`:
+    o.type==='thrifty'?`도구 ${sort.toolUses}/${o.target}개`:
+    (sort.firstColor<0?'첫 완성 대기 중':`첫 완성 ${SORT_COLORS[sort.firstColor].name}`);
+  return `📜 ${o.label} — ${tail}`;
+}
+function sortOrderCheck(){
+  const o=sort.order; if(!o||sort.orderDone||sort.orderFailed) return;
+  if(o.type==='speed' && sort.moves>o.target) sort.orderFailed=true;
+  if(o.type==='thrifty' && sort.toolUses>o.target) sort.orderFailed=true;
+  if(o.type==='order' && sort.firstColor>=0){
+    if(sort.firstColor===o.target) sort.orderDone=true; else sort.orderFailed=true;
+  }
+}
+function sortOrderFinish(){
+  const o=sort.order; if(!o||sort.orderDone||sort.orderFailed) return;
+  if(o.type==='speed' && sort.moves<=o.target) sort.orderDone=true;
+  if(o.type==='thrifty' && sort.toolUses<=o.target) sort.orderDone=true;
+  if(o.type==='order' && sort.firstColor===o.target) sort.orderDone=true;
+  if(sort.orderDone){ sort.shards+=5; sort.missions++; }
+}
+// ─────────── ★ v1.47 «빛 조각 제작소» : 도구는 공짜가 아니다 ───────────
+function sortSpend(key){
+  const cost=SORT_TOOL_COST[key];
+  const label={undo:'되돌리기',shuffle:'다시 섞기',bottle:'빈 병 추가',hint:'길 알려줘',charge:'전력 충전'}[key];
+  if(sort.tools[key]>0){ sort.tools[key]--; sort.toolUses++; return true; }
+  if(sort.shards>=cost){
+    sort.shards-=cost; sort.toolUses++;
+    sortNote(`🔨 ${label} 을 ${cost}조각으로 만들었어요!`);
+    return true;
+  }
+  sortNote(`${label} 이 없어요. 좋은 붓기로 조각 ${cost}개를 모으거나 다른 길을 찾아봐요.`);
+  return false;
+}
+function sortCanUse(key){
+  return sort.tools[key]>0 || sort.shards>=SORT_TOOL_COST[key];
+}
+// ★ 서지 : 판 상태를 절대 건드리지 않는다(«보장 경로» 불변).
+//   전력 -20 + 3수 동안 조각 획득 정지. 병을 «완성» 하면 압력이 20씩 내려간다.
+function sortSurge(){
+  sort.surges++; sort.pressure=0; sort.blackout=3;
+  sort.power=Math.max(0,sort.power-20);
+  sortNote('⚡ 서지! 전력 -20, 3수 동안 조각이 안 모여요. 병을 빨리 완성하면 압력이 내려가요.');
+  const wrap=document.querySelector('.sort-board-wrap');
+  if(wrap){ wrap.classList.remove('surge'); void wrap.offsetWidth; wrap.classList.add('surge');
+    setTimeout(()=>wrap.classList.remove('surge'),650); }
+  if(typeof rpBeep==='function') rpBeep(180,0.18,'sawtooth');
+}
+// ─────────── ★ v1.48 «도전 모드» : 90초 연속 정리 ───────────
+//   레벨 모드가 «한 판을 어떻게 풀까» 라면, 도전 모드는 «얼마나 오래 버티나» 다.
+//   한 단계 끝나면 +12초, 단계가 오를수록 색이 늘어난다. 시간이 0이 되면 조용히 끝난다
+//   (벌점·재시작 없음). 주문서·조각·압력은 도전 모드에서 끈다 — 규칙이 가벼워야 속도가 산다.
+const SORT_ENDLESS_TIME = 90;
+const SORT_ENDLESS_BONUS = 12;
+function sortEndlessClock(on){
+  clearInterval(sort.clock); sort.clock=null;
+  if(!on) return;
+  sort.clock=setInterval(()=>{
+    if(sort.phase!=='play' && sort.phase!=='won') return;
+    sort.timeLeft=Math.max(0,sort.timeLeft-1);
+    sortRenderTimer();
+    if(sort.timeLeft<=0) sortEndlessEnd();
+  },1000);
+}
+function sortRenderTimer(){
+  const endless=sort.mode==='endless';
+  const box=$('#sort-timer'), bar=$('#sort-timebar');
+  if(box) box.classList.toggle('hidden',!endless);
+  if(bar) bar.classList.toggle('hidden',!endless);
+  if(!endless){ sortSym(); return; }
+  const set=(id,v)=>{ const el=$(id); if(el) el.textContent=v; };
+  set('#sort-time',sort.timeLeft); set('#sort-streak',sort.streak); set('#sort-best-streak',sort.bestStreak);
+  const fill=$('#sort-timefill');
+  if(fill) fill.style.width=Math.max(0,Math.min(100,sort.timeLeft/SORT_ENDLESS_TIME*100))+'%';
+  const low=sort.timeLeft<=15;
+  if(box) box.classList.toggle('low',low);
+  if(bar) bar.classList.toggle('low',low);
+  // ★ 시계는 sortRender 를 거치지 않고 1초마다 직접 부른다 → 여기서 상태를 동기화하지 않으면
+  //   화면은 88초인데 __sortState 는 90초로 남는다(v1.45 __repairState 교훈).
+  sortSym();
+}
+function sortStartEndless(){
+  sortStop();
+  sort.mode='endless'; sort.streak=0; sort.timeLeft=SORT_ENDLESS_TIME;
+  sort.bestStreak=Number((sortLocal()||{}).bestStreak||sort.bestStreak||0);
+  const card=$('.sort-card'); if(card) card.classList.add('endless');
+  document.querySelectorAll('.sort-mode').forEach(b=>b.classList.toggle('on',b.dataset.mode==='endless'));
+  sortStartLevel(1,{endless:true});
+  sortEndlessClock(true);
+  sortRenderTimer();
+  sortNote(`⚡ 도전 모드! ${SORT_ENDLESS_TIME}초 안에 최대한 많이 정리해요. 한 단계 끝나면 +${SORT_ENDLESS_BONUS}초.`);
+}
+function sortSetMode(mode){
+  if(mode===sort.mode && sort.phase==='play') return;
+  if(mode==='endless'){ sortStartEndless(); return; }
+  sortEndlessClock(false);
+  sort.mode='level';
+  const card=$('.sort-card'); if(card) card.classList.remove('endless');
+  document.querySelectorAll('.sort-mode').forEach(b=>b.classList.toggle('on',b.dataset.mode==='level'));
+  sortStartLevel(sort.level);
+  sortRenderTimer();
+}
+function sortEndlessWin(){
+  sort.phase='won'; sortStop();
+  sort.streak++; sort.timeLeft=Math.min(180,sort.timeLeft+SORT_ENDLESS_BONUS);
+  if(sort.streak>sort.bestStreak){
+    sort.bestStreak=sort.streak;
+    const l=sortLocal()||{}; l.bestStreak=sort.bestStreak; sortSaveLocal(l);
+  }
+  const res=$('#sort-result');
+  if(res) res.innerHTML=`⚡ <b>${sort.streak}단계</b> 연속! +${SORT_ENDLESS_BONUS}초 (남은 ${sort.timeLeft}초)`;
+  sortNote('다음 병 준비…');
+  sortRenderTimer(); sortRender();
+  if(typeof rpBeep==='function') rpBeep(940,0.09,'triangle');
+  setTimeout(()=>{
+    if(sort.mode==='endless' && sort.phase==='won') sortStartLevel(Math.min(14,1+sort.streak),{endless:true});
+  },850);
+}
+function sortEndlessEnd(){
+  sortEndlessClock(false);
+  if(sort.phase==='over') return;
+  sort.phase='over'; sortStop();
+  const best=Math.max(sort.bestStreak,sort.streak);
+  sort.bestStreak=best;
+  const l=sortLocal()||{}; l.bestStreak=best; sortSaveLocal(l);
+  const res=$('#sort-result');
+  if(res) res.innerHTML=`⏱ 시간 끝! <b>${sort.streak}단계</b> · 최고 ${best}단계`;
+  const go=$('#sort-go'); if(go){ go.textContent='다시 도전'; go.disabled=false; }
+  sortNote('수고했어요! «다시 도전» 으로 최고 기록을 넘어봐요.');
+  sortRender(); sortRenderTimer();
+  if(typeof bubble==='function') bubble(`도전 모드 ${sort.streak}단계! 최고 ${best}단계`);
+  api('/api/sort/progress',{mode:'endless',streak:sort.streak,won:false,level:sort.level,
+    stars:0,moves:sort.moves,par:sort.par,missions:0,shards:0,surges:0},9000)
+    .then(r=>{ sort.serverProgress=r; sortUpdateEntry(); })
+    .catch(()=>{ sortUpdateEntry(); });
+}
+function sortHalt(){ sortStop(); sortEndlessClock(false); }
+function sortLocal(){ try{ return JSON.parse(localStorage.getItem(SORT_STORE)||'null'); }catch(e){ return null; } }
+function sortSaveLocal(o){ try{ localStorage.setItem(SORT_STORE,JSON.stringify(o)); }catch(e){} }
+function sortNote(msg){ sort.note=msg; const n=$('#sort-note'); if(n) n.textContent=msg; }
+function sortSym(){
+  // ★ 브라우저 검증은 이 값만 읽는다. 렌더 때마다 갱신해야 «화면은 바뀌었는데 상태는 옛값» 이 안 생긴다.
+  window.__sortState={
+    ready:true, phase:sort.phase, level:sort.level, colors:sort.colors, cap:SORT_CAP,
+    bottles:sort.bottles.map(x=>x.slice()), locked:[...sort.locked], broken:sort.broken,
+    sel:sort.sel, moves:sort.moves, par:sort.par, stars:sort.stars,
+    solution:sort.solution.length, guaranteed:sort.guaranteed.length,
+    solvable:sort.solution.length>0 || sort.guaranteed.length>0,
+    tools:Object.assign({},sort.tools), toolCost:Object.assign({},SORT_TOOL_COST),
+    power:sort.power, shards:sort.shards, toolUses:sort.toolUses,
+    pressure:sort.pressure, surges:sort.surges, blackout:sort.blackout,
+    vault:sort.vault, vaultCap:SORT_VAULT_CAP,
+    orders:sort.orders.map(o=>o.type), order:sort.order?sort.order.type:null,
+    orderDone:sort.orderDone, orderFailed:sort.orderFailed, firstColor:sort.firstColor,
+    missions:sort.missions,
+    mode:sort.mode, timeLeft:sort.timeLeft, streak:sort.streak,
+    bestStreak:sort.bestStreak, clockOn:!!sort.clock,
+    wanders:sort.wanders, earnedHints:sort.earnedHints,
+    hintCells:sort.hintCells.slice(), repairing:sort.repairing?sort.repairing.p:0,
+    won:sort.phase==='won', note:sort.note
+  };
+}
+function sortRender(){
+  const board=$('#sort-board');
+  if(board){
+    board.innerHTML=sort.bottles.map((b,i)=>{
+      const cls=[
+        'sort-bottle',
+        sort.sel===i?'selected':'',
+        sort.locked.has(i)?'broken':'',
+        i===sort.vault?'vault':'',
+        i!==sort.vault && sortComplete(b)?'complete':'',
+        sort.hintCells.includes(i)?'hintcell':'',
+        sort.repairing && sort.repairing.i===i?'fixing':'',
+        sort.pourTarget===i?'pour-in':''
+      ].filter(Boolean).join(' ');
+      const layers=b.map(c=>`<i class="sort-layer" style="--c:${SORT_COLORS[c].c}">${SORT_COLORS[c].sym}</i>`).join('');
+      return `<div class="${cls}" data-i="${i}" role="button" tabindex="0" aria-label="${i===sort.vault?'보관 병':i+1+'번 병'}">
+        <div class="sort-neck"></div>
+        <div class="sort-glass"><div class="sort-stack">${layers}</div><div class="sort-shine"></div></div>
+        ${sort.locked.has(i)?'<div class="sort-crack">🔧</div>':''}
+        ${i===sort.vault?'<div class="sort-vault-tag">보관</div>':''}
+        <div class="sort-ring" style="--p:${sort.repairing&&sort.repairing.i===i?sort.repairing.p:0}"></div>
+        <span class="sort-num">${i===sort.vault?'보관':i+1}</span></div>`;
+    }).join('');
+  }
+  const set=(id,v)=>{ const el=$(id); if(el) el.textContent=v; };
+  set('#sort-level',sort.level); set('#sort-moves',sort.moves); set('#sort-par',sort.par);
+  set('#sort-stars',sort.stars?'★'.repeat(sort.stars)+'☆'.repeat(3-sort.stars):'☆☆☆');
+  set('#sort-power',Math.round(sort.power)); set('#sort-shards',sort.shards);
+  set('#sort-undo-n',sort.tools.undo); set('#sort-shuffle-n',sort.tools.shuffle);
+  set('#sort-bottle-n',sort.tools.bottle); set('#sort-hint-n',sort.tools.hint);
+  set('#sort-charge-n',sort.tools.charge);
+  const pf=$('#sort-pressurefill'); if(pf) pf.style.width=Math.min(100,sort.pressure)+'%';
+  set('#sort-pressure-label',`압력 ${Math.round(sort.pressure)}%${sort.blackout?' · 정전 '+sort.blackout+'수':''}`);
+  // 주문서 : 고르기 전에는 2장, 고른 뒤에는 진행 줄 하나
+  const ow=$('#sort-orders'), on=$('#sort-order-now');
+  if(ow){
+    if(sort.phase==='play' && !sort.order && sort.mode!=='endless'){
+      ow.innerHTML=sort.orders.map((o,k)=>
+        `<button class="sort-order" type="button" data-order="${k}"><i>${o.tag}</i><b>${o.label}</b><small>${o.desc}</small></button>`).join('');
+      ow.classList.remove('hidden');
+    }else{ ow.innerHTML=''; ow.classList.add('hidden'); }
+  }
+  if(on){
+    if(sort.order){
+      on.textContent=sortOrderText()+(sort.orderDone?'  ·  조각 +5':'');
+      on.className='sort-order-now'+(sort.orderDone?' done':sort.orderFailed?' fail':'');
+    }else{ on.textContent=''; on.className='sort-order-now hidden'; }
+  }
+  const dis=(id,off)=>{ const el=$(id); if(el) el.disabled=!!off; };
+  const over=sort.phase!=='play';
+  dis('#sort-undo',over||!sort.history.length||!sortCanUse('undo'));
+  dis('#sort-shuffle',over||!sortCanUse('shuffle'));
+  dis('#sort-bottle',over||sort.power<20||!sortCanUse('bottle'));
+  dis('#sort-hint',over||!sortCanUse('hint'));
+  dis('#sort-charge',over||sort.power>=100||!sortCanUse('charge'));
+  sortRenderTimer();
+  sortSym();
+}
+function sortUpdateEntry(){
+  const p=sort.serverProgress||{}, l=sortLocal()||{};
+  const best=Math.max(1,Number(p.level)||1,Number(l.level)||1);
+  const stars=Number(p.totalStars)||Object.values(l.bestStars||{}).reduce((a,v)=>a+(Number(v)||0),0);
+  const missions=Number(p.missions)||Number(l.missions)||0;
+  const el=(id,v)=>{ const n=$(id); if(n) n.textContent=v; };
+  el('#sort-entry-level',`레벨 ${best}`); el('#sort-entry-stars',stars); el('#sort-entry-best',best);
+  el('#sort-entry-missions',missions);
+}
+function sortSnapshot(){
+  sort.history.push({
+    bottles:sort.bottles.map(x=>x.slice()), locked:[...sort.locked], vault:sort.vault,
+    moves:sort.moves, wanders:sort.wanders, power:sort.power, shards:sort.shards,
+    pressure:sort.pressure, blackout:sort.blackout, surges:sort.surges,
+    toolUses:sort.toolUses, firstColor:sort.firstColor,
+    orderDone:sort.orderDone, orderFailed:sort.orderFailed,
+    tools:Object.assign({},sort.tools)
+  });
+  if(sort.history.length>80) sort.history.shift();
+}
+function sortPourInfo(from,to){
+  const s=sort.bottles[from], t=sort.bottles[to];
+  if(!s.length) return {ok:false,msg:'빈 병에서는 옮길 빛이 없어요.'};
+  if(sort.locked.has(to)||sort.locked.has(from)) return {ok:false,msg:'금이 간 병이에요. 꾹 눌러 먼저 고쳐요.'};
+  const c=s[s.length-1];
+  // ★ 보관 병 : 아무 색이나 1층 «보관», 꺼낼 때는 1층만 «같은 색/빈 병» 으로.
+  if(to===sort.vault && from!==sort.vault){
+    if(t.length>=SORT_VAULT_CAP) return {ok:false,msg:'보관 병은 2층까지만 담을 수 있어요.'};
+    if(sortComplete(s)) return {ok:false,msg:'이미 완성된 병은 보관할 필요가 없어요.'};
+    return {ok:true,n:1,c};
+  }
+  if(from===sort.vault){
+    if(t.length>=SORT_CAP) return {ok:false,msg:'이 병은 가득 찼어요.'};
+    if(t.length && t[t.length-1]!==c) return {ok:false,msg:'위쪽 색이 달라요. 같은 빛끼리 모아요.'};
+    return {ok:true,n:1,c};
+  }
+  if(t.length>=SORT_CAP) return {ok:false,msg:'이 병은 가득 찼어요.'};
+  if(t.length && t[t.length-1]!==c) return {ok:false,msg:'위쪽 색이 달라요. 같은 빛끼리 모아요.'};
+  let run=1; for(let k=s.length-2;k>=0&&s[k]===c;k--) run++;
+  const n=Math.min(run,SORT_CAP-t.length);
+  if(n<=0) return {ok:false,msg:'자리가 없어요.'};
+  if(!t.length && run===s.length) return {ok:false,msg:'통째로 옮기면 그대로예요. 다른 병을 골라요.'};
+  return {ok:true,n,c};
+}
+function sortPour(from,to){
+  const info=sortPourInfo(from,to);
+  if(!info.ok){ sortNote(info.msg); sort.hintCells=[]; sortRender(); return false; }
+  const before=sortBoardScore(sort.bottles,sort.vault);
+  const doneBefore=sort.bottles.map((x,i)=> i!==sort.vault && sortComplete(x));
+  const tWasEmpty=to!==sort.vault && sort.bottles[to].length===0;
+  const blackoutNow=sort.blackout>0;
+  sortSnapshot();
+  for(let k=0;k<info.n;k++) sort.bottles[to].push(sort.bottles[from].pop());
+  sort.moves++;
+  sort.sel=null; sort.hintCells=[]; sort.pourTarget=to;
+  const after=sortBoardScore(sort.bottles,sort.vault);
+  const doneAfter=sort.bottles.map((x,i)=> i!==sort.vault && sortComplete(x));
+  const newly=doneAfter.filter((v,i)=>v&&!doneBefore[i]).length;
+  // ★ 조각 경제 : 판이 나아진 붓기(+2) · 빈 병에 «자리 만들기»(+1) · 병 완성(+3).
+  //   물병 퍼즐은 빈 병으로 덩어리를 옮기는 수가 반드시 필요하므로, 그 수를
+  //   «헤맨 부음» 으로 오판해 조각을 0 주면 제작소가 사실상 잠긴다.
+  const econ=sort.mode==='level';
+  const madeRoom=tWasEmpty && from!==sort.vault && sort.bottles[from].length>0;
+  let gained=0;
+  if(econ && !blackoutNow){ if(after<before) gained+=2; else if(madeRoom) gained+=1; gained+=newly*3; }
+  sort.shards+=gained;
+  if(blackoutNow) sort.blackout--;
+  let didSurge=false;
+  if(econ){
+    // ★ 압력 : 붓기마다 오르고, 병을 완성하면 20씩 내려간다 → «빨리 합칠까» 결정.
+    sort.pressure+=sortPressureStep(sort.level);
+    if(newly>0) sort.pressure=Math.max(0,sort.pressure-newly*20);
+    if(sort.pressure>=100){ sortSurge(); didSurge=true; }
+    if(sort.firstColor<0){
+      const idx=doneAfter.findIndex((v,i)=>v&&!doneBefore[i]);
+      if(idx>=0) sort.firstColor=sort.bottles[idx][0];
+    }
+    sortOrderCheck();
+  }
+  if(!econ){
+    sortNote(newly>0?'한 병 완성! 다음 병으로.':'좋아요, 계속 정리해요.');
+  }else if(didSurge){
+    // 서지 안내가 다른 메시지에 덮이지 않게 그대로 둔다.
+  }else if(after>=before && !madeRoom){
+    sort.wanders++;
+    if(sort.wanders%3===0 && sort.tools.hint<6){
+      sort.tools.hint++; sort.earnedHints++;
+      sortNote('헤맨 부음 3번 → 힌트 1개! 틀린 길도 길이 남아요.');
+    }else sortNote(`판이 그대로예요. 헤맨 부음 ${sort.wanders}번 — 3번마다 힌트가 돼요.`);
+  }else sortNote(gained>0?`좋아요! 빛 조각 +${gained}`:'좋아요! 같은 빛이 모였어요.');
+  sortRender();
+  setTimeout(()=>{ if(sort.pourTarget===to){ sort.pourTarget=-1; sortRender(); } },380);
+  if(typeof rpBeep==='function') rpBeep(620,0.06,'sine');
+  if(sortWon(sort.bottles,sort.vault)) sortWin();
+  return true;
+}
+function sortTap(i){
+  if(sort.phase!=='play') return;
+  if(sort.justRepaired){ sort.justRepaired=false; return; }
+  if(sort.locked.has(i)){ sortNote('금이 간 병이에요. 🔧 를 «꾹 누르고» 있으면 고쳐져요.'); return; }
+  if(sort.sel===null){
+    if(!sort.bottles[i].length){ sortNote('빈 병이에요. 먼저 옮길 빛이 있는 병을 골라요.'); return; }
+    sort.sel=i; sort.hintCells=[];
+    sortNote(`${i+1}번 병을 골랐어요. 옮길 병을 눌러요.`);
+    sortRender(); return;
+  }
+  if(sort.sel===i){ sort.sel=null; sortNote('선택을 취소했어요.'); sortRender(); return; }
+  sortPour(sort.sel,i);
+}
+function sortUndo(){
+  if(sort.phase!=='play') return;
+  if(!sort.history.length){ sortNote('아직 되돌릴 붓기가 없어요.'); return; }
+  if(!sortCanUse('undo')){ sortNote('되돌리기가 없어요. 좋은 붓기로 조각 4개를 모아 만들어요.'); return; }
+  const h=sort.history.pop();
+  sort.bottles=h.bottles.map(x=>x.slice()); sort.locked=new Set(h.locked); sort.vault=h.vault;
+  sort.moves=h.moves; sort.wanders=h.wanders; sort.power=h.power; sort.shards=h.shards;
+  sort.pressure=h.pressure; sort.blackout=h.blackout; sort.surges=h.surges;
+  sort.toolUses=h.toolUses; sort.firstColor=h.firstColor;
+  sort.orderDone=h.orderDone; sort.orderFailed=h.orderFailed; sort.tools=h.tools;
+  sortSpend('undo');                       // 복원된 자원에서 «한 번» 차감한다
+  sort.sel=null; sort.hintCells=[];
+  sortNote('한 수 되돌렸어요. 조각·압력·주문서 진행도 같이 돌아갔어요.');
+  sortRender();
+}
+function sortChooseOrder(k){
+  if(sort.phase!=='play'||sort.order) return;
+  const o=sort.orders[Number(k)]; if(!o) return;
+  sort.order=o;
+  sortNote(`📜 «${o.label}» 를 골랐어요. 못 지켜도 괜찮아요!`);
+  sortRender();
+}
+function sortShuffle(){
+  if(sort.phase!=='play') return;
+  if(!sortCanUse('shuffle')){ sortNote('다시 섞기가 없어요. 조각 6개가 필요해요.'); return; }
+  if(!sortSpend('shuffle')) return;
+  const carry={ tools:Object.assign({},sort.tools), shards:sort.shards, toolUses:sort.toolUses,
+    pressure:sort.pressure, blackout:sort.blackout, surges:sort.surges,
+    orders:sort.orders, order:sort.order, orderDone:sort.orderDone,
+    orderFailed:sort.orderFailed, firstColor:sort.firstColor, missions:sort.missions };
+  sortStartLevel(sort.level,carry);
+  sortNote('새 배열이에요. 이번에도 반드시 풀리는 판만 나와요.');
+  sortRender();
+}
+function sortAddBottle(){
+  if(sort.phase!=='play') return;
+  if(sort.power<20){ sortNote('전력이 부족해요. «전력 충전» 이나 다른 길을 찾아봐요.'); return; }
+  if(!sortCanUse('bottle')){ sortNote('빈 병 추가가 없어요. 조각 8개가 필요해요.'); return; }
+  sortSnapshot();
+  if(!sortSpend('bottle')) return;
+  sort.power-=20;
+  sort.bottles.push([]); sort.sel=null; sort.hintCells=[];
+  sortNote('빈 병 하나를 열었어요! 전력 20을 썼어요.');
+  sortRender();
+}
+function sortCharge(){
+  if(sort.phase!=='play') return;
+  if(sort.power>=100){ sortNote('전력이 이미 가득해요.'); return; }
+  if(!sortCanUse('charge')){ sortNote('전력 충전이 없어요. 조각 6개가 필요해요.'); return; }
+  sortSnapshot();
+  if(!sortSpend('charge')) return;
+  sort.power=Math.min(100,sort.power+30);
+  sortNote('⚡ 전력 +30! 금이 간 병을 고칠 수 있어요.');
+  sortRender();
+}
+function sortHint(){
+  if(sort.phase!=='play') return;
+  // 지금 잠긴 병을 «그대로 둔 채» 푸는 길을 먼저 찾고, 없으면 «고친 뒤» 의 길을 찾는다.
+  let path=sortSolve(sort.bottles,sort.locked,18000,sort.vault);
+  let needRepair=false;
+  if(!path && sort.locked.size){
+    path=sortSolve(sort.bottles,new Set(),18000,sort.vault); needRepair=!!path;
+  }
+  if(!path||!path.length){ sortNote('지금은 길이 막혔어요. 되돌리기나 «다시 섞기» 를 써 봐요.'); sortRender(); return; }
+  if(!sortCanUse('hint')){ sortNote('길 알려줘 가 없어요. 조각 5개가 필요해요.'); return; }
+  sortSpend('hint');
+  if(needRepair){
+    sort.hintCells=[...sort.locked];
+    sortNote('금이 간 병을 먼저 «꾹 눌러» 고치면 길이 열려요!');
+  }else{
+    const [i,j]=path[0];
+    sort.hintCells=[i,j];
+    sortNote(`💡 ${i===sort.vault?'보관 병':i+1+'번'} → ${j===sort.vault?'보관 병':j+1+'번'} 으로 옮겨 봐요.`);
+  }
+  sortRender();
+}
+function sortHoldStart(i,e){
+  if(sort.phase!=='play'||!sort.locked.has(i)) return;
+  if(sort.power<30){ sortNote('전력이 부족해요. «전력 충전» 도구를 쓰거나 다른 길을 찾아봐요.'); return; }
+  if(e && e.preventDefault) e.preventDefault();
+  if(sort.repairing) return;
+  sort.repairing={i,p:0};
+  sortNote('꾹 누르는 중… 초록 테두리가 다 차면 병이 열려요.');
+  clearInterval(sort.timer);
+  sort.timer=setInterval(()=>{
+    if(!sort.repairing) return clearInterval(sort.timer);
+    sort.repairing.p=Math.min(100,sort.repairing.p+4);
+    if(sort.repairing.p>=100){
+      const idx=sort.repairing.i;
+      sort.repairing=null; clearInterval(sort.timer); sort.timer=null;
+      sort.power-=30; sort.locked.delete(idx); sort.justRepaired=true;
+      sort.hintCells=[]; sort.sel=null;
+      sortNote('🔧 고쳤어요! 빈 병이 하나 열렸어요. (전력 -30)');
+      if(typeof rpBeep==='function') rpBeep(820,0.12,'triangle');
+      setTimeout(()=>{ sort.justRepaired=false; },400);
+      sortRender();
+      return;
+    }
+    // 충전 중에는 DOM 을 다시 만들지 않는다. 노드를 지우면 브라우저가 pointercancel 을
+    // 보내 «손을 뗀 것» 으로 오해할 수 있다(v1.45 교훈). 링만 직접 갱신한다.
+    const ring=document.querySelector('.sort-bottle.fixing .sort-ring');
+    if(ring) ring.style.setProperty('--p',sort.repairing.p);
+    sortSym();
+  },52);
+  sortRender();
+}
+function sortHoldEnd(){
+  if(!sort.repairing) return;
+  clearInterval(sort.timer); sort.timer=null;
+  sort.repairing=null;
+  sortNote('손을 떼서 충전이 멈췄어요. 다시 꾹 눌러 볼까요?');
+  sortRender();
+}
+function sortStop(){
+  clearInterval(sort.timer); sort.timer=null; sort.repairing=null;
+  sort.pourTarget=-1;
+}
+function sortWin(){
+  if(sort.mode==='endless'){ sortEndlessWin(); return; }
+  sort.phase='won'; sortStop(); sort.hintCells=[]; sort.sel=null;
+  sortOrderFinish();
+  sort.stars=sort.moves<=sort.par?3:sort.moves<=Math.ceil(sort.par*1.5)?2:1;
+  const l=sortLocal()||{level:1,bestStars:{}};
+  l.bestStars=l.bestStars||{};
+  l.bestStars[String(sort.level)]=Math.max(Number(l.bestStars[String(sort.level)])||0,sort.stars);
+  l.level=Math.max(Number(l.level)||1,sort.level+1);
+  l.missions=Number(l.missions||0)+(sort.orderDone?1:0);
+  sortSaveLocal(l);
+  const res=$('#sort-result');
+  if(res) res.innerHTML=`🎉 <b>${'★'.repeat(sort.stars)}${'☆'.repeat(3-sort.stars)}</b> · ${sort.moves}번 옮김 (기준 ${sort.par})`
+    +` · 조각 ${sort.shards} · 주문서 ${sort.orderDone?'완료 ✓':'미완료'} · 서지 ${sort.surges}번`;
+  const go=$('#sort-go'); if(go){ go.textContent='다음 레벨 →'; go.disabled=false; }
+  sortNote('다 빛났어요! 셀 대신 레벨·별·주문서 기록이 남았어요.');
+  sortRender();
+  if(typeof bubble==='function') bubble(`빛의 병 레벨 ${sort.level} 클리어! 별 ${sort.stars}개${sort.orderDone?' · 주문서 완료':''}`);
+  // 서버 진행도는 «보상» 이 아니라 «기록» 이다. 실패해도 게임 플레이는 막지 않는다.
+  if(!sort.submitted){
+    sort.submitted=true;
+    api('/api/sort/progress',{level:sort.level,stars:sort.stars,moves:sort.moves,par:sort.par,
+      wanders:sort.wanders,hintsEarned:sort.earnedHints,won:true,
+      missions:sort.orderDone?1:0,shards:sort.shards,surges:sort.surges,
+      orderType:sort.order?sort.order.type:null},9000)
+      .then(r=>{ sort.serverProgress=r; sortUpdateEntry(); })
+      .catch(()=>{ sortUpdateEntry(); });
+  }
+}
+function sortStartLevel(lv,carry){
+  sortStop();
+  const endless=sort.mode==='endless';
+  let built=null;
+  for(let k=0;k<10&&!built;k++) built=sortBuild(lv);
+  if(!built) built=sortBuild(Math.max(1,lv-1))||sortBuild(1);
+  if(!built){ sortNote('판을 만들지 못했어요. 다시 열어 주세요.'); return; }
+  // ★ 도전 모드의 «단계» 는 연속 기록일 뿐, 정식 레벨을 오염시키면 안 된다.
+  sort.phase='play'; if(!endless) sort.level=lv; sort.colors=built.cfg.colors;
+  sort.bottles=built.bottles.map(x=>x.slice());
+  sort.broken=built.broken;
+  sort.locked=new Set(built.broken>=0?[built.broken]:[]);
+  // ★ «보관 병» 은 맨 뒤에 붙인다. 기존 병 index 가 밀리지 않아 보장 경로가 그대로 유효하다.
+  //   도전 모드에서는 2단계부터 열어 «처음 두 판은 규칙만» 으로 시작한다.
+  const useVault = endless ? sort.streak>=2 : lv>=2;
+  sort.vault = useVault ? sort.bottles.length : -1;
+  if(sort.vault>=0) sort.bottles.push([]);
+  sort.solution=built.solved||[];
+  sort.guaranteed=built.guaranteed||[];
+  // solver 첫 해와 역방향 보장해 중 «짧은 쪽» 을 기준으로 잡아야 별이 의미가 있다.
+  const ref=Math.min(sort.solution.length||9999,sort.guaranteed.length||9999);
+  sort.par=Math.max(sort.colors+2,Math.min(ref+4,sort.colors*8+12));
+  sort.sel=null; sort.moves=0; sort.stars=0; sort.wanders=0; sort.earnedHints=0;
+  sort.power=100; sort.history=[]; sort.hintCells=[]; sort.justRepaired=false;
+  sort.submitted=false; sort.pourTarget=-1; sort.missions=0;
+  sort.shards=0; sort.pressure=0; sort.surges=0; sort.blackout=0;
+  sort.toolUses=0; sort.firstColor=-1; sort.orderDone=false; sort.orderFailed=false;
+  sort.tools={undo:1,shuffle:1,bottle:1,hint:1,charge:1};
+  // 도전 모드는 주문서를 쓰지 않는다(규칙이 가벼워야 «속도» 가 산다).
+  sort.orders=endless?[]:sortMakeOrders(sort.colors,sort.par);
+  sort.order=null;
+  if(carry && !endless){
+    sort.tools=Object.assign({},sort.tools,carry.tools||{});
+    sort.shards=carry.shards||0; sort.pressure=carry.pressure||0;
+    sort.blackout=carry.blackout||0; sort.surges=carry.surges||0;
+    sort.toolUses=carry.toolUses||0;
+    if(carry.orders) sort.orders=carry.orders;
+    if(carry.order!==undefined) sort.order=carry.order;
+    sort.orderDone=!!carry.orderDone; sort.orderFailed=!!carry.orderFailed;
+    if(carry.firstColor!=null) sort.firstColor=carry.firstColor;
+  }
+  const res=$('#sort-result'); if(res) res.textContent='';
+  const go=$('#sort-go'); if(go){ go.textContent='처음부터 다시'; go.disabled=false; }
+  sortNote(endless
+    ? `⚡ ${sort.streak>0?`${sort.streak}단계 연속! `:''}${sort.timeLeft}초 남았어요. 같은 빛끼리 빠르게!`
+    : (sort.vault>=0
+      ? '주문서를 고르고, 빛 조각을 모으세요. «보관» 병엔 아무 색 1층을 잠시 넣을 수 있어요!'
+      : '주문서를 하나 골라요. 같은 빛끼리 모으면 조각이 생겨요.'));
+  sortRender();
+}
+async function sortLoadProgress(){
+  try{
+    const r=await api('/api/sort/progress',undefined,9000,'GET');
+    sort.serverProgress=r;
+    if(r&&Number(r.level)>sort.level) sort.level=Math.min(99,Number(r.level));
+    if(r&&Number(r.bestStreak)>sort.bestStreak) sort.bestStreak=Number(r.bestStreak);
+  }catch(e){
+    const l=sortLocal();
+    if(l&&Number(l.level)>sort.level) sort.level=Math.min(99,Number(l.level));
+  }
+  sortUpdateEntry();
+}
+async function openSort(){
+  const m=$('#game-sort'); if(m) m.classList.remove('hidden');   // ★ v1.44 교훈: 명시적으로 열기
+  // 열 때는 항상 레벨 모드에서 시작한다(지난번 도전 모드의 타이머가 남지 않게).
+  sortEndlessClock(false); sort.mode='level';
+  const card=$('.sort-card'); if(card) card.classList.remove('endless');
+  document.querySelectorAll('.sort-mode').forEach(b=>b.classList.toggle('on',b.dataset.mode==='level'));
+  sortNote('판을 준비하는 중… (풀 수 있는 판만 골라요)');
+  await sortLoadProgress();
+  sortStartLevel(sort.level);
+}
+function sortGo(){
+  if(sort.mode==='endless'){ sortStartEndless(); return; }
+  if(sort.phase==='won') sort.level=Math.min(99,sort.level+1);
+  sortStartLevel(sort.level);
+}
 
 // ---- 이벤트 바인딩 ----
+// 부품 밖에서 손을 떼도 «충전» 이 멈추게 한다.
+window.addEventListener('pointerup', rpPressEnd);
+window.addEventListener('blur', rpPressEnd);
 $('#chat-fab')?.addEventListener('click', chatOpen);
 $('#chat-close')?.addEventListener('click', chatClose);
 $('#chat-send')?.addEventListener('click', ()=>sendChat(false));
@@ -5755,6 +7305,30 @@ $('#btn-mole')?.addEventListener('click', openMole);
 $('#mole-go')?.addEventListener('click', moleStart);
 $('#btn-repair')?.addEventListener('click', openRepair);
 $('#repair-go')?.addEventListener('click', rpStart);
+// ★ v1.46 빛의 병 정리
+$('#btn-sort')?.addEventListener('click', openSort);
+$('#sort-go')?.addEventListener('click', sortGo);
+$('#sort-undo')?.addEventListener('click', sortUndo);
+$('#sort-shuffle')?.addEventListener('click', sortShuffle);
+$('#sort-bottle')?.addEventListener('click', sortAddBottle);
+$('#sort-hint')?.addEventListener('click', sortHint);
+$('#sort-charge')?.addEventListener('click', sortCharge);
+$('#sort-orders')?.addEventListener('click', e=>{
+  const el=e.target.closest && e.target.closest('.sort-order');
+  if(el) sortChooseOrder(el.dataset.order);
+});
+$$('.sort-mode').forEach(b=>b.addEventListener('click', ()=>sortSetMode(b.dataset.mode)));
+$('#sort-board')?.addEventListener('click', e=>{
+  const el=e.target.closest && e.target.closest('.sort-bottle');
+  if(el) sortTap(Number(el.dataset.i));
+});
+$('#sort-board')?.addEventListener('pointerdown', e=>{
+  const el=e.target.closest && e.target.closest('.sort-bottle');
+  if(el && sort.locked.has(Number(el.dataset.i))) sortHoldStart(Number(el.dataset.i),e);
+});
+window.addEventListener('pointerup', sortHoldEnd);
+window.addEventListener('pointercancel', sortHoldEnd);
+window.addEventListener('blur', sortHoldEnd);
 $('#pz-practice')?.addEventListener('click', ()=>openPuzzle(true));
 $('#pz-ask')?.addEventListener('click', askPuzzle);
 $('#chat-mic')?.addEventListener('click', startMic);
@@ -5773,7 +7347,6 @@ $('#set-voice-rate')?.addEventListener('input', e=>{
   const v = $('#voice-rate-val'); if(v) v.textContent = r.toFixed(2);
 });
 $('#voice-test')?.addEventListener('click', ()=> speak('안녕! 나는 루미야. 오늘도 같이 공부해 보자!'));
-$('#chat-voice')?.addEventListener('click', toggleVoiceChat);
 $('#review-next')?.addEventListener('click', nextReview);
 $('#revive-accept')?.addEventListener('click', acceptRevive);
 $('#revive-skip')?.addEventListener('click', ()=> $('#revive-modal').classList.add('hidden'));
@@ -5836,62 +7409,6 @@ applySettings();
 
 // 시작 화면의 대표 로봇을 그린다(로그인 전 장식).
 renderHeroBot();
-
-// ============================================================
-// 컴백 카드 · 지식 도감 · 방명록 (2026-11-03)
-// ============================================================
-let _cbTry = 0;
-async function loadComeback(){
-  const box = $('#comeback-card');
-  if(!box) return;
-  // ★ 2026-11-04: 능동 넛지가 떠 있으면 규칙 카드는 접는다(말이 겹치지 않게)
-  if(state.nudgeActive){ box.classList.add('hidden'); return; }
-  const dots = $('#cb-dots');
-  // 1순위: 오늘 학습 계획의 «다음 단계» — 아이가 뭘 해야 할지 바로 보이게
-  const p = state.plan;
-  const steps = (p && p.plan && p.plan.steps) || [];
-  const next = steps.find(s => !s.done);
-  if(next){
-    const idx = steps.indexOf(next) + 1;
-    const ico = $('#cb-ico'), txt = $('#cb-text'), btn = $('#cb-cta');
-    if(ico) ico.textContent = '📅';
-    if(txt) txt.textContent = `오늘 ${idx}단계 · ${next.title}`;
-    if(btn){
-      btn.textContent = '시작하기';
-      btn.onclick = () => { box.classList.add('hidden'); startPlanStep(next.id); };
-    }
-    if(dots){
-      dots.innerHTML = steps.map(s=>`<i class="${s.done?'on':(s===next?'now':'')}"></i>`).join('');
-      dots.classList.remove('hidden');
-    }
-    _cbTry = 0;
-    box.classList.remove('hidden');
-    return;
-  }
-  if(dots) dots.classList.add('hidden');
-  try{
-    const r = await api('/api/comeback');
-    const c = r && r.card;
-    if(!c){ if(dots) dots.classList.add('hidden'); return; }   // 카드가 없으면 그냥 두지 않는다
-    const ico = $('#cb-ico'), txt = $('#cb-text'), btn = $('#cb-cta');
-    if(ico) ico.textContent = c.icon || '📖';
-    if(txt) txt.textContent = c.text || '';
-    if(btn){
-      btn.textContent = c.cta || '가기';
-      btn.onclick = ()=>{
-        box.classList.add('hidden');
-        if(c.target === 'review') openReview();
-        else if(c.target === 'world') $('#btn-world') && $('#btn-world').click();
-      };
-    }
-    _cbTry = 0;
-    box.classList.remove('hidden');
-  }catch(e){
-    // 로그인 토큰이 아직 준비되지 않은 경우가 대부분 → 잠시 후 재시도
-    if(_cbTry++ < 4) setTimeout(loadComeback, 1500);
-    else _cbTry = 0;
-  }
-}
 
 // ★ v1.39 «자기 생각 × 도로랜드» — 공작소 · 정비사 수첩
 //   이 화면의 주인공은 «숫자» 가 아니라 «처음 생각 → 고쳐 쓴 생각» 두 문장이다.
@@ -6131,10 +7648,17 @@ function nudgeGo(t){
 async function loadNudge(){
   const box = $('#nudge-bubble');
   if(!box) return;
+  if(state.nudgeDismissed){ state.nudgeActive = false; box.classList.add('hidden'); return; }
   if(!state.nudgeOptIn){ state.nudgeActive = false; box.classList.add('hidden'); return; }
+  // ★ v1.50 «오늘 딱 하나»: 계획·복습·기분을 모두 읽어 한 걸음만 제안한다.
+  //   없을 때만 예전의 능동 넛지 → 계획 다음 단계 순으로 내려간다.
+  try{
+    const a = await api('/api/next-action', undefined, 8000, 'GET');
+    if(a && a.action){ renderNextAction(a.action); return; }
+  }catch(e){}
   try{
     const n = await api('/api/nudge/today');
-    if(!n || !n.text){ state.nudgeActive = false; box.classList.add('hidden'); return; }
+    if(!n || !n.text){ state.nudgeActive = false; box.classList.add('hidden'); showPlanNudge(); return; }
     _nudgeId = n.id || 0;
     const speech = String(n.text).replace(/^[^:]+:\s*/, '');
     $('#nb-text').textContent = speech;
@@ -6152,8 +7676,66 @@ async function loadNudge(){
     };
     state.nudgeActive = true;
     box.classList.remove('hidden');
-    const cb = $('#comeback-card'); if(cb) cb.classList.add('hidden');
-  }catch(e){ state.nudgeActive = false; box.classList.add('hidden'); }
+  }catch(e){ state.nudgeActive = false; box.classList.add('hidden'); showPlanNudge(); }
+}
+// ★ v1.50 «오늘 딱 하나» — 첫 화면은 기능 목록이 아니라 한 걸음.
+//   서버(/api/next-action)가 «기분 → 막힌 개념 → 복습 → 계획» 순으로 하나만 골라 준다.
+function renderNextAction(act){
+  const box = $('#nudge-bubble'); if(!box) return;
+  state.nudgeActive = true;
+  const nm = $('#nb-name'); if(nm) nm.textContent = (state.robot && state.robot.name) || '루미';
+  const av = $('#nb-avatar');
+  if(av && state.robot){
+    try{ av.innerHTML = robotSVG(state.robot.template, effectiveColors(state.robot.template, robotPalette())); }catch(e){}
+  }
+  const txt = $('#nb-text'); if(txt) txt.textContent = act.title;
+  const cta = $('#nb-cta');
+  if(cta){
+    cta.textContent = act.cta || '시작하기';
+    cta.onclick = ()=>{ box.classList.add('hidden'); runNextAction(act); };
+  }
+  box.classList.remove('hidden');
+}
+async function runNextAction(act){
+  if(!act) return;
+  try{
+    if(act.target === 'chat'){ await chatOpen(); chatModeSet('chat'); return; }
+    if(act.target === 'learn'){
+      await chatOpen();
+      chatModeSet('learn');
+      const input = $('#chat-text');
+      if(input) input.value = `${act.concept}이 아직 헷갈려. 같이 볼까?`;
+      sendChat(false);
+      return;
+    }
+    if(act.target === 'review'){ openReview(); return; }
+    if(act.target === 'plan' && act.stepId){ startPlanStep(act.stepId); return; }
+  }catch(e){ toast(e.message); }
+}
+// ★ v1.49 «말 걸기는 한 줄만»: 예전에는 comeback-card(계획 다음 단계)와 nudge-bubble(능동 넛지)이
+//   같은 자리에서 서로를 숨기며 경쟁했고, 오른쪽 «오늘의 학습 계획» 패널과 내용도 겹쳤다.
+//   이제 말풍선은 하나만 남기고, 넛지가 없을 때만 계획의 다음 단계를 같은 말풍선에 담는다.
+function showPlanNudge(){
+  if(state.nudgeActive) return;                    // 능동 넛지가 이미 말을 걸었으면 비켜준다
+  if(state.nudgeDismissed) return;                 // 아이가 닫았으면 다시 띄우지 않는다
+  const box = $('#nudge-bubble'); if(!box) return;
+  if(!state.nudgeOptIn){ box.classList.add('hidden'); return; }
+  const steps = (state.plan && state.plan.plan && state.plan.plan.steps) || [];
+  const next = steps.find(s => !s.done);
+  if(!next){ box.classList.add('hidden'); return; }   // 오늘 할 일이 없으면 조용히 있는다
+  const idx = steps.indexOf(next) + 1;
+  const nm = $('#nb-name'); if(nm) nm.textContent = (state.robot && state.robot.name) || '루미';
+  const av = $('#nb-avatar');
+  if(av && state.robot){
+    try{ av.innerHTML = robotSVG(state.robot.template, effectiveColors(state.robot.template, robotPalette())); }catch(e){}
+  }
+  const txt = $('#nb-text'); if(txt) txt.textContent = `오늘 ${idx}단계 · ${next.title}`;
+  const cta = $('#nb-cta');
+  if(cta){
+    cta.textContent = '시작하기';
+    cta.onclick = ()=>{ box.classList.add('hidden'); startPlanStep(next.id); };
+  }
+  box.classList.remove('hidden');
 }
 
 // ── ④ 오늘 기분 → 루미 말투 + 방 분위기 등 ──
@@ -6362,7 +7944,9 @@ async function claimSeason(){
 // ── 이벤트 바인딩 ──
 (function bindCompanionUI(){
   const on = (sel, fn)=>{ const el = $(sel); if(el) el.addEventListener('click', fn); };
-  on('#nb-close', ()=>{ const b=$('#nudge-bubble'); if(b) b.classList.add('hidden'); });
+  // ★ v1.49: 한 번 닫은 말풍선은 이번 세션 동안 다시 띄우지 않는다
+  //   (예전에는 닫아도 renderPlan/renderMyroom 때마다 같은 카드가 다시 나타났다).
+  on('#nb-close', ()=>{ state.nudgeDismissed=true; const b=$('#nudge-bubble'); if(b) b.classList.add('hidden'); });
   $$('.mood-opts button').forEach(b=>b.addEventListener('click', ()=>sendMood(b.dataset.mood)));
   on('#mood-skip', ()=>{ const b=$('#mood-card'); if(b) b.classList.add('hidden'); });
   on('#btn-growth', openGrowth);
