@@ -8,7 +8,7 @@ question first, then explains with an everyday analogy, then suggests one next s
 
 > RooMi = **Room + Me** — another version of me, living in my room.
 
-**Live demo:** https://my-dorobot.app.workbuddy.host/
+**Live demo:** https://my-dorobot.app.workbuddy.host/?sharecode=M3SXYFV64Y
 Open the demo account button on the start screen to see a room with a week of history already filled in.
 
 ---
