@@ -127,25 +127,70 @@ await test('teach-back: 카드가 없으면 검증하지 않고 nocard(실패)�
   assert.equal(v.ok, false); assert.equal(v.source, 'nocard');
 });
 
-// ---------- 5. 탑 층 설계 — 안개 예측 가능성 ----------
-await test('탑: 「같으면」 문장도 층의 절반은 안개 없이 나온다(항상 안개면 «원래 말» 이 정답이 아님)', async () => {
-  const original = '분모가 같으면 분자끼리 더하면 돼요';
-  const others = [{ topic: '빛', concept: '물체가 반짝이는 것' }, { topic: '온도와 열', concept: '따뜻함이 옮겨 가는 것' }];
-  let fogged = 0, n = 0;
-  for (let uid = 1; uid <= 400; uid++) {
-    const seed = (uid * 31 + R.fogDayHash('2026-11-27') + 0) >>> 0;   // server 의 시드 식과 같은 형태
-    const p = R.planFloor({ topic: '분수의 덧셈', original, others, names: ['분수'], seed, boss: false });
-    if (p.canFog) { n++; if (p.fogged) fogged++; }
+// ---------- 5. 탑 층 설계 — 한 번의 탑(run) 안의 안개 분포 ----------
+// 한 탑 = 한 사용자 · 하루의 덱. 층마다 원래 말/안개 말이 섞여 있어야 하고, 층 번호나 고정 비트로 예측되면 안 된다.
+const ORIG_A = '분모가 같으면 분자끼리 더하면 돼요';
+const OTHERS = [{ topic: '빛', concept: '물체가 반짝이는 것' }, { topic: '온도와 열', concept: '따뜻함이 옮겨 가는 것' }];
+const CONCEPTS = ['분수의 덧셈', '소수', '약분·통분', '도형 넓이', '각도', '자석'];
+// server.js fogInputFor 와 같은 시드 식(uid*31 + 날짜해시 + 층)
+function deckInputs(uid, day, n = 6) {
+  const dh = R.fogDayHash(day);
+  return Array.from({ length: n }, (_, i) => ({
+    topic: CONCEPTS[i % CONCEPTS.length], original: ORIG_A, others: OTHERS, names: ['분수'],
+    seed: (uid * 31 + dh + i) >>> 0, boss: false,
+  }));
+}
+const pattern = (plans) => plans.map(p => (p.fogged ? 'F' : 'R')).join('');
+
+await test('탑(한 번의 탑): 안개 가능한 일반 층이 2개 이상이면 한 덱 안에 안개 층과 원래 말 층이 함께 있다', async () => {
+  let checked = 0;
+  for (let uid = 1; uid <= 300; uid++) {
+    const plans = R.planDeck(deckInputs(uid, '2026-11-27'), uid + '|2026-11-27');
+    const ord = plans.filter(p => p.canFog && p.strategy !== 'none');
+    if (ord.length < 2) continue;
+    checked++;
+    const f = ord.filter(p => p.fogged).length;
+    assert.ok(f >= 1 && f <= ord.length - 1, `uid ${uid}: 한 덱이 한쪽으로만 몰림 (${pattern(plans)})`);
   }
-  const share = fogged / n;
-  assert.ok(n > 300, `표본이 부족함 ${n}`);
-  assert.ok(share > 0.3 && share < 0.7, `안개 비율 ${share.toFixed(2)} — 0.3~0.7 이어야 원래 말을 맞힐 수 있다`);
+  assert.ok(checked > 250, `표본 부족: ${checked}`);
 });
-await test('탑: 주말 BOSS 층은 항상 안개(개념 이식)를 쓴다', async () => {
-  for (let seed = 0; seed < 30; seed++) {
-    const p = R.planFloor({ topic: 'A', original: '빛은 반짝여.', others: [{ topic: '온도', concept: '따뜻함' }], names: ['빛'], seed, boss: true });
-    assert.equal(p.fogged, true, `seed ${seed} 에서 BOSS 층이 안개가 아님`);
+await test('탑(한 번의 탑): 같은 사용자의 덱 패턴은 날마다 달라지고, 0번 층 상태가 날짜와 무관하게 고정되지 않는다', async () => {
+  const uid = 42;
+  const pats = new Set();
+  for (let d = 1; d <= 30; d++) {
+    const day = '2026-11-' + String(d).padStart(2, '0');
+    pats.add(pattern(R.planDeck(deckInputs(uid, day), uid + '|' + day)));
   }
+  assert.ok(pats.size >= 8, `30일 동안 덱 패턴이 ${pats.size}가지뿐이다`);
+  const first = new Set([...pats].map(p => p[0]));
+  assert.equal(first.size, 2, '0번 층이 항상 같은 상태다');
+});
+await test('탑(한 번의 탑): 사용자마다 패턴이 다양하다(고정 비트·층 번호 규칙이 아님)', async () => {
+  const pats = new Map();
+  for (let uid = 1; uid <= 300; uid++) {
+    const p = pattern(R.planDeck(deckInputs(uid, '2026-11-27'), uid + '|2026-11-27'));
+    pats.set(p, (pats.get(p) || 0) + 1);
+  }
+  assert.ok(pats.size >= 20, `서로 다른 패턴이 ${pats.size}개뿐이다`);
+  const top = Math.max(...pats.values());
+  assert.ok(top / 300 < 0.25, `가장 흔한 패턴이 ${((top / 300) * 100).toFixed(1)}% 를 차지한다`);
+});
+await test('탑: 안개가 가능한 덱은 안개 층이 최소 하나 있다(전부 원래 말인 덱 금지)', async () => {
+  for (let uid = 1; uid <= 200; uid++) {
+    const plans = R.planDeck(deckInputs(uid, '2026-11-27', 3), uid + '|2026-11-27');
+    if (plans.some(p => p.canFog)) assert.ok(plans.some(p => p.fogged), `uid ${uid}: 안개 가능한데 안개 층 0`);
+  }
+});
+await test('탑: 주말 BOSS 층은 reveal 을 무시하고 항상 안개다', async () => {
+  for (let seed = 0; seed < 30; seed++) {
+    const p = R.planFloor({ topic: 'A', original: '빛은 반짝여.', others: [{ topic: '온도', concept: '따뜻함' }], names: ['빛'], seed, boss: true, reveal: true });
+    assert.equal(p.fogged, true, `seed ${seed}: BOSS 층이 안개가 아님`);
+  }
+});
+await test('탑: 같은 입력이면 같은 덱(GET/POST 가 같은 문장을 본다)', async () => {
+  const a = pattern(R.planDeck(deckInputs(7, '2026-11-27'), '7|2026-11-27'));
+  const b = pattern(R.planDeck(deckInputs(7, '2026-11-27'), '7|2026-11-27'));
+  assert.equal(a, b);
 });
 
 // ---------- 6. 버전 일관성 ----------

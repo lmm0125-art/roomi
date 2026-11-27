@@ -15,7 +15,7 @@ const express = require('express');
 // ★ 2026-11-27 (v1.82): 순수 학습 규칙 — lib/learning-rules.js (테스트가 직접 검증한다).
 const LR = require('./lib/learning-rules.js');
 const { daysBetween, fogStability, fogDecay, isGotIt, koIraNeun, koJosaFix, fogEscapeRe, l1LineFor,
-  fogFlipAt, fogDayHash, planFloor, TOWER_FLOOR_MAX } = LR;
+  fogFlipAt, fogDayHash, TOWER_FLOOR_MAX } = LR;
 const db = new DatabaseSync(process.env.DB_PATH || path.join(__dirname, 'roomi.db'));
 // ★ v1.53: 배포 재시작 때 이전 프로세스가 잠깐 DB 를 쥐고 있으면 «database is locked» 로 죽는다.
 //   WAL 로 읽기/쓰기 충돌을 줄이고, 잠금은 최대 8초 기다린다(그 사이 이전 프로세스가 종료된다).
@@ -1224,31 +1224,24 @@ function bossConceptFor(deck){
 }
 
 // ★ 2026-11-27 (v1.82): 층 설계 규칙은 lib/learning-rules.js(순수 함수)에 있다. 서버는 DB 값만 모은다.
-function fogStatement(uid, topic, floor, day, opts){
-  const o = opts || {};
+// ★ 2026-11-27 (v1.83): 층 입력(DB 값 + 시드). 설계 규칙은 lib 의 planFloor/planDeck 이 맡는다.
+function fogInputFor(uid, topic, floor, day, boss){
   const original = towerOriginalFor(uid, topic);
   const seed = (((Number(uid) || 0) * 31 + fogDayHash(day) + (Number(floor) || 0)) >>> 0);
-  const others = fogOtherConceptsFor(uid, topic);
-  const names = fogTopicNamesIn(topic, original);
-  return planFloor({ topic, original, others, names, seed, boss: !!o.boss, forceFog: !!o.forceFog });
+  return { topic, original, others: fogOtherConceptsFor(uid, topic), names: fogTopicNamesIn(topic, original), seed, boss: !!boss };
 }
 
 // 탑 전체 상태(층 배열) — GET/POST 가 공유하는 유일한 출제 경로(같은 입력 → 같은 문장).
 //   BOSS: 주말(KST 토·일)이면 7층을 추가한다(개념 이식 필수 층).
 //   ★ 2026-11-21 (v1.74) A3 ③: BOSS 개념은 deck[0] 대신 «prereq 가 붙은 개념» 을 우선 출제한다.
 function towerStateFor(uid, day, deck, boss){
-  const floors = [];
-  for(let i = 0; i < deck.length; i++){
-    floors.push({ floor: i, concept: deck[i], ...fogStatement(uid, deck[i], i, day, { boss: false }) });
-  }
-  // ★ 2026-11-27 (v1.82): 덱에 안개 층이 하나도 없으면 안개가 가능한 첫 층을 안개로 바꾼다(전부 원래 말인 탑 방지).
-  if(!floors.some(f => f.fogged)){
-    const idx = floors.findIndex(f => f.canFog);
-    if(idx >= 0) floors[idx] = { floor: idx, concept: deck[idx], ...fogStatement(uid, deck[idx], idx, day, { boss: false, forceFog: true }) };
-  }
+  // ★ 2026-11-27 (v1.83): 일반 층은 한 탑 단위로 설계한다(planDeck) — 층마다 독립 해시 + 쏠림 보정 + 최소 1층 안개.
+  const inputs = deck.map((t, i) => fogInputFor(uid, t, i, day, false));
+  const plans = LR.planDeck(inputs, uid + '|' + day);
+  const floors = deck.map((t, i) => ({ floor: i, concept: t, ...plans[i] }));
   if(boss && deck.length){
     const bossTopic = bossConceptFor(deck) || deck[0];
-    floors.push({ floor: deck.length, concept: bossTopic, ...fogStatement(uid, bossTopic, deck.length, day, { boss: true }) });
+    floors.push({ floor: deck.length, concept: bossTopic, ...LR.planFloor(fogInputFor(uid, bossTopic, deck.length, day, true)) });
   }
   return floors;
 }
