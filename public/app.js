@@ -4814,7 +4814,8 @@ $('#demo-tour-close').addEventListener('click', ()=> $('#demo-tour').classList.a
 
 async function runDemoTour(){
   const panel = $('#demo-tour'), list = $('#demo-tour-steps'), enterBtn = $('#demo-tour-enter'), btn = $('#btn-demo-tour');
-  list.textContent = ''; enterBtn.classList.add('hidden');
+  const reportBtn = $('#demo-tour-report');
+  list.textContent = ''; enterBtn.classList.add('hidden'); if(reportBtn) reportBtn.classList.add('hidden');
   panel.classList.remove('hidden'); btn.disabled = true;
 
   // 한 단계 = 목록 항목 하나. 실패하면 그 자리에 실패 문구를 남기고 뒤 단계는 멈춘다(앞 단계에 의존하므로).
@@ -4876,6 +4877,22 @@ async function runDemoTour(){
 
     // 시연 끝: 같은 데모 계정으로 앱 화면에 들어가는 버튼. 다시 시드하지 않아 방금 만든 기록이 남는다.
     enterBtn.classList.remove('hidden');
+    // ★ v1.85: «오늘의 성과 보기» — 방에 들어가기 전에 성장 리포트로 바로 보낸다.
+    if(reportBtn){
+      reportBtn.classList.remove('hidden');
+      reportBtn.onclick = async ()=>{
+        panel.classList.add('hidden');
+        try{
+          const u2 = await api('/api/user', { nickname: seed.nickname });
+          state.user = u2.user; state.quests = u2.quests || state.quests;
+          absorbUserMeta(u2);
+          if(u2.user.token) localStorage.setItem(SK.token, u2.user.token);
+          startPlayTimer();
+          await enter();
+          goNav('board');
+        }catch(e){ alert(e.message); }
+      };
+    }
     enterBtn.onclick = async ()=>{
       panel.classList.add('hidden');
       try{
