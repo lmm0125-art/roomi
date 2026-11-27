@@ -1850,14 +1850,52 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
   };
   const EYE_X=0.235, EYE_Y=0.045, EYE_W=0.215, EYE_H=0.275;
   const eyeBaseY = hy+EYE_Y;
-  const eyeL = add(BABYLON.MeshBuilder.CreatePlane('eyeL',{width:EYE_W,height:EYE_H},scene), layerMat('eyeWhite_L',eyeWhiteTex('L')));
-  eyeL.position.set(-EYE_X, eyeBaseY, visorZ(-EYE_X,EYE_Y)+0.016);
-  const eyeR = add(BABYLON.MeshBuilder.CreatePlane('eyeR',{width:EYE_W,height:EYE_H},scene), layerMat('eyeWhite_R',eyeWhiteTex('R')));
-  eyeR.position.set(EYE_X, eyeBaseY, visorZ(EYE_X,EYE_Y)+0.016);
-  const pupilL = add(BABYLON.MeshBuilder.CreatePlane('pupilL',{width:EYE_W,height:EYE_H},scene), layerMat('pupilMat_L',pupilTex('L')));
-  pupilL.position.set(-EYE_X, eyeBaseY, visorZ(-EYE_X,EYE_Y)+0.022);
-  const pupilR = add(BABYLON.MeshBuilder.CreatePlane('pupilR',{width:EYE_W,height:EYE_H},scene), layerMat('pupilMat_R',pupilTex('R')));
-  pupilR.position.set(EYE_X, eyeBaseY, visorZ(EYE_X,EYE_Y)+0.022);
+  // 눈 판을 visor 곡면에 맞춘다(v1.84).
+  //   예전엔 평면 하나를 중심 깊이에만 두어, 옆에서 보면 바깥쪽 눈 가장자리가 곡면에서 떠 보이고
+  //   안쪽은 화면에 묻혔다. 여기서는 정점마다 곡면 깊이(visorZ)를 넣고 법선을 다시 계산한다.
+  //   메시 원점은 눈 중심에 둬서 깜빡임(scaling.y)과 시선 이동(position)이 예전과 같이 동작한다.
+  const eyeSurface = (name, sx, off)=>{
+    // 격자 N×N 을 직접 만든다(정점 수정 방식은 이 메시에서 반영되지 않았다).
+    //   정점 위치: 눈 중심 기준 x,y / z 는 visor 기준 절대값(곡면 깊이 + off)
+    //   uv: 평면 원본의 네 모서리 uv 를 쌍선형 보간해 텍스처 방향을 그대로 유지한다.
+    const N = 8, W = EYE_W, H = EYE_H;
+    const ref = BABYLON.MeshBuilder.CreatePlane(name+'_ref',{width:W,height:H},scene);
+    const ruv = ref.getVerticesData(BABYLON.VertexBuffer.UVKind);
+    ref.dispose();
+    const pos = [], uvs = [], idx = [];
+    const c = (k)=>[ruv[k*2], ruv[k*2+1]];
+    const [c0,c1,c2,c3] = [c(0),c(1),c(2),c(3)];
+    for(let j=0;j<=N;j++){
+      for(let i=0;i<=N;i++){
+        const s = i/N, t = j/N;
+        const px = -W/2 + W*s, py = -H/2 + H*t;
+        pos.push(px, py, visorZ(sx+px, EYE_Y+py) + off);
+        // 원본 uv: 0:(-,-) 1:(+,-) 2:(+,+) 3:(-,+) 모서리를 쌍선형 보간
+        const u =(1-s)*(1-t)*c0[0] + s*(1-t)*c1[0] + s*t*c2[0] + (1-s)*t*c3[0];
+        const v = (1-s)*(1-t)*c0[1] + s*(1-t)*c1[1] + s*t*c2[1] + (1-s)*t*c3[1];
+        uvs.push(u, v);
+      }
+    }
+    for(let j=0;j<N;j++){
+      for(let i=0;i<N;i++){
+        const a=j*(N+1)+i, b=a+1, d=a+(N+1), e=d+1;
+        // 원본 평면과 같은 감김 방향(a→b→e, a→e→d)이라 법선이 원본과 같은 쪽을 본다
+        idx.push(a,b,e, a,e,d);
+      }
+    }
+    const nrm = [];
+    BABYLON.VertexData.ComputeNormals(pos, idx, nrm);
+    const vd = new BABYLON.VertexData();
+    vd.positions = pos; vd.uvs = uvs; vd.indices = idx; vd.normals = nrm;
+    const m = new BABYLON.Mesh(name, scene);
+    vd.applyToMesh(m, true);
+    m.position.set(sx, eyeBaseY, 0);
+    return m;
+  };
+  const eyeL = add(eyeSurface('eyeL', -EYE_X, 0.016), layerMat('eyeWhite_L',eyeWhiteTex('L')));
+  const eyeR = add(eyeSurface('eyeR', EYE_X, 0.016), layerMat('eyeWhite_R',eyeWhiteTex('R')));
+  const pupilL = add(eyeSurface('pupilL', -EYE_X, 0.022), layerMat('pupilMat_L',pupilTex('L')));
+  const pupilR = add(eyeSurface('pupilR', EYE_X, 0.022), layerMat('pupilMat_R',pupilTex('R')));
 
   // ── v1.31 볼터치: 화면 아래 양옆에 «아주 옅은 온기»만 ──
   //   점 찍힌 스티커가 아니라 화면 속 빛 번짐처럼 보이도록 방사형 알파 그라디언트.
