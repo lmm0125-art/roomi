@@ -67,7 +67,10 @@ docs/중간발표-10월26일/중간발표-8분-v13.pptx
 docs/중간발표-10월26일/중간발표-8분-v14.pptx
 
 # Internal documents and presentation material (kept locally, never committed)
-docs/
+#   예외: 공개 가능한 기술 문서 2건만 저장소에 포함한다.
+docs/*
+!docs/기술문서.md
+!docs/데이터베이스-설계-전체-20261109.md
 CODEX_CONTEXT.md
 assets/bot-render.png
 
