@@ -109,8 +109,8 @@ dorobot/
 │   ├── admin.html         standalone admin console
 │   └── assets/            robot GLBs (78), room props, logo
 ├── docs/
-│   ├── 技术文档.md         authoritative feature index + §14 «problem→design→evidence» table
-│   ├── 数据库设计-全量-20261109.md   1,384-line DB design doc
+│   ├── 기술문서.md         authoritative feature index + §14 «problem→design→evidence» table
+│   ├── 데이터베이스-설계-전체-20261109.md   1,384-line DB design doc
 │   └── 设计-*.md          game/world design docs (some are concepts only, NOT implemented)
 ├── AGENTS.md              short collaboration rules (memo protocol, Korean comments, checks)
 ├── CODEX_CONTEXT.md       OLD handoff (Oct 2026) — historical, do not trust numbers
@@ -659,7 +659,7 @@ Reading: this is a single-model judgement with run-to-run and wording sensitivit
 - ❌ Add a second writer for `cell_balance` or `chat_sessions`.
 - ❌ Deploy without comparing `sha256` of `app.js` / `style.css` against the live URL.
 - ❌ Assume `docs/*.md` design files are implemented — several are concepts only (check §14 of
-  `技术文档.md`).
+  `기술문서.md`).
 
 ---
 

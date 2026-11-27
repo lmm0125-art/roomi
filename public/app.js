@@ -5461,7 +5461,7 @@ async function savePrefs(){
     state.plan = null; state.goals = null;
     toast('학습 설정을 저장했어요. 계획을 다시 질게요!');
     // ★ 2026-11-21 (v1.74) C7 «루미 생각 중»: 계획을 새로 짜는 동안(서버 LLM 시간) 상단에
-    //   생각 중 바를 띄운다 — 모달·입력을 막지 않는 상단横条 방식(채팅 스트리밍에는 미적용).
+    //   생각 중 바를 띄운다 — 모달·입력을 막지 않는 상단가로 바 방식(채팅 스트리밍에는 미적용).
     withThinking(Promise.all([loadPlan(), loadGoals()]), { label:'루미가 새 계획을 짜고 있어…' });
   }catch(e){ toast(e.message); }
 }

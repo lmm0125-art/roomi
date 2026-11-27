@@ -78,7 +78,7 @@
     grassThin: {},
     fxProbe: { active: false, frames: 0, time: 0, low: 0 },
     waterMat: null, __shadowListSave: null,
-    // ★ 2026-11-21 (v1.73) L2 환경 시스템 — 昼夜/날씨/안개/야간 요소(3단계 작업자 계약 필드).
+    // ★ 2026-11-21 (v1.73) L2 환경 시스템 — 낮밤/날씨/안개/야간 요소(3단계 작업자 계약 필드).
     //   dayNight: { t(0..1, 0=새벽), day(세계 날짜), hour(0..24), isNight, nightK(0..1 밤 비중) }
     //   weather:  { mode('clear'|'cloudy'|'rain'|'mist'), windStrength(0..1 — 후속 바람 흔들림 소비),
     //               fogBoost(0..0.8 — /api/lamps decay≥50 비율×0.8 «기억 안개»), cloud/rain/mist(블렌드 가중) }
@@ -428,7 +428,7 @@
         skybox.infiniteDistance = true;
         skybox.isPickable = false;
         skybox.applyFog = false;
-        // ★ 2026-11-21 (v1.73) L2 昼夜 — SkyMaterial 참조를 남겨 updateEnvironment 가
+        // ★ 2026-11-21 (v1.73) L2 낮밤 — SkyMaterial 참조를 남겨 updateEnvironment 가
         //   sunPosition(태양 궤도)·luminance(새벽/밤 명암)·mieCoefficient(석양 산란)를 구동한다.
         W.skyMat = sky;
         W.skyBox = skybox;
@@ -840,7 +840,7 @@
 
   // ══════════════ ★ 2026-11-21 (v1.73) L1 성능 프레임워크 ══════════════
   //  ① GLB 반복 소품 인스턴싱  ② 잔디 thinInstance  ③ 거리 3환 컬링  ④ 품질 단계(W.fx)
-  //  ── «2·3단계(昼夜/天气/风摆) 작업자 필독 계약» ──
+  //  ── «2·3단계(낮밤/날씨/바람 흔들림) 작업자 필독 계약» ──
   //    새 특수효과를 만들 때는 반드시:
   //      1) W.fx 에 키를 추가한다 (아래 FX_TIERS 네 단계 표 전부).
   //      2) applyFeature() 에 «실제 토글 코드» 를 붙인다 — low/min 에서 반드시 꺼지고,
@@ -3010,7 +3010,7 @@
 
   // ══════════════ ★ 2026-11-21 (v1.73) L2 환경 시스템 + L3 표현 레이어 ══════════════
   //  «루미의 기억이 흐려지는 시간» — 밤은 플레이의 일부다. 미술은 이 세계관을 서비스한다.
-  //  ── 3단계(风摆) 작업자 계약 필드 ──
+  //  ── 3단계(바람 흔들림) 작업자 계약 필드 ──
   //   · W.dayNight : { t(0..1, 0=새벽), day(세계 날짜 정수), hour(0..24), isNight, nightK }
   //       현실 20분 = 세계 하루(DAY_LEN). updateEnvironment() 가 매 프레임 갱신.
   //   · W.weather  : { mode('clear'|'cloudy'|'rain'|'mist'), windStrength(0..1),
@@ -3045,12 +3045,12 @@
     { k: 'house3', x: 18.0, z: -6.0, s: 0.82, rot: -0.9 }
   ];
 
-  // ── 昼夜 색 팔레트 — «지브리감» 키프레임(새벽 안개蓝 → 정오 투명한 밝음 → 석양 금橙 → 밤 深蓝紫).
+  // ── 낮밤 색 팔레트 — «지브리감» 키프레임(새벽 안개 파랑 → 정오 투명한 밝음 → 석양 금빛 주황 → 밤 짙은 남보라).
   //    숫자 필드: sunI(태양광 세기) hemiI(반광) lum(SkyMaterial luminance, 클수록 어두움)
   //    mie(빛 산란) star(별 밝기) night(밤 비중) fogD(안개 배수) win(창불) moon(달)
   const DN_KEYS = [
     { t: 0.00, sunI: 0.50, hemiI: 0.34, lum: 2.4, mie: 0.011, star: 0.50, night: 0.60, fogD: 1.55, win: 0.55, moon: 0.55,
-      sunC: '#ffc9a0', hemiC: '#b9c8e6', hemiG: '#2e3550', fogC: '#c3d3e6', ccC: '#8fa7c9' },   // 새벽 — 안개蓝
+      sunC: '#ffc9a0', hemiC: '#b9c8e6', hemiG: '#2e3550', fogC: '#c3d3e6', ccC: '#8fa7c9' },   // 새벽 — 안개 파랑
     { t: 0.06, sunI: 1.60, hemiI: 0.58, lum: 1.25, mie: 0.010, star: 0.02, night: 0.10, fogD: 1.15, win: 0.15, moon: 0,
       sunC: '#ffd9a8', hemiC: '#ffe2c4', hemiG: '#55503e', fogC: '#e2d3bd', ccC: '#ffd2a3' },   // 일출 — 금빛
     { t: 0.16, sunI: 2.10, hemiI: 0.72, lum: 1.0, mie: 0.0055, star: 0, night: 0, fogD: 1.0, win: 0, moon: 0,
@@ -3060,9 +3060,9 @@
     { t: 0.76, sunI: 2.05, hemiI: 0.70, lum: 1.0, mie: 0.006, star: 0, night: 0.05, fogD: 1.0, win: 0.08, moon: 0,
       sunC: '#ffe3b4', hemiC: '#ffedd2', hemiG: '#6e7a5c', fogC: '#dde4e2', ccC: '#c8ddef' },   // 늦은 오후
     { t: 0.87, sunI: 1.30, hemiI: 0.50, lum: 1.5, mie: 0.012, star: 0.12, night: 0.35, fogD: 1.2, win: 0.50, moon: 0.15,
-      sunC: '#ff9d54', hemiC: '#ffd2a0', hemiG: '#5c5443', fogC: '#edb98a', ccC: '#ff9e66' },   // 석양 — 금橙
+      sunC: '#ff9d54', hemiC: '#ffd2a0', hemiG: '#5c5443', fogC: '#edb98a', ccC: '#ff9e66' },   // 석양 — 금빛 주황
     { t: 0.95, sunI: 0.42, hemiI: 0.20, lum: 6.0, mie: 0.006, star: 1.0, night: 1.0, fogD: 1.6, win: 0.95, moon: 1.0,
-      sunC: '#a8bde9', hemiC: '#8497c4', hemiG: '#232c45', fogC: '#2a3554', ccC: '#1b2540' }    // 밤 — 深蓝紫(달빛)
+      sunC: '#a8bde9', hemiC: '#8497c4', hemiG: '#232c45', fogC: '#2a3554', ccC: '#1b2540' }    // 밤 — 짙은 남보라(달빛)
   ];
   DN_KEYS.push(Object.assign({}, DN_KEYS[0], { t: 1.0 }));   // wrap — 1.0 = 다음 날 새벽
 
@@ -3477,7 +3477,7 @@
     } catch (e) { /* 길꾸미기 실패는 조용히 */ }
   }
 
-  // ── 급경사碎石 — heightAt 유한차분으로 경사 판정(순수 함수라 난수 소모 없음). ≤160개,
+  // ── 급경사자갈 — heightAt 유한차분으로 경사 판정(순수 함수라 난수 소모 없음). ≤160개,
   //    기존 instance 파이프라인(VEG_CULL 거리 컬링)을 그대로 탄다.
   function slopeRocks(scene) {
     try {
@@ -3517,8 +3517,8 @@
     W.waterWM = null;
   }
 
-  // ── 환경 프레임 갱신 — 昼夜 진행 → 날씨 블렌딩 → 조명/하늘/안개/야간 요소 → 특수효과 구동.
-  //    low/min 에서도 «핵심 昼夜» 는 동작한다(속성 갱신 수십 개 — CPU 비용 미미).
+  // ── 환경 프레임 갱신 — 낮밤 진행 → 날씨 블렌딩 → 조명/하늘/안개/야간 요소 → 특수효과 구동.
+  //    low/min 에서도 «핵심 낮밤» 는 동작한다(속성 갱신 수십 개 — CPU 비용 미미).
   function updateEnvironment(dt) {
     if (!W.scene || !W.dayNight || !W.weather) return;
     const dn = W.dayNight, wx = W.weather;
@@ -3729,7 +3729,7 @@
   //  새 파티클 ≤300(계절 120 + 수집 광휘 40), 프레임 로직은 O(가시 객체).
   //  전 효과가 W.fx 슬롯(applyFeature 실구현) + closeWorld 정리를 따른다.
 
-  // ── L4-1/2. 바람 흔들림(风摆) + 잔디 굽힘 — CustomMaterial 정점 셰이더 주입(high·mid 만) ──
+  // ── L4-1/2. 바람 흔들림(바람 흔들림) + 잔디 굽힘 — CustomMaterial 정점 셰이더 주입(high·mid 만) ──
   //   • 잔디(grass/grass2): thin 소스 «재질» 하나만 바꾸면 thin/일반 인스턴스·clone 전부 함께 흔들린다.
   //   • 나무 수관(treeRound/treePine/treeWillow): «자식 중 부피 최대» 메시를 수관으로 택하고,
   //     수관 전용 재질을 새로 만들어(예산 3개) 몸통은 그대로 둔다. 멀티머티리얼 GLB 는 안전 생략.
@@ -3974,7 +3974,7 @@
     }
   }
 
-  // ── L4-5. 나비 — 꽃길(길가 꾸미기 꽃무리 구간) 위 4마리, 두 날개 삼각판 정弦 대칭 +
+  // ── L4-5. 나비 — 꽃길(길가 꾸미기 꽃무리 구간) 위 4마리, 두 날개 삼각판 현 대칭 +
   //    랜덤 워크 방산. «오직 낮에만» (nightK 0.5 이상에서 숨는다).
   //    슬롯: W.fx.particles 재사용(보고서 명기) — 재질은 starRingM/signIron «재사용»(새 재질 0).
   const BUTTERFLY_SPOTS = [[1.8, 9.5], [-6.5, -1.5], [9.5, 8.2], [-14.5, 14.0]];
@@ -3983,7 +3983,7 @@
     try {
       const wingM = scene.getMaterialByName('starRingM');
       const bodyM = scene.getMaterialByName('signIron');
-      // ★ 시명(時序) 주의 — applyFeature('particles') 는 buildRest «전» 에도 불릴 수 있다.
+      // ★ 시점 순서 주의 — applyFeature('particles') 는 buildRest «전» 에도 불릴 수 있다.
       //   이때는 starRingM(createStars) 이 아직 없으므로 «건너뛰고», buildRest 마지막에서 재호출된다.
       if (!wingM) return;
       const list = [];
@@ -4049,7 +4049,7 @@
   }
 
   // ── L4-6. 깃발 — 풍차 옆·시장 옆·마을 입구 3면(기둥+천). 첫 물결은 CPU 정점파
-  //    (CustomMaterial 예산을 风摆에 쓰므로 천은 7×7 격자 정점을 직접 흔든다 — 81점×3면 무시 가능).
+  //    (CustomMaterial 예산을 바람 흔들림에 쓰므로 천은 7×7 격자 정점을 직접 흔든다 — 81점×3면 무시 가능).
   //    천 재질은 광장 수정구 «plazaOrbM» 을 재사용(새 재질 0) — 마을 깃발이 은은한 금빛.
   function ensureFlags(scene) {
     if (W.flags || !scene) return;
@@ -4535,7 +4535,7 @@
   function update(dt) {
     if (!W.scene) return;
     W.t += dt;
-    // ★ 2026-11-21 (v1.73) L2 환경 — 昼夜·날씨·안개·야간 요소(모든 품질 단계에서 동작하는 핵심 미술)
+    // ★ 2026-11-21 (v1.73) L2 환경 — 낮밤·날씨·안개·야간 요소(모든 품질 단계에서 동작하는 핵심 미술)
     updateEnvironment(dt);
     // ★ 2026-11-21 (v1.73) FPS 프로브 — 2.5s 평균 < 26fps 가 2연속이면 한 단계 강등(내려가기만).
     //   active 는 buildRest 완료 시점에 켠다 — 백그라운드 GLB 로딩 히치로 오강하 하는 것을 막음.
@@ -5244,7 +5244,7 @@
     setLoadMsg('하늘을 만드는 중…');
     createSky(scene);
     const lights = createLights(scene);
-    // ★ 2026-11-21 (v1.73) L2 환경 시스템 기동 — 昼夜 팔레트·날씨·별돔·달·지면 안개 시트 준비.
+    // ★ 2026-11-21 (v1.73) L2 환경 시스템 기동 — 낮밤 팔레트·날씨·별돔·달·지면 안개 시트 준비.
     //    물(WaterMaterial)은 createTerrain 안에서 만들어지고, applyWorldQuality 가 티어에 맞게 스왑한다.
     initEnvironment(scene, lights);
 
@@ -6206,7 +6206,7 @@
     // v1.37: «세계 → 게임 → 세계» 브리지. world.js 는 IIFE 라 이 창구가 필요하다.
     // v1.39: 수첩에서 생각을 고치면 세계의 등을 다시 켠다.
     // v1.44: 정비 완료 직후 마을의 등만 다시 켠다.
-    // ★ 2026-11-21 (v1.73) fx 창구 — 2·3단계(昼夜/天气/风摆) 와 설정 UI 가 소비한다.
+    // ★ 2026-11-21 (v1.73) fx 창구 — 2·3단계(낮밤/날씨/바람 흔들림) 와 설정 UI 가 소비한다.
     //   World.fx.set('birds', false) / World.fx.apply('low') / World.fx.tier()
     window.World = { open: openWorld, close: closeWorld, refresh: loadWorldQuests,
       refreshThoughts: loadThoughtSummary, refreshVillage: refreshCampaignVisuals,
