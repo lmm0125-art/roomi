@@ -144,6 +144,46 @@ await test('teach-back(화면 비공개): 틀린 설명에 대한 모델 답도 
   assert.equal(R.hasEvalWord(v.reply), false, `판정 말이 화면에 새었다: ${v.reply}`);
 });
 
+await test('검증 시간 예산: 제한 안에 답이 없으면 timeout(미검증 대기)으로 빠르게 돌아온다', async () => {
+  const t0 = Date.now();
+  const deps = { aliases: ALIASES, timeoutMs: 40,
+    callLLM: () => new Promise(res => setTimeout(() => res({ text: '{"ok":true,"reply":"좋아"}' }), 400)),
+    parseChatJSON: (raw) => JSON.parse(raw) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  const dt = Date.now() - t0;
+  assert.equal(v.source, 'timeout');
+  assert.equal(v.pending, true);
+  assert.equal(v.ok, false, '시간 초과 시 검증 성공으로 저장되면 안 된다');
+  assert.ok(dt < 250, `예산(40ms)을 넘겨 ${dt}ms 걸렸다`);
+  assert.equal(R.hasEvalWord(v.reply), false);
+});
+await test('검증 폴백: LLM 이 실패(예외)하면 규칙으로 판정하고 timeout 이 아니다', async () => {
+  const deps = { aliases: ALIASES, timeoutMs: 1000, callLLM: async () => { throw new Error('boom'); }, parseChatJSON: () => null };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  assert.equal(v.source, 'rule'); assert.equal(v.ok, true);
+});
+await test('검증 예산 안에 LLM 이 답하면 source=llm 이다(예산이 있어도 정상 경로)', async () => {
+  const deps = { aliases: ALIASES, timeoutMs: 1000,
+    callLLM: async () => ({ text: '{"ok":true,"reply":"좋아, 다음은?"}' }), parseChatJSON: (raw) => JSON.parse(raw) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  assert.equal(v.source, 'llm'); assert.equal(v.ok, true);
+});
+await test('withBudget: 제한이 없으면(0) 원래 결과를 그대로 기다린다', async () => {
+  assert.equal(await R.withBudget(Promise.resolve(7), 0), 7);
+});
+await test('저장 정책: 시간 초과는 항상 미검증으로 저장한다(기존 기억 없음)', async () => {
+  const p = R.teachStoragePlan(null, { ok: false, source: 'timeout' });
+  assert.equal(p.write, true); assert.equal(p.source, 'explain:unverified'); assert.equal(p.confidence, 0.4);
+});
+await test('저장 정책: 검증된 기억은 미검증 설명(시간 초과·LLM 불합격)으로 덮어쓰지 않는다', async () => {
+  assert.equal(R.teachStoragePlan('explain:verified', { ok: false, source: 'timeout' }).write, false);
+  assert.equal(R.teachStoragePlan('explain:verified', { ok: false, source: 'llm' }).write, false);
+});
+await test('저장 정책: 검증 성공 설명은 기존 미검증 기억을 교체한다', async () => {
+  const p = R.teachStoragePlan('explain:unverified', { ok: true, source: 'llm' });
+  assert.equal(p.write, true); assert.equal(p.source, 'explain:verified'); assert.equal(p.confidence, 0.95);
+});
+
 // ---------- 5. 탑 층 설계 — 한 번의 탑(run) 안의 안개 분포 ----------
 // 한 탑 = 한 사용자 · 하루의 덱. 층마다 원래 말/안개 말이 섞여 있어야 하고, 층 번호나 고정 비트로 예측되면 안 된다.
 const ORIG_A = '분모가 같으면 분자끼리 더하면 돼요';

@@ -4477,8 +4477,12 @@ function saveLearnLimitFollowUp(u, msg, day){
     const s = getSession(u.id, day, 'learn');
     const cpt = s && s.concept ? String(s.concept).trim() : '';
     if(!cpt) return false;
+    const fu = `«${cpt}» 이어서 해 볼래?`;
+    // ★ 2026-11-27 (v1.83): 같은 사용자·날짜·개념·사유의 이어하기는 한 번만 남긴다(막힌 요청마다 행이 쌓이던 문제).
+    const dup = db.prepare("SELECT 1 FROM chat_messages WHERE user_id=? AND mode='learn' AND role='assistant' AND follow_up=? AND substr(ts,1,10)=? LIMIT 1").get(u.id, fu, day);
+    if(dup) return false;
     saveChatTurn(u.id, msg, '오늘은 여기까지! 내일 같이 이어서 하자.', 'learn',
-      { followUp: `«${cpt}» 이어서 해 볼래?`, modelCall: false });
+      { followUp: fu, modelCall: false });
     return true;
   }catch(e){ return false; }
 }
@@ -4503,7 +4507,7 @@ function weekStartKST(){
 const CARD_ALIASES = {
   '변수': ['변수','미지수','값','저장','상자','x'],
   '함수': ['함수','펑션','function','매개변수','인자','리턴','반환','입력값'],
-  '반복문': ['반복','루프','for','while','몇 번','계속','돌리'],
+  '반복문': ['반복','루프','for','while','돌리'],   // ★ 2026-11-27 (v1.83): «계속»·«몇 번» 은 일반 단어라 제외
   'while 반복': ['while','동안','계속 반복','조건이 맞는'],
   '조건문': ['조건','if','만약','그러면','분기','경우'],
   '리스트': ['리스트','배열','목록','index','인덱스','원소','순서','몇 번째'],
@@ -4546,6 +4550,8 @@ Object.assign(CARD_ALIASES, {
   '식물 광합성': ['광합성','양분','잎','식물의 부엌'],
   '지층': ['지층','겹','화석','쌓'],
 });
+// ★ 2026-11-27 (v1.83): 일반 단어 별칭은 카드를 고르는 근거가 아니다(«계속», «몇 번» 등 — 수업 개념을 바꾸는 오탐).
+const GENERIC_ALIAS = new Set(['계속','몇 번','몇 번째','확인','하나씩','찍','돌리','보여주','계산','이상','이하','같다','크다','작다']);
 function matchCards(msg, chapter){
   const all = db.prepare('SELECT * FROM knowledge_cards').all();
   const text = String(msg || '').toLowerCase();
@@ -4555,7 +4561,7 @@ function matchCards(msg, chapter){
     const topic = String(c.topic || '').toLowerCase();
     if(topic && text.includes(topic)) score += 5;
     for(const a of (CARD_ALIASES[c.topic] || [])){
-      if(a && text.includes(String(a).toLowerCase())) score += 3;
+      if(a && !GENERIC_ALIAS.has(String(a)) && text.includes(String(a).toLowerCase())) score += 3;
     }
     for(const t of String(c.tags || '').split(',')){
       const tag = t.trim().toLowerCase();
@@ -6078,6 +6084,32 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
 //       화면 답변은 «만약…» 질문으로 빈틈을 겨냥한다(채점·정답 노출 없음).
 //     · 등불(lightLamp)은 맞든 틀리든 밝힌다 — 아이의 노력은 보상하되, 거짓 증거는 기억 데이터에 남지 않게 한다.
 const EXPLAIN_DAILY = 5;
+// ★ 2026-11-27 (v1.83) 설명 판정 예산(ms). 이 안에 LLM 판정이 끝나지 않으면 미검증으로 저장하고 응답을 보낸다.
+const TEACH_VERIFY_TIMEOUT_MS = Number(process.env.TEACH_VERIFY_TIMEOUT_MS || 8000);
+// 판정용 LLM 호출 래퍼 — 계량(llm_logs)을 남긴다. 시간 초과 뒤에 끝난 호출도 기록된다.
+function teachLLMFor(uid){
+  return async (prompt, opts) => {
+    const t0 = Date.now();
+    const er = await callLLM(prompt, opts);
+    try{ db.prepare(`INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok,prompt_tokens,completion_tokens,total_tokens,prompt_chars)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(uid, 'explain', (er && er.model) || null, Date.now()-t0, er && er.text ? 1 : 0,
+      (er && er.usage && er.usage.prompt_tokens) || null, (er && er.usage && er.usage.completion_tokens) || null,
+      (er && er.usage && er.usage.total_tokens) || null, (er && er.promptChars) || null); }catch(e){}
+    return er;
+  };
+}
+// ★ 시간 초과로 미검증 저장된 설명의 뒤늦은 업그레이드. 같은 설명이 아직 미검증일 때만, LLM 이 맞다고 할 때만 승격한다.
+//   검증된 기억은 절대 내리지 않는다. 승격 시 마스터리 'lesson' 가점도 이때 준다.
+async function upgradeTeachVerdict(uid, concept, text, card){
+  const memKey = ('taught:' + concept).replace(/\s+/g, '_').slice(0, 40);
+  const v = await LR.checkTeachBack(text, concept, card, { aliases: CARD_ALIASES, parseChatJSON, timeoutMs: 30000, callLLM: teachLLMFor(uid) });
+  if(v.source !== 'llm' || v.ok !== true) return false;
+  const cur = db.prepare("SELECT value, source FROM user_memories WHERE user_id=? AND kind='taught' AND key=?").get(uid, memKey);
+  if(!cur || cur.source !== 'explain:unverified' || String(cur.value) !== text.slice(0, 160)) return false;   // 그 사이 새 설명이 저장됐으면 건드리지 않는다
+  upsertMemory(uid, { kind:'taught', key:'taught:'+concept, value:text.slice(0,160), confidence:0.95, source:'explain:verified' });
+  bumpMastery(uid, concept, 'lesson');
+  return true;
+}
 const EXPLAIN_DEFAULT_CONCEPT = '방금 배운 것';
 app.post('/api/chat/explain', async (req,res)=>{
   const u = authUser(req);
@@ -6093,18 +6125,7 @@ app.post('/api/chat/explain', async (req,res)=>{
   if(used >= EXPLAIN_DAILY) return res.status(429).json({error:'오늘은 설명을 충분히 했어! 내일 또 들려줘.'});
   const card = concept === EXPLAIN_DEFAULT_CONCEPT ? null : teachCardFor(concept);
   // ★ 2026-11-27 (v1.83): 설명 검증의 모델 호출도 llm_logs 에 남긴다(v1.82 리팩터링에서 빠졌던 계량 복구).
-  const verdict = await LR.checkTeachBack(text, concept, card, {
-    aliases: CARD_ALIASES, parseChatJSON,
-    callLLM: async (prompt, opts) => {
-      const t0 = Date.now();
-      const er = await callLLM(prompt, opts);
-      try{ db.prepare(`INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok,prompt_tokens,completion_tokens,total_tokens,prompt_chars)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(u.id, 'explain', (er && er.model) || null, Date.now()-t0, er && er.text ? 1 : 0,
-        (er && er.usage && er.usage.prompt_tokens) || null, (er && er.usage && er.usage.completion_tokens) || null,
-        (er && er.usage && er.usage.total_tokens) || null, (er && er.promptChars) || null); }catch(e){}
-      return er;
-    },
-  });
+  const verdict = await LR.checkTeachBack(text, concept, card, { aliases: CARD_ALIASES, parseChatJSON, timeoutMs: TEACH_VERIFY_TIMEOUT_MS, callLLM: teachLLMFor(u.id) });
   const reply = sanitizeLine(verdict.reply, 180);
   saveChatTurn(u.id, text, reply, 'explain', { topic: concept, hintLevel: 3, solved: false });
   // 설명까지 왔으면 이번 대화의 목표는 «달성» 단계로 본다.
@@ -6114,19 +6135,25 @@ app.post('/api/chat/explain', async (req,res)=>{
       updated_at=datetime('now','+9 hours') WHERE id=?`).run(s.id);
   }catch(e){}
   // 기억 저장: 검증 통과 설명은 항상 갱신. 검증 실패 설명은 «이미 검증된 기억» 을 덮어쓰지 못한다.
+  // ★ 2026-11-27 (v1.83) 저장 정책: LR.teachStoragePlan — 검증 성공만 verified, 시간 초과는 미검증, 검증된 기억은 덮어쓰지 않는다.
   const memKey = ('taught:' + concept).replace(/\s+/g, '_').slice(0, 40);
-  let keepVerified = false;
+  let existingSource = null;
   try{
     const ex = db.prepare("SELECT source FROM user_memories WHERE user_id=? AND kind='taught' AND key=?").get(u.id, memKey);
-    keepVerified = !!(ex && ex.source === 'explain:verified') && !verdict.ok;
+    existingSource = ex ? ex.source : null;
   }catch(e){}
-  if(concept !== EXPLAIN_DEFAULT_CONCEPT && !keepVerified){
+  const plan = LR.teachStoragePlan(existingSource, verdict);
+  if(concept !== EXPLAIN_DEFAULT_CONCEPT && plan.write){
     upsertMemory(u.id, { kind:'taught', key:'taught:'+concept, value:text.slice(0,160),
-      confidence: verdict.ok ? 0.95 : 0.4,
-      source: verdict.ok ? 'explain:verified' : 'explain:unverified' });
+      confidence: plan.confidence, source: plan.source });
   }
-  // ★ 버그 5: 검증된 설명은 마스터리 'lesson' 가점(미검증·개념 미상이면 가점 없음).
-  if(verdict.ok && concept !== EXPLAIN_DEFAULT_CONCEPT) bumpMastery(u.id, concept, 'lesson');
+  // ★ 버그 5: 검증된 설명만 마스터리 'lesson' 가점(시간 초과로 보류된 설명은 가점 없음).
+  const credited = verdict.ok === true && verdict.source !== 'timeout';
+  if(credited && concept !== EXPLAIN_DEFAULT_CONCEPT) bumpMastery(u.id, concept, 'lesson');
+  // ★ 시간 초과: 응답은 바로 보내고, 판정은 뒤에서 LLM 으로 한 번 더 시도(성공 시에만 업그레이드).
+  if(verdict.source === 'timeout' && card && concept !== EXPLAIN_DEFAULT_CONCEPT){
+    setImmediate(() => { upgradeTeachVerdict(u.id, concept, text, card).catch(() => {}); });
+  }
   const lampRes = lightLamp(u.id, concept);   // ★ v1.71: teach-back 이 끝나면 기억 등불을 밝힌다(lit_day=오늘, 안개 리셋)
   db.prepare('UPDATE users SET understanding = understanding + 1 WHERE id=?').run(u.id);
   const coTaught = coTeacherOf(u.id, concept);   // ★ v1.71: 친구도 가르친 개념이면 닉네임만(내용 비공개)

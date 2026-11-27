@@ -337,6 +337,36 @@ async function extras() {
     assert(codes.slice(0, 5).every(c => c === 200), `5번까지 200 이어야 함: ${codes}`);
     assert(codes[5] === 429, `6번째는 429 이어야 함: ${codes}`);
   });
+  await test('이어하기 중복: 한도에 막힌 요청을 여러 번 보내도 같은 날 이어하기 행은 하나', async () => {
+    const u = await newUser('fudup');
+    setLearnSession(u.id, { stage: 'L1', stageTurns: 0, turns: 0, concept: CONCEPT });
+    const msgs = Array.from({ length: 10 }, (_, i) => `분모 질문 ${i}`);
+    for (const m of msgs) await api('/api/chat', { method: 'POST', token: u.token, body: { mode: 'learn', message: m, style: 'auto' } });
+    const codes = [];
+    for (let i = 0; i < 3; i++) codes.push((await api('/api/chat', { method: 'POST', token: u.token, body: { mode: 'learn', message: `한 번 더 ${i}`, style: 'auto' } })).status);
+    assert(codes.every(c => c === 429), `막힌 요청이 429 가 아님: ${codes}`);
+    const d = db();
+    const n = d.prepare("SELECT COUNT(*) c FROM chat_messages WHERE user_id=? AND follow_up IS NOT NULL").get(u.id).c;
+    d.close();
+    assert(n === 1, `이어하기 행이 ${n}개 — 1개여야 함`);
+  });
+  await test('개념 오탐: 「좋아 계속해」 는 수업 개념(분수의 덧셈)을 반복문으로 바꾸지 않는다', async () => {
+    const u = await newUser('concept');
+    setLearnSession(u.id, { stage: 'L2', stageTurns: 1, turns: 1, concept: CONCEPT });
+    await api('/api/chat', { method: 'POST', token: u.token, body: { mode: 'learn', message: '좋아 계속해', style: 'auto' } });
+    const d = db();
+    const s = d.prepare("SELECT concept FROM chat_sessions WHERE user_id=? AND mode='learn' ORDER BY id DESC LIMIT 1").get(u.id);
+    d.close();
+    assert(s && s.concept === CONCEPT, `수업 개념이 «${s && s.concept}» 로 바뀌었다`);
+  });
+  await test('닉네임: 12자를 넘는 기존 닉네임도 잘리지 않고 로그인된다', async () => {
+    const nick = 'longnick_' + Date.now().toString(36).slice(-4) + 'xy';   // 14자 이상
+    assert(nick.length > 12, `테스트 닉네임이 짧다: ${nick.length}`);
+    const r1 = await api('/api/user', { method: 'POST', body: { nickname: nick } });
+    assert(r1.data.user.nickname === nick, `닉네임이 잘렸다: ${r1.data.user.nickname}`);
+    const r2 = await api('/api/user', { method: 'POST', body: { nickname: nick } });
+    assert(r2.data.user.id === r1.data.user.id, '같은 닉네임인데 다른 계정이 생겼다');
+  });
   await test('PIN 로그인: 만든 PIN 으로 로그인할 수 있다(해시 비교 수정)', async () => {
     const u = await newUser('pin');
     const made = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '4321' } });
