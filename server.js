@@ -198,6 +198,9 @@ try{ db.exec('CREATE INDEX IF NOT EXISTS idx_interact_daily ON interact_logs(use
 // 중복 로봇/중복 퀘스트 로그 정리 후 유니크 인덱스 (경제 시스템 무결성)
 db.exec("DELETE FROM robots WHERE id NOT IN (SELECT MAX(id) FROM robots GROUP BY user_id)");
 try{ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_robots_user ON robots(user_id)'); }catch(e){ console.log('⚠️ robots unique index:', e.message); }
+// ★ AI 가 만든 «성격 소개(desc)» 를 저장한다 — 예전엔 생성 응답에만 담기고 버려져,
+//   다시 들어오면 소개가 사라졌다. desc 는 SQLite 예약어라 큰따옴표로 감싼다(멱등 마이그레이션).
+try{ db.exec('ALTER TABLE robots ADD COLUMN "desc" TEXT'); }catch(e){ /* 이미 있으면 무시 */ }
 db.exec("DELETE FROM quest_logs WHERE id NOT IN (SELECT MAX(id) FROM quest_logs GROUP BY user_id, quest_id)");
 try{ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_quest_user ON quest_logs(user_id, quest_id)'); }catch(e){ console.log('⚠️ quest_logs unique index:', e.message); }
 // ★ P2-1 visits 인덱스 (통계 쿼리 전표 스캔 방지)
@@ -334,6 +337,8 @@ for(const col of ['prompt_tokens','completion_tokens','total_tokens','prompt_cha
   try{ db.exec(`ALTER TABLE llm_logs ADD COLUMN ${col} INTEGER`); }catch(e){}
 }
 try{ db.exec('CREATE INDEX IF NOT EXISTS idx_llm_ts ON llm_logs(ts)'); }catch(e){}
+// ★ v1.75: «user_id + ts» 복합 인덱스. 기존 단일(ts) 로는 user 필터 + substr(ts,1,10) 를 못 탄다.
+try{ db.exec('CREATE INDEX IF NOT EXISTS idx_llm_user_ts ON llm_logs(user_id, ts)'); }catch(e){}
 
 // 장기 기억: 학습자 프로필.
 db.exec(`CREATE TABLE IF NOT EXISTS learner_profile(
@@ -697,8 +702,638 @@ db.exec(`CREATE TABLE IF NOT EXISTS season_claims(
   claimed_at TEXT DEFAULT (datetime('now','+9 hours')),
   UNIQUE(user_id, week)
 )`);
+// ★ 일일 카운터(멱등 테이블) — 하루 단위 횟수 제한용.
+//   계획 refresh 남발·부모 인증 무차별 대입 등 «LLM 예산/보호 우회» 를 막는 데 쓴다.
+//   (user_id, day, kind) 가 기본키라 UPSERT 로 안전하게 증가시킬 수 있다.
+db.exec(`CREATE TABLE IF NOT EXISTS daily_counters(
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  count INTEGER DEFAULT 0,
+  PRIMARY KEY(user_id, day, kind)
+)`);
+// 카운터 +1 후 현재값을 돌려준다(UPSERT — 동시 요청에도 원자적)
+function bumpDailyCounter(uid, day, kind){
+  try{
+    db.prepare(`INSERT INTO daily_counters(user_id,day,kind,count) VALUES(?,?,?,1)
+      ON CONFLICT(user_id,day,kind) DO UPDATE SET count=count+1`).run(uid, day, kind);
+    const r = db.prepare('SELECT count FROM daily_counters WHERE user_id=? AND day=? AND kind=?').get(uid, day, kind);
+    return r ? r.count : 1;
+  }catch(e){ return 1; }
+}
+// 현재값만 읽는다(증가 없음)
+function dailyCounterOf(uid, day, kind){
+  try{
+    const r = db.prepare('SELECT count FROM daily_counters WHERE user_id=? AND day=? AND kind=?').get(uid, day, kind);
+    return r ? r.count : 0;
+  }catch(e){ return 0; }
+}
+
+// ============================================================
+// ★ 2026-11-20 / v1.70 ① 개념별 마스터리(숙련도) — 학습 경로의 기초 데이터.
+//   막힘·오답·정답·복습·수업·자가해결 6가지 사건을 점수 하나로 환산한다.
+//   규칙: stuck → ×0.75, wrong → ×0.85 (감점) / correct +0.10, review +0.15,
+//         lesson +0.10, solved +0.20 (가점). 점수는 [0.05, 1] 로 클램프한다.
+//   attempts: 모든 사건에서 +1. correct: 성공 사건(correct/review/lesson/solved)에서만 +1
+//   (stuck·wrong 은 «시도했지만 실패» 이므로 correct 는 세지 않는다).
+// ============================================================
+db.exec(`CREATE TABLE IF NOT EXISTS concept_mastery(
+  user_id INTEGER NOT NULL, topic TEXT NOT NULL,
+  score REAL DEFAULT 0.3, attempts INTEGER DEFAULT 0, correct INTEGER DEFAULT 0,
+  last_day TEXT, PRIMARY KEY(user_id, topic)
+)`);
+// 마스터리 «완전 습득» 축하 메일은 개념당 딱 한 번(tag UNIQUE 로 보장)
+const MASTERY_DONE_LINE = 0.8;
+
+// 사건 1건을 마스터리 점수에 반영한다. topic 이 비면 무시(멱등·안전).
+// 점수가 처음 0.8 을 넘으면(직전 < 0.8) 우편함에 축하 편지를 넣는다(셀 없음, 개념당 1회).
+function bumpMastery(uid, topic, event){
+  const t = String(topic || '').trim();
+  if(!t) return null;
+  const ev = String(event || '');
+  if(!['stuck','wrong','correct','review','lesson','solved'].includes(ev)) return null;
+  const day = today();
+  let prev = 0.3;
+  try{
+    const row = db.prepare('SELECT score FROM concept_mastery WHERE user_id=? AND topic=?').get(uid, t);
+    if(row && row.score != null) prev = Math.max(0.05, Math.min(1, Number(row.score)));
+  }catch(e){ return null; }
+  let score = prev;
+  if(ev === 'stuck') score = prev * 0.75;
+  else if(ev === 'wrong') score = prev * 0.85;
+  else if(ev === 'correct') score = prev + 0.10;
+  else if(ev === 'review') score = prev + 0.15;
+  else if(ev === 'lesson') score = prev + 0.10;
+  else score = prev + 0.20;   // solved
+  score = Math.max(0.05, Math.min(1, score));
+  const correctInc = (ev === 'correct' || ev === 'review' || ev === 'lesson' || ev === 'solved') ? 1 : 0;
+  try{
+    db.prepare(`INSERT INTO concept_mastery(user_id,topic,score,attempts,correct,last_day)
+      VALUES(?,?,?,?,?,?)
+      ON CONFLICT(user_id,topic) DO UPDATE SET
+        score=excluded.score, attempts=attempts+1,
+        correct=correct+excluded.correct, last_day=excluded.last_day`)
+      .run(uid, t, score, 1, correctInc, day);
+  }catch(e){ return null; }
+  // ★ 성장 서사 ⑤: 처음 0.8 을 넘은 순간만 축하한다. tag='mastery:'+topic 로 개념당 1회 보장.
+  if(prev < MASTERY_DONE_LINE && score >= MASTERY_DONE_LINE){
+    sendMail(uid, { title:'🎉 개념을 완전히 익혔어요!',
+      body:`«${t}» 를 완전히 익혔어요! 마을에서도 확인해 봐.`,
+      cell:0, tag:'mastery:'+t });
+  }
+  return score;
+}
+
+// 가장 약한 개념부터 — score 오름차순, 같은 점수면 최근에 만진 것 우선.
+function weakestTopics(uid, limit = 1){
+  try{
+    return db.prepare(`SELECT topic, score, attempts, correct, last_day FROM concept_mastery
+      WHERE user_id=? ORDER BY score ASC, last_day DESC LIMIT ?`).all(uid, Math.max(1, limit|0));
+  }catch(e){ return []; }
+}
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) A3 선수개념(prereq) — knowledge_cards.prereq(쉼표 구분) 를 읽는 3 형제.
+//   · prereqListOf     : 개념의 선수개념 topic 배열(없으면 빈 배열)
+//   · prereqBlockedFor : 선수개념 중 «마스터리 행이 있고 score<0.5» 인 첫 토픽(미달이면 그 이름)
+//     — 행이 «없는» 선수개념은 막지 않는다(한 번도 만진 적 없으면 장애물이 아니라 미래 과제다).
+//   · weakestTopicsOrdered : 가장 약한 개념 목록에서 미달 개념을 «삭제하지 않고 목록 끝» 으로 보낸다.
+//     (선수개념이 흐려진 채 본개념부터 파는 교착을 막는다 — 없어도 항상 답이 나온다)
+// ============================================================
+function prereqListOf(topic){
+  try{
+    const r = db.prepare('SELECT prereq FROM knowledge_cards WHERE topic=?').get(String(topic || '').trim());
+    return String((r && r.prereq) || '').split(',').map(s => s.trim()).filter(Boolean);
+  }catch(e){ return []; }
+}
+function prereqBlockedFor(uid, topic){
+  try{
+    for(const p of prereqListOf(topic)){
+      const m = db.prepare('SELECT score FROM concept_mastery WHERE user_id=? AND topic=?').get(uid, p);
+      if(m && m.score != null && Number(m.score) < 0.5) return p;
+    }
+  }catch(e){}
+  return null;
+}
+function weakestTopicsOrdered(uid, limit = 1){
+  const lim = Math.max(1, limit | 0);
+  const rows = weakestTopics(uid, 40);   // 재정렬 여유분 — 표가 작아 여유 40 행이면 충분하다
+  const open = [], blocked = [];
+  for(const r of rows){
+    (prereqBlockedFor(uid, r.topic) ? blocked : open).push(r);
+  }
+  return open.concat(blocked).slice(0, lim);
+}
+
+// 특정 개념의 현재 마스터리(기록이 없으면 초기값 0.3)
+function masteryOf(uid, topic){
+  const t = String(topic || '').trim();
+  if(!t) return 0.3;
+  try{
+    const r = db.prepare('SELECT score FROM concept_mastery WHERE user_id=? AND topic=?').get(uid, t);
+    if(r && r.score != null) return Math.max(0.05, Math.min(1, Number(r.score)));
+  }catch(e){}
+  return 0.3;
+}
+
+// ============================================================
+// ★ 2026-11-20 / v1.71 «루미는 잊어버려» — 기억 등불(기억 램프) 데이터 계층.
+//   루미는 아이가 «가르쳐 준» 개념을 기억 등불로 밝혀 두고, DOROLAND 의 안개가
+//   매일 등불을 흐리게 만든다. 아이는 기억의 수호자 — 다시 가르치면 등불이 되살아나고,
+//   같은 개념을 3번 굳히면 수정 구슬이 되어 안개에 영원히 면역된다.
+//   ★ 설계 규칙: 감쇠(decay)는 «날짜의 순수 함수» 다. campaign 처럼 cron·타이머 없이
+//     읽는 시점에 계산한다(서버 재시작·미접속 날에도 정확).
+// ============================================================
+db.exec(`CREATE TABLE IF NOT EXISTS memory_lamps(
+  user_id INTEGER NOT NULL, topic TEXT NOT NULL,
+  lit_day TEXT, reinforce INTEGER DEFAULT 0, crystal INTEGER DEFAULT 0,
+  immune_day TEXT, extra_decay INTEGER DEFAULT 0,
+  PRIMARY KEY(user_id, topic)
+)`);
+
+// 두 KST 날짜(YYYY-MM-DD) 사이의 일수. b 가 a 보다 미래면 양수(0 = 같은 날).
+function daysBetween(a, b){
+  const ta = Date.parse(String(a) + 'T00:00:00Z');
+  const tb = Date.parse(String(b) + 'T00:00:00Z');
+  if(!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
+  return Math.floor((tb - ta) / 86400000);
+}
+
+// user_memories 의 taught 기억을 기억 등불로 «지연 동기화» 한다(없는 등불만 생성 — 멱등).
+//   taught 키 포맷: 'taught:<개념>'(공백은 _ 로 저장 → 읽을 때 복원, robot/recall 과 동일 규칙).
+//   lit_day 는 기억의 날짜(updated_at 의 KST 날짜). reinforce 는 0 에서 시작(lightLamp 만 올린다).
+function lampSyncFromMemories(uid){
+  try{
+    const rows = db.prepare("SELECT key, updated_at FROM user_memories WHERE user_id=? AND kind='taught'").all(uid);
+    for(const r of rows){
+      const topic = String(r.key || '').replace(/^taught:/, '').replace(/_/g, ' ').trim().slice(0, 60);
+      if(!topic) continue;
+      const m = String(r.updated_at || '').match(/^\d{4}-\d{2}-\d{2}/);
+      const litDay = m ? m[0] : today();
+      db.prepare(`INSERT INTO memory_lamps(user_id,topic,lit_day,reinforce,crystal,immune_day,extra_decay)
+        VALUES(?,?,?,0,0,NULL,0)
+        ON CONFLICT(user_id,topic) DO NOTHING`).run(uid, topic, litDay);
+    }
+  }catch(e){}
+}
+
+// 감쇠 순수 함수 — (등불 행, 오늘) 만으로 0~100 을 계산한다.
+//   d=daysBetween(lit_day, day): d<=0 → 0 · 1일 10 · 2일 25 · 3일 45 · 이후 +10/일, 상한 100.
+//   crystal=1 → 항상 0(수정 구슬은 안개에 면역). immune_day=오늘 → 오늘만 0.
+//   최종 = min(100, base + extra_decay).
+function fogDecay(lamp, day){
+  try{
+    if(Number(lamp.crystal) === 1) return 0;
+    if(lamp.immune_day && String(lamp.immune_day) === String(day)) return 0;
+    const lit = String(lamp.lit_day || '');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(lit)) return 100;   // 날짜가 이상하면 최대 안개(안전 쪽으로)
+    const d = daysBetween(lit, day);
+    let base = 0;
+    if(d === 1) base = 10;
+    else if(d === 2) base = 25;
+    else if(d >= 3) base = 45 + (d - 3) * 10;
+    const extra = Math.max(0, Math.min(50, Number(lamp.extra_decay) || 0));
+    return Math.min(100, base + extra);
+  }catch(e){ return 0; }
+}
+
+// ★ 2026-11-21 (v1.74) B1 삼막 온보딩 보조 — «안개를 처음 겪음» 을 기록한다(1막 다음 단계).
+//   ob_step<2 이면 2 로 올리고, «아직 /api/lamps 가 못 보냈으면» 보류 플래그를 남긴다.
+//   플래그는 /api/lamps 가 응답으로 소비하면 지운다(사실상 «최초 1회» 전달 보장).
+function obAdvanceFog(uid, day){
+  try{
+    const u = db.prepare('SELECT ob_step FROM users WHERE id=?').get(uid);
+    if(u && Number(u.ob_step || 0) < 2){
+      db.prepare('UPDATE users SET ob_step=2 WHERE id=?').run(uid);
+      try{
+        db.prepare(`INSERT INTO daily_counters(user_id,day,kind,count) VALUES(?,?,?,1)
+          ON CONFLICT(user_id,day,kind) DO UPDATE SET count=1`).run(uid, day, 'ob_sos_pending');
+      }catch(e){}
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+
+// ★ 2026-11-21 (v1.74) A3 ② 등불별 blockedBy — 선수개념 중 «안개 decay≥50» 인 첫 토픽.
+//   램프 자체가 없는 선수개념은 막지 않는다(아직 배우지 않은 과제는 장애물이 아니라 길이다).
+function blockedByFor(topic, decayMap){
+  for(const p of prereqListOf(topic)){
+    const d = decayMap ? decayMap.get(p) : null;
+    if(d != null && Number(d) >= 50) return p;
+  }
+  return null;
+}
+
+// 등불 전체 조회 — 동기화 → 감쇠 계산 → 무거운(안개 진한) 순 정렬 + SOS 우편(하루 1통).
+//   decay≥50 인 등불이 있는데 오늘 아직 fog_sos 카운터가 0 이면 우편함에 부탁 편지를 넣는다.
+//   (tag='fog:<day>' UNIQUE 로 우편 중복도 이중 방어. 하루 최대 1통.)
+//   ★ 2026-11-21 (v1.74) B1: 이 SOS 가 «처음» 이면 ob_step 1→2 를 세우고 sosFirst 로 돌려준다.
+function lampsFor(uid){
+  lampSyncFromMemories(uid);
+  const day = today();
+  let rows = [];
+  try{ rows = db.prepare('SELECT * FROM memory_lamps WHERE user_id=?').all(uid); }catch(e){}
+  const lamps = rows.map(r => ({
+      topic: String(r.topic), lit_day: String(r.lit_day || ''),
+      reinforce: Number(r.reinforce) || 0, crystal: Number(r.crystal) || 0,
+      immune_day: r.immune_day || null, extra_decay: Number(r.extra_decay) || 0, decay: 0,
+    }))
+    .map(l => { l.decay = fogDecay(l, day); return l; })
+    .sort((a, b) => (b.decay - a.decay) || a.topic.localeCompare(b.topic, 'ko'));
+  let sosFirst = false;
+  const heaviest = lamps.find(l => l.decay >= 50) || null;
+  if(heaviest && dailyCounterOf(uid, day, 'fog_sos') === 0){
+    sendMail(uid, { title: '😢 루미의 기억이 흐려져요',
+      body: `«${heaviest.topic}» 이 가물가물해… 다시 가르쳐 줄래?`,
+      cell: 0, tag: 'fog:' + day });
+    bumpDailyCounter(uid, day, 'fog_sos');
+    sosFirst = obAdvanceFog(uid, day);
+  }
+  return { lamps, sos: heaviest ? { topic: heaviest.topic } : null, sosFirst };
+}
+
+// «읽기 전용» 조회 — SOS 우편 발송(부작용) 없이 가장 무거운 등불만 본다.
+//   robot/hello · 대화 프롬프트 같은 «말 걸기» 경로에서 쓴다(우편과 말 중 하나만 나가도록).
+function fogHeaviestReadonly(uid, minDecay){
+  try{
+    lampSyncFromMemories(uid);
+    const day = today();
+    const rows = db.prepare('SELECT * FROM memory_lamps WHERE user_id=?').all(uid);
+    const lamps = rows.map(r => ({ topic: String(r.topic), lit_day: String(r.lit_day || ''),
+        crystal: Number(r.crystal) || 0, immune_day: r.immune_day || null, extra_decay: Number(r.extra_decay) || 0, decay: 0 }))
+      .map(l => { l.decay = fogDecay(l, day); return l; })
+      .sort((a, b) => (b.decay - a.decay) || a.topic.localeCompare(b.topic, 'ko'));
+    return lamps.find(l => l.decay >= (Number(minDecay) || 0)) || null;
+  }catch(e){ return null; }
+}
+
+// ★ 2026-11-21 (v1.74) A2 «빛의 조각» 다음 배지 — 명예 카운트(teach_count) 의 딱지 10/50/100.
+const TEACH_BADGES = [10, 50, 100];
+function nextBadgeFor(count){
+  for(const at of TEACH_BADGES){
+    if((Number(count) || 0) < at) return { at, have: Number(count) || 0 };
+  }
+  return null;
+}
+
+// 개념 하나를 다시 «가르쳐» 등불을 밝힌다: lit_day=오늘 · extra_decay=0 · reinforce=min(+1,3).
+//   reinforce 가 처음 3 에 닿으면 수정 구슬(안개 면역) + 마을에 crystal_<n> 조형물이 생긴다.
+//   ★ 2026-11-21 (v1.74) A2/B1 반환 확장:
+//     · counted    — teach_count +1 이 실제로 일어났나(같은 등불을 같은 날 다시 밝히면 세지 않는다)
+//     · first      — 삼막 1막: 첫 등불(teach_count 0→1, ob_step 0→1) 순간(응답에 firstLamp 로 전달)
+//     · crystalNow — 삼막 3막: 수정화 첫 순간(ob_step<3 → 3, 응답에 crystalNow 로 전달)
+function lightLamp(uid, topicRaw){
+  const topic = String(topicRaw || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if(!topic) return { crystal:false, counted:false, first:false, crystalNow:false };
+  const day = today();
+  let lamp = null;
+  try{ lamp = db.prepare('SELECT * FROM memory_lamps WHERE user_id=? AND topic=?').get(uid, topic); }catch(e){}
+  const wasCrystal = !!(lamp && Number(lamp.crystal) === 1);
+  const reinforce = lamp ? Math.min(3, (Number(lamp.reinforce) || 0) + 1) : 1;
+  // ★ A2: «이전 lit_day ≠ 오늘 또는 새 등불» 일 때만 빛의 조각을 센다(같은 날 재점등은 무료).
+  //   B1 1막: teach_count 0→1 인 «그 한 번» 에 ob_step 도 0→1 로 올린다(1막 플래그).
+  let counted = false, first = false, obStep = 0;
+  let userRow = null;
+  try{ userRow = db.prepare('SELECT teach_count, ob_step FROM users WHERE id=?').get(uid); }catch(e){}
+  obStep = Number((userRow && userRow.ob_step) || 0);
+  const wasLitToday = !!(lamp && String(lamp.lit_day || '') === day);
+  if(!wasLitToday){
+    try{
+      const before = Number((userRow && userRow.teach_count) || 0);
+      db.prepare('UPDATE users SET teach_count=? WHERE id=?').run(before + 1, uid);
+      counted = true;
+      if(before === 0 && obStep === 0){
+        db.prepare('UPDATE users SET ob_step=1 WHERE id=?').run(uid);
+        first = true;
+      }
+    }catch(e){}
+  }
+  try{
+    db.prepare(`INSERT INTO memory_lamps(user_id,topic,lit_day,reinforce,crystal,immune_day,extra_decay)
+      VALUES(?,?,?,1,0,NULL,0)
+      ON CONFLICT(user_id,topic) DO UPDATE SET
+        lit_day=excluded.lit_day, extra_decay=0, reinforce=excluded.reinforce`)
+      .run(uid, topic, day);
+  }catch(e){ return { crystal: wasCrystal, counted, first, crystalNow:false }; }
+  let crystal = wasCrystal, crystalNow = false;
+  if(!wasCrystal && reinforce >= 3){
+    try{
+      const r = db.prepare('UPDATE memory_lamps SET crystal=1 WHERE user_id=? AND topic=? AND crystal=0').run(uid, topic);
+      if(r.changes > 0){
+        crystal = true;
+        crystalEventFor(uid);   // ★ 마을 조형물 기록 — 3D 렌더는 별도 에이전트가 village_props 를 읽어 그린다
+        // ★ B1 3막: «수정화» 를 처음 겪으면 ob_step 를 3 까지 올린다(삼막은 순서 없이 독립 진행).
+        if(obStep < 3){
+          try{ db.prepare('UPDATE users SET ob_step=3 WHERE id=?').run(uid); crystalNow = true; }catch(e){}
+        }
+      }
+    }catch(e){}
+  }
+  return { crystal, counted, first, crystalNow };
+}
+
+// 수정 구슬 이벤트 — village_props 에 crystal_<n> 을 기록(n=현재 구슬 수, 상한 5).
+//   INSERT OR IGNORE 로 마을 관례(villageKeys/syncVillage)와 같은 방식. 결정론적 키라 재실행 무해.
+//   ★ 2026-11-21 (v1.74) A2: teach_count 마일스톤 조형물도 여기서 함께 기록한다(25=벤치 · 50=화환).
+//     INSERT OR IGNORE 라 몇 번을 불려도 같은 조형물이 두 개 생기지 않는다(멱등).
+function crystalEventFor(uid){
+  try{
+    const n = db.prepare('SELECT COUNT(*) c FROM memory_lamps WHERE user_id=? AND crystal=1').get(uid).c;
+    const key = 'crystal_' + Math.min(5, Math.max(1, Number(n) || 1));
+    db.prepare('INSERT OR IGNORE INTO village_props(user_id,prop_key) VALUES(?,?)').run(uid, key);
+    const u = db.prepare('SELECT teach_count FROM users WHERE id=?').get(uid);
+    const tc = Number((u && u.teach_count) || 0);
+    if(tc >= 25) db.prepare('INSERT OR IGNORE INTO village_props(user_id,prop_key) VALUES(?,?)').run(uid, 'shard_bench');
+    if(tc >= 50) db.prepare('INSERT OR IGNORE INTO village_props(user_id,prop_key) VALUES(?,?)').run(uid, 'shard_wreath');
+  }catch(e){}
+}
+
+// 안개 벌점 — 탑에서 틀렸을 때 그 등불의 안개를 더 진하게(+10, 상한 50) + 마스터리 감점(wrong).
+function fogPenalize(uid, topicRaw){
+  const topic = String(topicRaw || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if(!topic) return;
+  try{
+    const has = db.prepare('SELECT 1 FROM memory_lamps WHERE user_id=? AND topic=?').get(uid, topic);
+    if(has){
+      db.prepare('UPDATE memory_lamps SET extra_decay=MIN(extra_decay+10,50) WHERE user_id=? AND topic=?')
+        .run(uid, topic);
+    }else{
+      // 등불이 아직 없으면 «오늘 밝은 뒤 흐려진» 상태로 새로 만든다(벌점이 기록에 남도록).
+      db.prepare(`INSERT INTO memory_lamps(user_id,topic,lit_day,reinforce,crystal,immune_day,extra_decay)
+        VALUES(?,?,?,0,0,NULL,10)
+        ON CONFLICT(user_id,topic) DO NOTHING`).run(uid, topic, today());
+    }
+  }catch(e){}
+  bumpMastery(uid, topic, 'wrong');
+}
+
+// ============================================================
+// ★ 2026-11-20 / v1.71 «안개 속의 탑» — 결정론적 출제 엔진(순수 함수 · LLM 없음 · 비용 0).
+//   각 층은 (uid, 개념, 층, 날짜) 시드로만 계산 → GET/POST 가 같은 문장을 다시 만든다.
+//   원래 문장: ①아이의 taught 원문 → ②지식 카드 analogy/hint_l2(hint_l3·퀴즈 정답은 절대 안 쓴다).
+//   왜곡 3종: ①단어 반전(모두↔일부 · 항상↔가끔 …, 문장에 실제 나올 때만)
+//             ②개념 이식(문장 속 개념어를 다른 등불의 개념명으로 교체 — 주말 BOSS 층 필수)
+//             ③대상 교체(v1.70 teachFallbackPair 의 «다른 카드 정의» 템플릿 재사용)
+//   «탑에 최소 1층은 왜곡» 보장: 각 층이 3종 전부를 시도하므로, 어느 한 층이라도
+//   왜곡 가능하면 그 층은 반드시 왜곡 문제가 된다(모두 불가능하면 «원래 말» 탑이 된다).
+// ============================================================
+const TOWER_FLOOR_MAX = 6;
+
+// 안개 변형 쌍 — [원래 단어, 바뀔 단어, 조사 결합 허용 여부].
+const FOG_FLIP_PAIRS = [
+  ['모두', '일부', true], ['항상', '가끔'], ['있다', '없다'], ['먼저', '나중에'],
+  ['더하면', '빼면'], ['나누면', '곱하면'], ['같으면', '다르면'], ['크다', '작다'],
+];
+// 단어 경계 문자(공백·문장부호) — 한글엔 \b 가 없어 «긴 단어 한복판» 교체를 막는다.
+const FOG_EDGE_RE = /[\s.,!?…:;'"()«»\-]/;
+const FOG_JOSA = '가을이는의로도만와과에서';
+
+// 문장에서 from 을 «단어 경계에서만» to 로 바꾼다. 불가능하면 null.
+function fogFlipAt(sentence, from, to, josaOk){
+  const s = String(sentence);
+  let idx = s.indexOf(from);
+  while(idx >= 0){
+    const before = idx === 0 ? '' : s[idx - 1];
+    const afterCh = idx + from.length >= s.length ? '' : s[idx + from.length];
+    const okBefore = before === '' || FOG_EDGE_RE.test(before);
+    const okAfter = afterCh === '' || FOG_EDGE_RE.test(afterCh) || (!!josaOk && FOG_JOSA.includes(afterCh));
+    if(okBefore && okAfter) return s.slice(0, idx) + to + s.slice(idx + from.length);
+    idx = s.indexOf(from, idx + 1);
+  }
+  return null;
+}
+
+// 날짜 문자열 → 결정론적 해시(시드 재료)
+function fogDayHash(day){
+  return String(day).split('').reduce((a, ch) => (a * 131 + ch.charCodeAt(0)) >>> 0, 7);
+}
+
+// 왜곡의 «재료»: 다른 등불·다른 카드의 개념(자기 개념은 제외). 순서 고정 → 결정론 보장.
+function fogOtherConceptsFor(uid, topic){
+  const out = [];
+  try{
+    const rows = db.prepare('SELECT topic FROM memory_lamps WHERE user_id=? AND topic<>? ORDER BY topic')
+      .all(uid, topic);
+    for(const r of rows) out.push({ topic: String(r.topic), concept: null });
+  }catch(e){}
+  try{
+    const cards = db.prepare(`SELECT topic, concept FROM knowledge_cards
+      WHERE topic<>? AND concept IS NOT NULL AND concept<>'' ORDER BY id`).all(topic);
+    for(const c of cards){
+      const t = String(c.topic);
+      if(!out.some(o => o.topic === t)) out.push({ topic: t, concept: String(c.concept) });
+    }
+  }catch(e){}
+  return out;
+}
+
+// 문장에 실제로 나오는 «개념 이름 후보»(주제 + 카드 별칭, 가장 긴 것부터).
+function fogTopicNamesIn(topic, sentence){
+  const s = String(sentence);
+  const names = new Set([String(topic || '').trim()]);
+  try{
+    const card = teachCardFor(topic);
+    if(card){
+      if(card.topic) names.add(String(card.topic).trim());
+      for(const a of (CARD_ALIASES[card.topic] || [])) if(a) names.add(String(a).trim());
+    }
+    for(const a of (CARD_ALIASES[topic] || [])) if(a) names.add(String(a).trim());
+  }catch(e){}
+  return [...names].filter(n => n.length >= 2 && s.includes(n)).sort((a, b) => b.length - a.length);
+}
+
+// 탑의 «원래 문장» — taught 원문 → 카드 analogy → hint_l2 첫 문장 → 결정론 기본 문장.
+//   (hint_l3 와 퀴즈 정답은 이 어디에도 들어가지 않는다.)
+function towerOriginalFor(uid, topic){
+  const t = String(topic || '').trim();
+  try{
+    const key = 'taught:' + t.replace(/\s+/g, '_');
+    const r = db.prepare("SELECT value FROM user_memories WHERE user_id=? AND kind='taught' AND key=?").get(uid, key);
+    if(r && String(r.value || '').trim()) return String(r.value).trim().slice(0, 60);
+  }catch(e){}
+  const card = teachCardFor(t);
+  if(card){
+    if(card.analogy && String(card.analogy).trim()) return String(card.analogy).trim().slice(0, 60);
+    if(card.hint_l2 && String(card.hint_l2).trim()) return String(card.hint_l2).trim().split(/[.!?]/)[0].slice(0, 60);
+  }
+  return `${t}는 차근차근 배우면 이해할 수 있는 개념이야.`;
+}
+
+// 왜곡 전략 1건 시행 — 불가능하면 null(그 층엔 그 전략을 못 쓴다).
+function fogApplyStrategy(name, topic, original, others, seed){
+  if(name === 'flip'){
+    for(let i = 0; i < FOG_FLIP_PAIRS.length; i++){
+      const p = FOG_FLIP_PAIRS[(i + seed % FOG_FLIP_PAIRS.length) % FOG_FLIP_PAIRS.length];
+      const out = fogFlipAt(original, p[0], p[1], !!p[2]);
+      if(out && out !== original) return { strategy: 'flip', statement: out.slice(0, 80) };
+    }
+    return null;
+  }
+  if(name === 'graft'){
+    const names = fogTopicNamesIn(topic, original);
+    if(!names.length || !others.length) return null;
+    const name = names[seed % names.length];
+    const other = others[seed % others.length];
+    const out = String(original).replace(name, () => other.topic);   // 첫 등장만(함수 치환으로 $ 안전)
+    if(out !== original) return { strategy: 'graft', statement: out.slice(0, 80) };
+    return null;
+  }
+  // swap — v1.70 teachFallbackPair 의 «대상 교체» 템플릿(개념 정의를 다른 카드 것으로 끼워 넣기)
+  const withConcept = others.find(o => o.concept && String(o.concept).trim());
+  if(!withConcept) return null;
+  const c = String(withConcept.concept).trim();
+  return { strategy: 'swap', statement: `${topic}는 ${c}${koIraNeun(c)} 뜻이야.`.slice(0, 80) };
+}
+
+// 한 층의 문장 — 결정론. seed=uid*31+날짜 해시+층. boss 면 «개념 이식» 을 반드시 먼저 시도한다.
+//   반환: { statement(출제 문장), fogged(왜곡 여부 — 응답엔 절대 실지 않는다), canFog, original }
+function fogStatement(uid, topic, floor, day, opts){
+  const o = opts || {};
+  const original = towerOriginalFor(uid, topic);
+  const seed = (((Number(uid) || 0) * 31 + fogDayHash(day) + (Number(floor) || 0)) >>> 0);
+  const others = fogOtherConceptsFor(uid, topic);
+  const all = ['flip', 'graft', 'swap'];
+  const st = seed % 3;
+  // BOSS(주말) 층은 «개념 이식 필수» — graft → swap(교차 개념) → flip 순. 일반 층은 시드 회전 순.
+  const order = o.boss ? ['graft', 'swap', 'flip'] : [all[st], all[(st + 1) % 3], all[(st + 2) % 3]];
+  for(const name of order){
+    const r = fogApplyStrategy(name, topic, original, others, seed);
+    if(r) return { statement: r.statement, fogged: true, canFog: true, original, strategy: r.strategy };
+  }
+  return { statement: original, fogged: false, canFog: false, original, strategy: 'none' };
+}
+
+// ============================================================
+// ★ v1.71 «탑 덱(층 배치)» — 하루 1회 고정. GET 과 POST 가 다른 시점에 불려도 «같은 탑» 이 되게.
+//   배치는 «첫 접속 시점의 감쇠 순» 으로 고정한다. 정답 → immune_day 로 감쇠가 0 이 되어도
+//   층이 흔들리지 않는다(그렇지 않으면 POST 재계산 때 다른 개념을 채점하는 버그가 난다).
+//   저장소: daily_counters 의 kind 문자열('tower_deck|개념|개념…') — 표를 하나 더 만들지 않는 선택.
+// ============================================================
+function towerDeckLoad(uid, day){
+  try{
+    const row = db.prepare(`SELECT kind FROM daily_counters
+      WHERE user_id=? AND day=? AND kind LIKE 'tower_deck|%' ORDER BY rowid LIMIT 1`).get(uid, day);
+    if(row){
+      const parts = String(row.kind).slice('tower_deck|'.length).split('|').filter(s => s.length);
+      if(parts.length) return parts;
+    }
+  }catch(e){}
+  return null;
+}
+function towerDeckSave(uid, day, topics){
+  try{
+    const kind = 'tower_deck|' + topics.map(t => String(t).replace(/[|%]/g, ' ').trim()).join('|');
+    db.prepare(`INSERT INTO daily_counters(user_id,day,kind,count) VALUES(?,?,?,1)
+      ON CONFLICT(user_id,day,kind) DO UPDATE SET count=count`).run(uid, day, kind);
+  }catch(e){}
+}
+// 저장된 덱이 없으면 «지금» 만든다: decay<100 인 등불(crystal 포함)을 무거운 순으로 최대 6개.
+function towerDeckFor(uid, day, lamps){
+  const saved = towerDeckLoad(uid, day);
+  if(saved) return saved;
+  const eligible = (lamps || []).filter(l => l.decay < 100).slice(0, TOWER_FLOOR_MAX).map(l => l.topic);
+  if(eligible.length) towerDeckSave(uid, day, eligible);
+  return eligible;
+}
+
+// ★ 2026-11-21 (v1.74) A3 ③ BOSS 층 개념 선택 — prereq 가 붙은 개념을 우선한다.
+//   덱 순서를 훑고 «선수개념이 기록된» 첫 개념을 BOSS 로 삼는다(결정론 — 덱과 카드만 보므로
+//   GET/POST 가 같은 층을 다시 계산해도 같은 결과). prereq 가 하나도 없으면 기존대로 deck[0].
+function bossConceptFor(deck){
+  for(const t of (deck || [])){
+    if(prereqListOf(t).length) return String(t);
+  }
+  return (deck && deck[0]) || null;
+}
+
+// 탑 전체 상태(층 배열) — GET/POST 가 공유하는 유일한 출제 경로(같은 입력 → 같은 문장).
+//   BOSS: 주말(KST 토·일)이면 7층을 추가한다(개념 이식 필수 층).
+//   ★ 2026-11-21 (v1.74) A3 ③: BOSS 개념은 deck[0] 대신 «prereq 가 붙은 개념» 을 우선 출제한다.
+function towerStateFor(uid, day, deck, boss){
+  const floors = [];
+  for(let i = 0; i < deck.length; i++){
+    floors.push({ floor: i, concept: deck[i], ...fogStatement(uid, deck[i], i, day, { boss: false }) });
+  }
+  if(boss && deck.length){
+    const bossTopic = bossConceptFor(deck) || deck[0];
+    floors.push({ floor: deck.length, concept: bossTopic, ...fogStatement(uid, bossTopic, deck.length, day, { boss: true }) });
+  }
+  return floors;
+}
+
+// 주말(토·일) 판정 — «day 문자열» 기준의 순수 함수(KST 달력 날짜를 그대로 본다).
+function towerIsBoss(day){
+  const d = new Date(String(day) + 'T00:00:00Z');
+  const dow = Number.isNaN(d.getTime()) ? todayDow() : d.getUTCDay();
+  return dow === 6 || dow === 0;   // 토 · 일
+}
+
+function towerPopcount(n){
+  let x = Number(n) || 0, c = 0;
+  while(x){ c += (x & 1); x >>>= 1; }
+  return c;
+}
+
+// clearedMask 비트 세우기(UPSERT — 증가가 아니라 OR. 층 i → bit i)
+function towerClearBitSet(uid, day, floor){
+  const next = (dailyCounterOf(uid, day, 'tower_clears') | (1 << floor)) >>> 0;
+  try{
+    db.prepare(`INSERT INTO daily_counters(user_id,day,kind,count) VALUES(?,?,?,?)
+      ON CONFLICT(user_id,day,kind) DO UPDATE SET count=excluded.count`)
+      .run(uid, day, 'tower_clears', next);
+  }catch(e){}
+  return next;
+}
+
+// 오답 1회로 오늘의 탑 종료(재도전 금지 — 내일 다시. 값은 1 로 고정, 멱등).
+function towerEndedSet(uid, day){
+  try{
+    db.prepare(`INSERT INTO daily_counters(user_id,day,kind,count) VALUES(?,?,?,1)
+      ON CONFLICT(user_id,day,kind) DO UPDATE SET count=1`).run(uid, day, 'tower_ended');
+  }catch(e){}
+}
+
+// ★ v1.71 «친구와 함께 배운 개념» — 수락된 친구 중 같은 개념을 teach-back 한 사람이 있으면
+//   «존재 여부와 닉네임만» 돌려준다. 친구의 기억 «내용» 은 절대 조회하지 않는다(프라이버시).
+function coTeacherOf(uid, topic){
+  const t = String(topic || '').trim();
+  if(!t) return null;
+  const key = 'taught:' + t.replace(/\s+/g, '_');
+  try{
+    const friends = db.prepare(`SELECT u.id, u.nickname FROM friendships f
+      JOIN users u ON u.id = CASE WHEN f.user_a=? THEN f.user_b ELSE f.user_a END
+      WHERE (f.user_a=? OR f.user_b=?) AND f.status='accepted'`).all(uid, uid, uid);
+    for(const fr of friends){
+      const hit = db.prepare("SELECT 1 FROM user_memories WHERE user_id=? AND kind='taught' AND key=? LIMIT 1")
+        .get(fr.id, key);
+      if(hit) return String(fr.nickname || '').slice(0, 20) || null;
+    }
+  }catch(e){}
+  return null;
+}
+
 // ★ 대화의 «다음 질문»을 남겨 두면 다음 접속에 루미가 먼저 말을 이어간다.
 try{ db.exec('ALTER TABLE chat_messages ADD COLUMN follow_up TEXT'); }catch(e){}
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) «논리와 편의» 마이그레이션 — 전부 try/catch 로 «이미 존재» 를 무시(멱등).
+//   users.teach_count      : «빛의 조각» 명예 카운트(lightLamp 가 등불을 새로 밝힐 때만 +1)
+//   users.ob_step          : 삼막 온보딩(0=시작 전 1=첫 등불 2=안개 겪음 3=수정화)
+//   users.play_limit_delta : 부모가 조절하는 하루 플레이 한도 오프셋(기본 40분 기준, -10~+20)
+//   users.pin_hash/transfer_hash/transfer_exp : 계정 PIN · 기기 이전(SHA-256 만 저장)
+//   users.parent_email/parent_optin : «루미의 편지» 수신 동의
+//   knowledge_cards.prereq : 선수개념(쉼표 구분 topic — 학습 순서의 기초 데이터)
+// ============================================================
+try{ db.exec('ALTER TABLE users ADD COLUMN teach_count INTEGER DEFAULT 0'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN ob_step INTEGER DEFAULT 0'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN play_limit_delta INTEGER DEFAULT 0'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN pin_hash TEXT'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN transfer_hash TEXT'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN transfer_exp TEXT'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN parent_email TEXT'); }catch{}
+try{ db.exec('ALTER TABLE users ADD COLUMN parent_optin INTEGER DEFAULT 0'); }catch{}
+try{ db.exec("ALTER TABLE knowledge_cards ADD COLUMN prereq TEXT DEFAULT ''"); }catch{}
 
 // 지식 카드 시드(운영자가 추가/수정 가능). quiz 는 정답을 서버에만 둔다.
 // ★ 2026-10-28: 8 → 16장. 기존 DB에도 없는 카드만 추가(멱등).
@@ -793,6 +1428,244 @@ try{ db.exec('ALTER TABLE chat_messages ADD COLUMN follow_up TEXT'); }catch(e){}
     if (r && r.changes) added++;
   }
   if (added) console.log('🧠 knowledge_cards 추가:', added, '개');
+}
+
+// ★ 2026-11-21 (v1.74) D1 지식 카드 24장 추가(컴퓨터개론 12 + 초등 수학·과학 12) — 멱등 INSERT.
+//   규칙(기존 16장과 같은 구조 + prereq):
+//   · quiz 4지선다 · 정답은 객관적으로 검증 가능한 것만(논쟁 문제 금지)
+//   · h1(hint_l1)=되묻기/둘 중 고르기 · h2(hint_l2)=생활 비유 · h3(hint_l3)=다음 행동(정답어 금지)
+//   · prereq=선수개념 topic(쉼표) — 컴퓨터개론·수학 사슬이 각자 순서를 이룬다
+//   · 저장: topic 이 이미 있으면 건너뛴다(재실행 안전)
+{
+  const newCards = [
+    // ---------- 컴퓨터개론 12장 (chapter 2) ----------
+    { topic:'입출력', chapter:2, prereq:'입력,출력',
+      concept:'컴퓨터에 넣고(입력) 결과를 꺼내 보는(출력) 모든 흐름',
+      analogy:'카페에서 주문을 말하고(입력) 음료를 받는(출력) 계산대',
+      example:'키보드로 입력 → 모니터로 출력',
+      h1:'키보드는 값을 넣어 주는 쪽일까, 화면에 보여 주는 쪽일까?',
+      h2:'카페에서 주문하면 음료가 나오지. 키보드가 주문, 모니터가 음료야.',
+      h3:'컴퓨터 부품을 «넣어 주는 쪽 / 보여 주는 쪽» 두 그룹으로 나눠 표를 만들어 보자.',
+      quiz:{ q:'마우스로 화면을 클릭하는 것은?', options:['출력이다','입력이다','저장이다','삭제이다'], answer:1 },
+      tags:'입출력,입력,출력,마우스' },
+    { topic:'바이너리', chapter:2, prereq:'',
+      concept:'0과 1 두 개의 숫자만으로 모든 정보를 나타내는 방법',
+      analogy:'전등 스위치 켬(1)·끔(0) 두 가지로 비밀 신호 보내기',
+      example:'이진수 1010 은 십진수 10',
+      h1:'전등 «켬/끔» 두 가지 신호만으로도 숫자를 만들 수 있을까?',
+      h2:'전등을 여러 개 늘어 놓고 켜고 꺼서 신호를 보내는 것과 같아.',
+      h3:'스위치 네 개를 그리고 켬·끔을 마음대로 골라 나만의 비밀 신호를 만들어 보자.',
+      quiz:{ q:'바이너리(이진법)에서 쓰는 숫자는?', options:['1과 2','0부터 9','0과 1','A부터 F'], answer:2 },
+      tags:'바이너리,이진법,0과 1' },
+    { topic:'메모리', chapter:2, prereq:'입출력,바이너리',
+      concept:'컴퓨터가 지금 쓰는 정보를 잠시 펼쳐 두는 작업 공간',
+      analogy:'공부할 때 책상 위에 필요한 책을 펼쳐 놓는 것',
+      example:'지금 열어 둔 앱과 문서는 메모리 위에 있어요',
+      h1:'지금 하고 있는 일의 정보는 어디에 잠시 놓아 둘까?',
+      h2:'책상 위에 공부할 책을 펼쳐 놓는 것처럼, 컴퓨터도 지금 할 일을 작업 공간에 펼쳐 놓아.',
+      h3:'게임이나 앱을 끄면 어떤 정보가 사라질지 상상해서 말해 보자.',
+      quiz:{ q:'지금 열어 둔 앱의 내용이 잠시 머무는 곳은?', options:['프린터','메모리','스피커','마우스'], answer:1 },
+      tags:'메모리,램,작업공간,임시' },
+    { topic:'RAM·ROM', chapter:2, prereq:'메모리',
+      concept:'RAM 은 전원이 꺼지면 사라지는 임시 기억, ROM 은 지워지지 않는 읽기 전용 기억',
+      analogy:'RAM 은 수업 칠판(지우면 사라짐), ROM 은 새겨 넣은 비석(그대로 남음)',
+      example:'ROM 에는 컴퓨터를 켜는 첫 명령이 담겨 있어요',
+      h1:'전원을 꺼도 남아야 할 내용은 칠판에 써 둘까, 돌에 새겨 둘까?',
+      h2:'칠판은 수업이 끝나면 지워져. 새겨 둔 글자는 그대로 남지.',
+      h3:'«지워지는 쪽» 과 «남는 쪽» 이 각각 어떤 기억 장치인지 노트에 적어 비교해 보자.',
+      quiz:{ q:'전원을 꺼도 내용이 남아 있는 기억 장치는?', options:['RAM','마우스','ROM','모니터'], answer:2 },
+      tags:'RAM,ROM,기억장치' },
+    { topic:'캐시', chapter:2, prereq:'RAM·ROM',
+      concept:'자주 쓰는 데이터를 곁에 두고 빨리 꺼내 쓰는 임시 보관함',
+      analogy:'매일 쓰는 색연필만 책상 서랍에 꽂아 두기',
+      example:'자주 보는 그림은 캐시 덕분에 다시 빨리 열려요',
+      h1:'매번 멀리 가서 꺼내기엔 너무 자주 쓰는 물건은 뭘까?',
+      h2:'매일 쓰는 색연필은 서랍에, 가끔 쓰는 것은 책장에 둬. 캐시가 바로 그 서랍이야.',
+      h3:'자주 쓰는 물건 3개를 골라 «나의 서랍 규칙» 을 정해 보자.',
+      quiz:{ q:'자주 쓰는 데이터를 곁에 두고 빨리 꺼내는 임시 보관함은?', options:['스피커','키보드','케이블','캐시'], answer:3 },
+      tags:'캐시,cache,속도,보관함' },
+    { topic:'CPU 클록', chapter:2, prereq:'캐시',
+      concept:'CPU 가 명령을 처리하는 빠르기 — 초에 똑딱이는 횟수',
+      analogy:'박자를 치는 메트로놈 — 똑딱이 빠를수록 노래가 빨리 진행된다',
+      example:'클록 3GHz 는 초에 30억 번 똑딱',
+      h1:'CPU 가 일하는 빠르기를 무엇으로 셀 수 있을까?',
+      h2:'메트로놈이 빠르면 노래가 빨리 진행되지. CPU 도 똑딱이 빠를수록 일이 빨라져.',
+      h3:'메트로놈 영상을 보며 «느림/빠름» 두 가지 박자를 따라 치며 비교해 보자.',
+      quiz:{ q:'CPU 의 빠르기를 나타내는 것은?', options:['화면 크기','클록','케이블 색','마우스 개수'], answer:1 },
+      tags:'CPU,클록,clock,GHz' },
+    { topic:'운영체제 프로세스', chapter:2, prereq:'CPU 클록',
+      concept:'실행 중인 프로그램 하나하나를 운영체제가 관리하는 단위',
+      analogy:'여러 반을 돌아보며 순서를 정해 주는 선생님',
+      example:'음악 앱과 게임이 같이 켜져도 운영체제가 순서를 나눠 줘요',
+      h1:'여러 프로그램이 동시에 돌 때 누가 순서를 정해 줄까?',
+      h2:'음악 앱과 게임이 같이 켜지면 운영체제가 선생님처럼 차례를 나눠 줘.',
+      h3:'집 컴퓨터에서 지금 실행 중인 프로그램 세 개를 세어 목록을 만들어 보자.',
+      quiz:{ q:'실행 중인 프로그램 하나를 부르는 말은?', options:['프로세스','키보드','폴더','파일'], answer:0 },
+      tags:'운영체제,프로세스,OS,작업관리자' },
+    { topic:'파일·디렉터리', chapter:2, prereq:'운영체제 프로세스',
+      concept:'정보를 파일로 담고 디렉터리(폴더)로 정리하는 방법',
+      analogy:'서류를 파일에 넣고 과목별 서랍에 정리하기',
+      example:'내문서/사진/생일.jpg',
+      h1:'사진과 숙제 파일이 한곳에 섞이면 어디서부터 찾기 쉬워질까?',
+      h2:'책상 서랍을 과목별로 나누면 찾기 쉬워. 폴더가 바로 그 서랍이야.',
+      h3:'내 파일을 주제별로 나눌 «서랍» 이름 세 개를 정해 보자.',
+      quiz:{ q:'파일을 정리해 두는 «서랍» 을 부르는 말은?', options:['프로세스','RAM','클록','디렉터리(폴더)'], answer:3 },
+      tags:'파일,폴더,디렉터리,정리' },
+    { topic:'데이터베이스 테이블', chapter:2, prereq:'파일·디렉터리',
+      concept:'정보를 행과 열로 깔끔하게 모아 둔 표(데이터 저장소)',
+      analogy:'반 친구 이름·생일을 정리한 출석부',
+      example:'학생 테이블 — 세로줄: 이름/반, 가로줄: 학생 한 명',
+      h1:'친구 정보를 마구 섞어 두면 찾기 어렵겠지. 어떻게 정리하면 좋을까?',
+      h2:'출석부처럼 가로줄(한 명)과 세로줄(정보 종류)로 정리하면 원하는 것을 금방 찾아.',
+      h3:'가족 생일표를 행과 열로 정리해 직접 만들어 보자.',
+      quiz:{ q:'데이터베이스에서 행과 열로 정보를 정리하는 단위는?', options:['테이블','폴더','캐시','프로세스'], answer:0 },
+      tags:'데이터베이스,테이블,DB,표' },
+    { topic:'네트워크 패킷', chapter:2, prereq:'바이너리',
+      concept:'큰 데이터를 잘게 나눠 여러 번에 걸쳐 보내는 작은 소포',
+      analogy:'큰 레고 성을 조각으로 나눠 여러 상자에 나눠 배송하기',
+      example:'사진 한 장도 여러 조각으로 나뉘어 이동해요',
+      h1:'사진 한 장을 한 번에 보내기 어렵다면 어떻게 나눠 보낼까?',
+      h2:'레고 성을 한 상자에 못 넣으면 조각으로 나눠 보내지. 그 조각이 패킷이야.',
+      h3:'나눠 간 소포가 도착하면 다시 합쳐진다고 상상하며 순서를 적어 보자.',
+      quiz:{ q:'큰 데이터를 잘게 나눠 보내는 작은 조각은?', options:['프로세스','패킷','폴더','ROM'], answer:1 },
+      tags:'네트워크,패킷,packet,소포' },
+    { topic:'프로토콜', chapter:2, prereq:'네트워크 패킷',
+      concept:'컴퓨터끼리 미리 정해 둔 약속된 대화 규칙',
+      analogy:'전화를 받으면 «여보세요» 로 시작하는 예의',
+      example:'HTTP 는 웹에서 쓰는 약속이에요',
+      h1:'컴퓨터끼리 말을 주고받으려면 무엇을 먼저 정해 둘까?',
+      h2:'전화할 때 «여보세요» 하고 시작하듯, 컴퓨터도 약속된 방식으로 말을 건네.',
+      h3:'친구와 «비밀 신호 규칙» 을 하나 정하고 그 규칙으로 놀아 보자.',
+      quiz:{ q:'컴퓨터끼리 정해 둔 통신 규칙은?', options:['패킷','테이블','프로토콜','캐시'], answer:2 },
+      tags:'프로토콜,protocol,규칙,HTTP' },
+    { topic:'압축', chapter:2, prereq:'파일·디렉터리',
+      concept:'데이터를 규칙으로 줄여 작게 만드는 방법',
+      analogy:'옷을 둥글게 말아 가방에 꾹꾹 눌러 담기',
+      example:'큰 사진을 작게 줄이면 보내기 쉬워져요',
+      h1:'가방에 옷이 너무 많으면 어떻게 담으면 더 들어갈까?',
+      h2:'여행 가방에 옷을 말아 눌러 담으면 더 많이 들어가. 데이터도 그렇게 줄여 담아.',
+      h3:'용량이 다른 파일 두 개를 골라 «작게 줄이는» 방법을 말해 보자.',
+      quiz:{ q:'데이터를 작게 줄여 담는 것은?', options:['복사','출력','삭제','압축'], answer:3 },
+      tags:'압축,zip,용량' },
+    // ---------- 초등 수학·과학 12장 (chapter 3) ----------
+    { topic:'곱셈 순서', chapter:3, prereq:'산술 연산',
+      concept:'+, - 보다 ×, ÷ 를 먼저 계산하기로 약속한 규칙',
+      analogy:'계산에도 «먼저 할 사람» 줄 세우기가 있다는 것',
+      example:'3 + 4 × 2 = 3 + 8 = 11',
+      h1:'3 + 4 × 2 에서 먼저 계산할 것은 덧셈일까, 곱셈일까?',
+      h2:'놀이 순서 정하기처럼 계산에도 «먼저 할 사람» 이 있어. 곱셈이 먼저야.',
+      h3:'3 + 4 × 2 를 두 가지 순서로 각각 계산해 보고 답이 어떻게 달라지는지 비교해 보자.',
+      quiz:{ q:'3 + 4 × 2 를 바르게 계산하면?', options:['14','11','24','10'], answer:1 },
+      tags:'곱셈,연산순서,사칙연산' },
+    { topic:'분수의 덧셈', chapter:3, prereq:'산술 연산',
+      concept:'조각 크기(분모)를 같게 맞춘 뒤 조각 수(분자)를 더하는 계산',
+      analogy:'피자를 같은 크기로 다시 자른 뒤 조각 수를 세기',
+      example:'1/2 + 1/3 = 3/6 + 2/6 = 5/6',
+      h1:'1/2 와 1/3 — 조각 크기가 같을까, 다를까?',
+      h2:'피자를 2조각과 3조각으로 자르면 크기가 달라. 같은 크기로 다시 잘라야 더할 수 있어.',
+      h3:'1/2 를 6조각 크기로 다시 나타내 적어 보자.',
+      quiz:{ q:'1/2 + 1/4 의 답은?', options:['2/6','3/4','1/6','2/4'], answer:1 },
+      tags:'분수,덧셈,분모' },
+    { topic:'약분·통분', chapter:3, prereq:'분수의 덧셈',
+      concept:'분수의 모양을 바꿔도 크기가 같음을 이용해 분모를 통일하거나 줄이는 방법',
+      analogy:'같은 물감 양을 «2통» 으로도 «4개의 반 통» 으로도 세는 것',
+      example:'2/4 를 줄이면 1/2',
+      h1:'2/4 와 1/2 는 크기가 같을까, 다를까?',
+      h2:'케이크의 4등분 중 2조각은 반 조각과 같은 양이야. 쓴 모양만 다를 뿐이야.',
+      h3:'3/6 과 4/8 을 가장 간단한 모양으로 바꿔 적어 보자.',
+      quiz:{ q:'2/6 을 가장 간단한 모양으로 줄이면?', options:['2/3','1/6','1/3','3/6'], answer:2 },
+      tags:'약분,통분,분수' },
+    { topic:'소수', chapter:3, prereq:'분수의 덧셈,약분·통분',
+      concept:'자연수 사이를 10 등분한 눈금으로 나타낸 수',
+      analogy:'1 미터 자에서 눈금 하나(0.1) 읽기',
+      example:'0.5 는 1/2 와 같은 크기예요',
+      h1:'1과 2 사이의 딱 절반은 어떤 기호로 쓸 수 있을까?',
+      h2:'자의 눈금처럼 1 사이를 10칸으로 나눠 읽으면 0.1, 0.2 … 처럼 쓸 수 있어.',
+      h3:'자로 0.1 부터 0.9 까지 차례로 가리키며 소리 내어 읽어 보자.',
+      quiz:{ q:'0.5 와 크기가 같은 것은?', options:['1/5','1/2','5/2','0.2'], answer:1 },
+      tags:'소수,decimal,눈금' },
+    { topic:'도형 넓이', chapter:3, prereq:'곱셈 순서',
+      concept:'직사각형 안에 같은 크기 칸이 몇 개 들어가는지 세는 양',
+      analogy:'바닥에 같은 크기 타일이 몇 장 깔리는지 세기',
+      example:'가로 4 × 세로 3 = 넓이 12',
+      h1:'가로 4칸, 세로 3칸 바닥에는 타일이 모두 몇 장 깔릴까?',
+      h2:'타일을 한 줄씩 세어 보면 «가로×세로» 와 같아진다는 걸 알 수 있어.',
+      h3:'연습장 칸에 가로 5, 세로 3 직사각형을 그리고 칸 수를 직접 세어 보자.',
+      quiz:{ q:'가로 5, 세로 3 인 직사각형의 넓이는?', options:['8','16','15','10'], answer:2 },
+      tags:'넓이,면적,직사각형,타일' },
+    { topic:'각도', chapter:3, prereq:'',
+      concept:'두 변이 만나서 벌어진 크기',
+      analogy:'시계 바늘이 벌어진 폭으로 시간을 보는 것',
+      example:'직각은 90도예요',
+      h1:'3시의 시계 바늘은 얼마나 벌어져 있을까?',
+      h2:'시계 바늘이 벌어진 폭이 바로 각도야. 3시의 바늘 모양은 딱 반쪽 사각형이지.',
+      h3:'집 안에서 «반쪽 사각형» 모양으로 벌어진 곳 세 곳을 찾아 적어 보자.',
+      quiz:{ q:'직각의 각도는?', options:['45도','180도','30도','90도'], answer:3 },
+      tags:'각도,도,직각,각도기' },
+    { topic:'물의 상태', chapter:3, prereq:'',
+      concept:'같은 물이 온도에 따라 고체(얼음)·액체(물)·기체(수증기)로 모습을 바꾼다',
+      analogy:'같은 인형이 온도에 따라 옷을 갈아입는 것',
+      example:'0도에서 얼고, 100도에서 끓어요',
+      h1:'냉동실의 얼음과 컵의 물은 다른 것일까, 같은 것일까?',
+      h2:'같은 물이 온도에 따라 옷(모습)을 갈아입는 거야. 얼음·물·김 전부 물이야.',
+      h3:'얼음을 녹였다가 다시 얼려 보며 모습 변화를 그림으로 기록해 보자.',
+      quiz:{ q:'물이 기체가 된 모습은?', options:['얼음','수증기','눈사람','물방울'], answer:1 },
+      tags:'물,상태,얼음,수증기' },
+    { topic:'온도와 열', chapter:3, prereq:'물의 상태',
+      concept:'온도는 «얼마나 따뜻한지» 눈금이고, 열은 따뜻함이 이동하는 것',
+      analogy:'따뜻한 손으로 차가운 손을 잡으면 온기가 옮아 가는 것',
+      example:'뜨거운 컵을 찬물에 담그면 컵의 열이 물로 옮아 가요',
+      h1:'뜨거운 컵을 찬물에 담그면 따뜻함은 어디로 갈까?',
+      h2:'손이 따뜻하면 옆 사람 손도 따뜻해지지. 열은 따뜻한 쪽에서 차가운 쪽으로 옮아 가.',
+      h3:'따뜻한 물과 찬물을 번갈아 만져 보고 «따뜻함이 이동한 길» 을 손가락으로 가리켜 보자.',
+      quiz:{ q:'열이 이동하는 방향은?', options:['차가운 곳에서 따뜻한 곳으로','따뜻한 곳에서 차가운 곳으로','위에서 아래로만 이동한다','오른쪽에서 왼쪽으로만 이동한다'], answer:1 },
+      tags:'온도,열,이동' },
+    { topic:'빛의 반사', chapter:3, prereq:'',
+      concept:'빛이 물체에 부딪혀 되튕겨 나오는 현상',
+      analogy:'벽에 던진 공이 튕겨 돌아오는 것',
+      example:'거울은 빛을 잘 튕겨 내요',
+      h1:'어두운 방에서 거울에 내 모습이 보이려면 무엇이 필요할까?',
+      h2:'벽에 던진 공이 튕겨 돌아오듯, 빛도 거울에 부딪혀 되튕겨 눈에 들어와.',
+      h3:'어두운 곳에서 손전등을 거울에 비추며 되돌아오는 길을 관찰해 보자.',
+      quiz:{ q:'거울에 빛이 되튕겨 나오는 현상은?', options:['투명','흡수만 되는 것','반사','소리'], answer:2 },
+      tags:'빛,반사,거울' },
+    { topic:'자석', chapter:3, prereq:'',
+      concept:'쇠 종류를 끌어당기거나 밀어내는 힘을 가진 물체',
+      analogy:'보이지 않는 팔로 쇠를 붙잡는 것',
+      example:'같은 극끼리는 밀고, 다른 극은 끌어당겨요',
+      h1:'자석이 붙는 것과 안 붙는 것은 어떻게 다를까?',
+      h2:'자석은 보이지 않는 팔로 쇠를 붙잡아. 같은 극은 밀어내고 다른 극은 끌어당겨.',
+      h3:'집에서 자석이 붙는 물건 세 개를 찾아 목록을 만들어 보자.',
+      quiz:{ q:'자석의 N 극과 N 극을 가까이 두면?', options:['서로 밀어낸다','서로 붙는다','아무 일도 없다','녹아 없어진다'], answer:0 },
+      tags:'자석,N극,S극,자기력' },
+    { topic:'식물 광합성', chapter:3, prereq:'물의 상태',
+      concept:'식물이 빛·물·공기 중 기체로 겉면에서 양분을 만드는 일',
+      analogy:'태양빛을 반죽으로 써서 양분 빵을 굽는 식물의 부엌',
+      example:'잎이 광합성의 주방이에요',
+      h1:'식물은 밥을 안 먹는데 무엇으로 힘을 낼까?',
+      h2:'잎은 식물의 부엌이야. 빛과 물을 재료로 양분을 만들어 내.',
+      h3:'창가 화분과 어두운 방 화분의 자라는 모습을 비교해 기록해 보자.',
+      quiz:{ q:'광합성에 꼭 필요한 재료는?', options:['어둠','장난감','빛','포장지'], answer:2 },
+      tags:'광합성,식물,잎,양분' },
+    { topic:'지층', chapter:3, prereq:'',
+      concept:'오랜 시간 흙과 돌이 겹겹이 쌓여 만든 층',
+      analogy:'샌드위치를 아래 빵부터 차곡차곡 쌓는 것',
+      example:'지층의 겹을 보면 쌓인 순서를 알 수 있어요',
+      h1:'강가 절벽에 줄줄이 보이는 무늬는 무엇일까?',
+      h2:'샌드위치를 아래에서부터 차곡차곡 쌓듯, 흙도 오래 쌓여 겹을 만들어.',
+      h3:'컵에 모래·자갈·흙을 순서대로 부어 나만의 겹을 만들어 보자.',
+      quiz:{ q:'지층에서 «먼저 쌓인 겹» 은 어디에 있을까?', options:['가장 위','가장 아래','가운데','바깥에'], answer:1 },
+      tags:'지층,층,화석,쌓임' },
+  ];
+  const ins = db.prepare(`INSERT INTO knowledge_cards(topic,chapter,concept,analogy,example,hint_l1,hint_l2,hint_l3,quiz,tags,prereq)
+    SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM knowledge_cards WHERE topic=?)`);
+  let added74 = 0;
+  for (const c of newCards) {
+    const r = ins.run(c.topic, c.chapter, c.concept, c.analogy, c.example, c.h1, c.h2, c.h3,
+      JSON.stringify(c.quiz), c.tags, c.prereq || '', c.topic);
+    if (r && r.changes) added74++;
+  }
+  if (added74) console.log('🧠 knowledge_cards (v1.74) 추가:', added74, '개');
 }
 
 // ---------- 2. 시드 데이터: 성격 대사(아동용 한국어) + 상점 아이템 ----------
@@ -939,18 +1812,19 @@ function llmStatus(){
 
 // opts: { temperature, maxTokens, messages, json } — messages 가 없으면 단일 prompt
 // ★ v1.52 «적게 쓰기» — 호출마다 실제 토큰을 남긴다. 계측 없이는 «절약» 을 말할 수 없다.
-let lastLLMUsage = null;
-let lastLLMPromptChars = 0;
+// ★ 계량 정확성: 반환을 { text, usage, model, provider, promptChars } 한 묶음으로 단일화한다.
+//   예전의 모듈 전역(lastLLMUsage 등)은 동시 요청끼리 서로 덮어써 llm_logs 계량이 어긋났다.
 async function callLLM(prompt, opts){
-  if(!LLM_PROVIDERS.length) return null;
+  const noResult = { text:null, usage:null, model:null, provider:null, promptChars:0 };
+  if(!LLM_PROVIDERS.length) return noResult;
   const o = opts || {};
   const temperature = o.temperature != null ? o.temperature : 0.8;
   const maxTokens = o.maxTokens || LLM_MAX_TOKENS;
   const messages = o.messages || [{ role:'user', content:String(prompt||'') }];
   const base = { messages, temperature, max_tokens: maxTokens };
   if(o.json) base.response_format = { type:'json_object' };
-  lastLLMUsage = null;
-  lastLLMPromptChars = messages.reduce((a,m)=>a+String(m.content||'').length,0);
+  const promptChars = messages.reduce((a,m)=>a+String(m.content||'').length,0);
+  let usage = null;
   // ★ v1.52: 짧은 대화(수다·마음)는 «싼 모델 먼저». 학습만 품질 우선으로 1차 모델을 쓴다.
   const order = (o.prefer === 'fast' || LLM_FORCE_FAST)
     ? [...LLM_PROVIDERS].sort((a,b)=>(a.name==='deepseek'?0:1)-(b.name==='deepseek'?0:1))
@@ -974,7 +1848,7 @@ async function callLLM(prompt, opts){
         clearTimeout(timer); timer = null;
         if(!r.ok) return { failed:true, status:r.status };
         const j = await r.json();
-        lastLLMUsage = j && j.usage ? j.usage : null;
+        usage = j && j.usage ? j.usage : null;
         return { text: j.choices?.[0]?.message?.content || '' };
       });
       const res = await withTimeout(req, p.timeout);
@@ -987,8 +1861,8 @@ async function callLLM(prompt, opts){
       // EXAONE 은 답이 «\n\n» 으로 시작한다 — 앞뒤 공백을 지워야 아이에게 빈 줄이 보이지 않는다.
       const clean = String(res.text || '').trim();
       if(clean){
-        lastLLMModel = p.model;
-        return clean;
+        lastLLMModel = p.model;   // 상태 표시용(/api/llm/status). 계량은 반환값을 쓴다.
+        return { text:clean, usage, model:p.model, provider:p.name, promptChars };
       }
       // 빈 응답도 실패로 본다 — 바로 프리셋으로 떨어지지 않고 다음 모델을 시도
       console.log(`⚠️ [LLM] ${p.name} 빈 응답 → 다음 모델`);
@@ -999,13 +1873,15 @@ async function callLLM(prompt, opts){
       if(timer) clearTimeout(timer);
     }
   }
-  return null;
+  return { text:null, usage, model:null, provider:null, promptChars };
 }
 
 // ★ v1.54 «진짜 토큰 스트리밍» — OpenAI 호환 stream:true 를 읽어 delta 마다 onDelta 로 넘긴다.
 //   주의: 이미 delta 를 보낸 뒤에는 다른 provider 로 갈아타면 글이 겹친다 → 그 전까지만 재시도.
+// ★ 계량 정확성: callLLM 과 같은 반환 규약 { text, usage, model, provider, promptChars }.
 async function callLLMStream(prompt, opts, onDelta){
-  if(!LLM_PROVIDERS.length) return null;
+  const noResult = { text:null, usage:null, model:null, provider:null, promptChars:0 };
+  if(!LLM_PROVIDERS.length) return noResult;
   const o = opts || {};
   const messages = o.messages || [{ role:'user', content:String(prompt||'') }];
   const base = {
@@ -1014,8 +1890,8 @@ async function callLLMStream(prompt, opts, onDelta){
     max_tokens: o.maxTokens || LLM_MAX_TOKENS,
     stream: true,
   };
-  lastLLMUsage = null;
-  lastLLMPromptChars = messages.reduce((a,m)=>a+String(m.content||'').length,0);
+  const promptChars = messages.reduce((a,m)=>a+String(m.content||'').length,0);
+  let usage = null;
   const order = (o.prefer === 'fast' || LLM_FORCE_FAST)
     ? [...LLM_PROVIDERS].sort((a,b)=>(a.name==='deepseek'?0:1)-(b.name==='deepseek'?0:1))
     : LLM_PROVIDERS;
@@ -1058,7 +1934,7 @@ async function callLLMStream(prompt, opts, onDelta){
           if(!data || data === '[DONE]') continue;
           let j = null;
           try{ j = JSON.parse(data); }catch(e){ continue; }
-          if(j.usage) lastLLMUsage = j.usage;
+          if(j.usage) usage = j.usage;
           const d = j.choices && j.choices[0] && j.choices[0].delta
             ? j.choices[0].delta.content : null;
           if(d){
@@ -1085,19 +1961,19 @@ async function callLLMStream(prompt, opts, onDelta){
       }
       clearTimeout(timer);
       if(full.trim()){
-        lastLLMModel = p.model;
-        return full.trim();
+        lastLLMModel = p.model;   // 상태 표시용(/api/llm/status). 계량은 반환값을 쓴다.
+        return { text:full.trim(), usage, model:p.model, provider:p.name, promptChars };
       }
       // 빈 응답이면 다음 모델. 단, 이미 화면에 보낸 글이 있으면 중복을 막기 위해 멈춘다.
-      if(sent) return full.trim() || null;
+      if(sent) return { text:full.trim(), usage, model:p.model, provider:p.name, promptChars };
       console.log(`⚠️ [LLM:stream] ${p.name} 빈 응답 → 다음 모델`);
     }catch(e){
-      if(sent) return null;   // 이미 보낸 글이 있으면 재시도하지 않는다
+      if(sent) return noResult;   // 이미 보낸 글이 있으면 재시도하지 않는다
       llmDown[p.name] = Date.now() + 60*1000;
       console.log(`💤 [LLM:stream] ${p.name} ${e.name||e.message} → 60s 건너뛰기`);
     }
   }
-  return null;
+  return noResult;
 }
 
 // ---------- 3. AI 성격 엔진 (LLM 우선, 색→성격 매핑은 결정론 유지) ----------
@@ -1125,7 +2001,8 @@ async function generatePersonality(palette){
   // LLM: 배색에 맞춘 개인화 인사와 소개 생성
   const colors = Object.entries(palette).map(([k,v])=>`${k}=${v}`).join(', ');
   const prompt = `너는 어린이 코딩 교육 플랫폼 DOROBUS의 캐릭터 작가다. 아이가 로봇을 이렇게 색칠했다: ${colors}. 그래서 로봇의 성격은 "${main}"(${TRAITS[main]})로 정해져 있다. 아래 JSON만 출력해라 (다른 설명 금지): {"greeting":"로봇의 첫 인사말. 한국어, 어린이 말투, 25자 이내","desc":"이 로봇의 성격 소개. 한국어 한 문장, 40자 이내"}. 출력은 초등학생에게 안전하고 건전한 표현만 사용한다.`;
-  const txt = await callLLM(prompt);
+  const pl = await callLLM(prompt);
+  const txt = pl ? pl.text : null;
   if(txt){
     try{
       const j = JSON.parse(txt.match(/\{[\s\S]*\}/)[0]);
@@ -1199,14 +2076,20 @@ async function ensureQuests(dateStr) {
 - "빗대다", "비유하면", "경험에 빗대면" 같은 어려운 말 대신 쉬운 말로 물어라.
 - 한 문장, 25자 안팎. 예) "오늘 학교에서 제일 웃긴 일은 뭐였어?"
 한국어 한 문장씩 줄바꿈으로만 구분해 출력하고 설명·번호·따옴표 없이 질문만. 아이에게 안전하고 건전한 질문만.`;
-    const txt = (await callLLM(MP) || '');
+    const mq = await callLLM(MP);
+    const txt = (mq && mq.text) || '';
     let qs = txt.split('\n').map(s=>s.trim().replace(/^["'“”]+|["'“”]+$/g,'')).filter(s=>s.length>=8 && s.length<=60);
     qs = qs.filter(q=>!ADULT_WORDS.test(q));     // ★ v1.34 LLM 이 또 어른 말을 쓰면 버리고 프리셋으로 채운다
     qs = [...new Set(qs)];
     const exist = new Set(missions.map(m=>m.title));
     const preset = presetsForTopic(topic).filter(p=>!exist.has(p));
     while(qs.length < need && preset.length) qs.push(preset.shift()); // LLM 실패/부족 시 프리셋 보강
-    for(const q of qs.slice(0, need)) ins.run(dateStr,'ai_mission', q, 30, topic.topic);
+    // ★ LLM await 동안 ensureQuests 가 동시에 재진입하면 같은 질문이 여러 행으로 쌓인다.
+    //   INSERT ... SELECT ... WHERE NOT EXISTS 로 (날짜+유형+제목) 중복을 원자적으로 막는다.
+    const insMission = db.prepare(`INSERT INTO daily_quests(quest_date,type,title,reward,topic)
+      SELECT ?,?,?,?,? WHERE NOT EXISTS(
+        SELECT 1 FROM daily_quests WHERE quest_date=? AND type='ai_mission' AND title=?)`);
+    for(const q of qs.slice(0, need)) insMission.run(dateStr,'ai_mission', q, 30, topic.topic, dateStr, q);
   }
   return db.prepare('SELECT * FROM daily_quests WHERE quest_date=?').all(dateStr);
 }
@@ -1224,14 +2107,8 @@ const DEFAULT_TOPICS = [
   { chapter:5, topic:'AI 마을의 질문',     keywords:'질문하기, 배우기, 도와주기' },
 ];
 // 이번 주 월요일(KST) — 주제의 기준이 되는 날짜
-function weekStartKST(){
-  const ymd = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul'}).format(new Date());
-  const [y,m,d] = ymd.split('-').map(Number);
-  const base = new Date(Date.UTC(y, m-1, d));
-  const dow = base.getUTCDay();                 // 0=일요일
-  base.setUTCDate(base.getUTCDate() - (dow === 0 ? 6 : dow - 1));
-  return base.toISOString().slice(0,10);
-}
+// ★ weekStartKST() 는 파일에 두 번 정의돼 함수 선언 호이스팅으로 뒤의 것이 앞의 것을 덮어썼다.
+//   중복 정의를 제거하고 «학습 계획 섹션» 의 정의 하나만 남긴다(두 구현은 동일한 값을 낸다).
 // 이번 주 주제 — 운영자가 넣은 값이 있으면 그것, 없으면 챕터 자동 순환
 function currentTopic(){
   const week = weekStartKST();
@@ -1383,6 +2260,34 @@ function grantCell(uid, amount, source) {
   db.prepare('INSERT INTO cell_tx(user_id,amount,source) VALUES(?,?,?)').run(uid, amount, source);
 }
 
+// ---------- 5-A. ★ 계정 삭제 공통: 이 사용자의 모든 흔적을 전 표에서 지운다 ----------
+//   (계정 삭제 / 데모 시드 초기화 / 운영자 시연계정 정리가 함께 쓴다)
+//   guestbook·friendships·cheers·friend_messages·friend_blocks·friend_reports 는
+//   user_id 컬럼이 없고(to_user/from_user 등) «관계» 표이므로 양방향으로 지운다.
+function wipeUserData(uid){
+  const USER_TABLES = [
+    'robots','inventory','cell_tx','quest_logs','visits','mailbox','class_logs','workshop_logs',
+    'interact_logs','game_logs','sort_progress','chat_messages','chat_analyses','chat_reports',
+    'llm_logs','learner_profile','learning_help_logs','learning_plans','weekly_goals','goal_claims',
+    'review_cards','village_props','treasure_claims','world_lessons','user_memories','robot_recalls',
+    'chat_sessions','world_presence','world_quests','world_stars','world_secrets','thought_shards',
+    'campaign_facilities','campaign_events','campaign_journal','nudges','mood_logs','focus_sessions',
+    'season_claims',
+    'concept_mastery',   // ★ v1.70: 새 학습 테이블도 계정 삭제 때 함께 지운다(누락 방지 규칙)
+    'memory_lamps',      // ★ v1.71: 기억 등불도 계정 삭제 때 함께 지운다(누락 방지 규칙)
+  ];
+  for(const t of USER_TABLES){
+    try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(uid); }catch(e){}
+  }
+  // 관계 표 — user_id 가 없어 양쪽 컬럼을 모두 본다
+  try{ db.prepare('DELETE FROM guestbook WHERE to_user=? OR from_user=?').run(uid, uid); }catch(e){}
+  try{ db.prepare('DELETE FROM friendships WHERE user_a=? OR user_b=?').run(uid, uid); }catch(e){}
+  try{ db.prepare('DELETE FROM friend_messages WHERE from_user=? OR to_user=?').run(uid, uid); }catch(e){}
+  try{ db.prepare('DELETE FROM cheers WHERE from_user=? OR to_user=?').run(uid, uid); }catch(e){}
+  try{ db.prepare('DELETE FROM friend_blocks WHERE user_id=? OR blocked_id=?').run(uid, uid); }catch(e){}
+  try{ db.prepare('DELETE FROM friend_reports WHERE reporter_id=? OR target_id=?').run(uid, uid); }catch(e){}
+}
+
 // ---------- 5-B. 인증: 세션 토큰 (uid 대신 토큰으로 본인 확인) ----------
 function authUser(req){
   const t = req.get('X-Token') || (req.body && req.body.token);
@@ -1402,21 +2307,35 @@ const UNSAFE_PATTERNS = [
   /(주민등록번호|비밀번호|계좌번호|전화번호를\s*알려|여기로\s*전화)/, // 개인정보 유인
   /(https?:|www\.|\.com|\.kr|\.net|\.xyz)/i,  // 링크/스팸
 ];
-function isSafeText(s){
+// ★ 한국어 욕설 차단(아동 서비스) — 자소 분리·특수문자 끼우기 등 «변형» 까지 커버한다.
+//   한글에는 단어 경계(\b)가 없어 '새끼' 는 (개\s*)? 접두 결합으로만 잡고,
+//   동물 새끼 표현이 걸릴 수 있지만 아이 화면 보호를 우선한다(오탐 시 이 배열에서만 조정).
+const UNSAFE_PROFANITY = [
+  /(씨\s*[@!1]*\s*발|시\s*1\s*발|ㅅ\s*ㅣ\s*ㅂ\s*ㅏ\s*ㄹ|ㅆ\s*ㅣ\s*발)/,   // 씨발 계열(ㅅㅣㅂㅏㄹ·시1발·씨@발·ㅆㅣ발)
+  /(병\s*신|븅\s*신)/,                                                   // 병신/븅신
+  /(개\s*)?(새\s*끼|가죽힘)/,                                            // 개새끼/새끼 계열
+  /(좆|ㅈ\s*ㅂ\s*[ㅅㅄ]|ㅄ)/,                                             // 좆 · ㅈㅂㅅ/ㅄ
+  /(느\s*금\s*마|느\s*금\s*니)/,                                          // 느금마/느금니
+];
+// maxLen: 호출부가 길이 상한을 늘릴 수 있다(기본 200 — 친구 채팅 등 기존 호출점은 그대로).
+// LLM 학습 답변(maxTokens=170) 은 정상적인 한국어만으로도 200자를 넘을 수 있어 채팅 파이프라인은 600 을 쓴다.
+function isSafeText(s, maxLen){
   if(!s) return false;
   const t = String(s);
-  if(t.length > 200) return false;                  // 과도한 길이(악성 반말 등)
+  if(t.length > (maxLen || 200)) return false;      // 과도한 길이(악성 반말 등)
   if(/\d{6,}/.test(t)) return false;                // 긴 숫자(전화/계좌/아이디) 차단
   for(const re of UNSAFE_PATTERNS) if(re.test(t)) return false;
+  for(const re of UNSAFE_PROFANITY) if(re.test(t)) return false;
   return true;
 }
 // LLM 결과 정리 + 안전성 검증(위반 시 null 반환 → 호출부가 프리셋 대사로 폴백)
-function sanitizeLine(raw, maxLen){
+// safeLen: isSafeText 에 넘길 길이 상한(생략 시 200). 채팅 파이프라인은 600 으로 통일한다.
+function sanitizeLine(raw, maxLen, safeLen){
   if(!raw) return null;
   let line = String(raw).trim().replace(/^["'“”]+|["'“”]+$/g,'').split('\n')[0].trim();
   if(!line) return null;
   line = line.slice(0, maxLen||80);
-  return isSafeText(line) ? line : null;
+  return isSafeText(line, safeLen) ? line : null;
 }
 
 // ---------- 5-E. ★ 부품 보너스(수치적 가치) ----------
@@ -1495,6 +2414,17 @@ function grantStreakBonus(uid, streak){
 
 // ---------- 6. API ----------
 // 로그인(단순화: 닉네임이 곧 계정. 정식 버전은 JWT로 교체, 데모에서는 생략 — 기업 설명회에서 "로그인 과정은 다루지 않기로" 명시)
+// ★ v1.75: 대세계가 «빛의 조각» 상한을 맞추려고 GET /api/user 를 부른다(계약: teach_count).
+//   POST 만 있던 탓에 마을을 열 때마다 404 가 났고, 조각 수가 항상 «마일스톤 하한» 으로 보였다.
+app.get('/api/user', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  let teach = 0;
+  try{ teach = db.prepare("SELECT COUNT(*) c FROM user_memories WHERE user_id=? AND kind='taught'").get(u.id).c; }catch(e){}
+  res.json({ ok:true, teach_count: teach,
+    user: { id:u.id, nickname:u.nickname, cell_balance:u.cell_balance, level:u.level || 1 } });
+});
+
 app.post('/api/user', async (req,res)=>{
   let { nickname } = req.body;
   nickname = (nickname||'').trim().slice(0,20);
@@ -1528,13 +2458,19 @@ app.post('/api/user', async (req,res)=>{
   const isNewDay = u.play_day && u.play_day !== today();
   const played = isNewDay ? 0 : (u.play_minutes || 0);
   // ★ 2026-10-28: 부모 승인 보너스(+20/회, 최대 +40) + 시연 계정은 제한 없음
+  // ★ 2026-11-21 (v1.74) C2: 부모가 조절한 하루 한도 오프셋(play_limit_delta)도 판정에 반영한다.
+  //   서버 판정(40+보너스+delta)과 화면 계산(40+delta)이 갈라지면 «열렸는데 잠긴» 모순이 생긴다.
   const isDemo = /^(데모|demo)/i.test(u.nickname || '');
-  const limit = DAILY_PLAY_LIMIT + (u.play_bonus || 0);
+  const limit = DAILY_PLAY_LIMIT + (u.play_bonus || 0) + (u.play_limit_delta || 0);
   const overLimit = !isDemo && played >= limit;
   const revive = (u.revive_streak && u.revive_until === today())
     ? { available:true, cost:20, streak:u.revive_streak } : { available:false };
   res.json({ user: u, quests: await getQuestsFor(u.id), streakBonus, revive,
-             play: { minutes: played, limit, overLimit, demo: isDemo } });
+             play: { minutes: played, limit, overLimit, demo: isDemo },
+             // ★ 2026-11-21 (v1.74) 계약: /api/user += ob_step · teach_count · play_limit_delta
+             ob_step: Number(u.ob_step) || 0,
+             teach_count: Number(u.teach_count) || 0,
+             play_limit_delta: Number(u.play_limit_delta) || 0 });
 });
 
 // ★ 2026-10-31: 하루 쉰 연속 방문을 20셀로 되살리기
@@ -1546,8 +2482,10 @@ app.post('/api/streak/revive', (req,res)=>{
   if((u.cell_balance||0) < 20)
     return res.status(400).json({error:'셀이 20개 필요해요'});
   const streak = u.revive_streak;
-  db.prepare('UPDATE users SET cell_balance=cell_balance-20, streak=?, revive_streak=NULL, revive_until=NULL WHERE id=?')
-    .run(streak, u.id);
+  // ★ last_visit 을 오늘로 함께 갱신한다 — 안 그러면 다음 touchStreak 가 «어제 접속 없음» 으로
+  //   보고 되살린 streak 을 1 로 리셋해 버린다(셀은 냈는데 기록이 사라지는 재발).
+  db.prepare('UPDATE users SET cell_balance=cell_balance-20, streak=?, last_visit=?, revive_streak=NULL, revive_until=NULL WHERE id=?')
+    .run(streak, today(), u.id);
   db.prepare('INSERT INTO cell_tx(user_id,amount,source) VALUES(?,?,?)').run(u.id, -20, 'streak_revive');
   res.json({ ok:true, streak, balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
 });
@@ -1604,14 +2542,40 @@ app.post('/api/visit/playtime', (req,res)=>{
   const stored = Math.min(PLAY_HARD_CAP_MIN, next);
   db.prepare('UPDATE users SET play_minutes=? WHERE id=?').run(stored, u.id);
   // ★ 2026-10-28: 시연 계정은 제한 없음(발표/테스트용). 일반 계정은 40 + 부모 보너스.
+  //   ★ 2026-11-21 (v1.74) C2: 부모의 하루 한도 조절(play_limit_delta) 도 서버 판정에 반영.
   if(isDemo) return res.json({ ok:true, playMinutes: stored, limit: 999, over:false, demo:true });
-  const limit = DAILY_PLAY_LIMIT + (u.play_bonus || 0);
+  const limit = DAILY_PLAY_LIMIT + (u.play_bonus || 0) + (u.play_limit_delta || 0);
   res.json({ ok:true, playMinutes: stored, limit, over: stored >= limit });
 });
 
 // ★ V4 데모 계정: 신규 계정은 지표가 전부 0이라 발표장에서 '성장'이 보이지 않는다.
 //   실제 학생 7일치 데이터(레벨·스트릭·보유 부품·과제·접속)를 만들어 준다.
 //   브라우저에서 바로 '데모 계정' 버튼을 눌러 전환할 수 있게 한다.
+// ★ v1.72 «데모 바로 체험» — 발표/시연에서 5분 걸리던 «등불 켜기» 를 한 번에.
+//   실제 사용자 흐름(학습→설명)을 건너뛰고, 등불 3개를 심는다. 데모 전용.
+app.post('/api/demo/lamps', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const day = today();
+  const seeds = [
+    ['분수',  1], ['반복문', 3], ['소수', 5],
+  ];
+  try{
+    for(const [topic, ago] of seeds){
+      const lit = dayKST(-ago);
+      db.prepare(`INSERT INTO memory_lamps(user_id,topic,lit_day,reinforce,crystal,immune_day,extra_decay)
+        VALUES(?,?,?,1,0,NULL,0)
+        ON CONFLICT(user_id,topic) DO UPDATE SET lit_day=excluded.lit_day, crystal=0, immune_day=NULL`)
+        .run(u.id, topic, lit);
+      db.prepare(`INSERT INTO user_memories(user_id,kind,key,value,updated_at)
+        VALUES(?,?,?,?,datetime('now','+9 hours'))
+        ON CONFLICT(user_id,kind,key) DO UPDATE SET updated_at=datetime('now','+9 hours')`)
+        .run(u.id, 'taught', 'taught:'+topic, topic+' 이야기 (데모)');
+    }
+  }catch(e){ return res.status(500).json({error:'데모 등불을 켜지 못했어요'}); }
+  res.json({ ok:true, topics: seeds.map(x=>x[0]) });
+});
+
 app.post('/api/demo/seed', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
@@ -1623,15 +2587,9 @@ app.post('/api/demo/seed', (req,res)=>{
   }
   const did = demo.id;
   // 1) 데모 계정의 모든 학습/게임/친구 데이터를 먼저 비운다(멱등).
-  const wipe = ['robots','inventory','cell_tx','quest_logs','interact_logs','game_logs','visits',
-    'mailbox','learning_help_logs','chat_messages','learning_plans','weekly_goals','learner_profile',
-    'user_memories','chat_sessions','goal_claims','review_cards','world_lessons','village_props','guestbook','treasure_claims','llm_logs','workshop_logs','class_logs',
-    'nudges','mood_logs','focus_sessions','season_claims',
-    'campaign_facilities','campaign_events','campaign_journal','sort_progress'];
-  for(const t of wipe){ try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(did); }catch(e){} }
-  try{ db.prepare('DELETE FROM friendships WHERE user_a=? OR user_b=?').run(did,did); }catch(e){}
-  try{ db.prepare('DELETE FROM friend_messages WHERE from_user=? OR to_user=?').run(did,did); }catch(e){}
-  try{ db.prepare('DELETE FROM cheers WHERE from_user=? OR to_user=?').run(did,did); }catch(e){}
+  // ★ wipeUserData 는 guestbook 처럼 user_id 가 없는 표(to_user/from_user)까지 정확히 지운다 —
+  //   예전에는 존재하지 않는 user_id 컬럼으로 DELETE 해 guestbook 행이 남았었다.
+  wipeUserData(did);
 
   const token = crypto.randomUUID();
   // 2) 성장 수치 + 학습 선호
@@ -1837,23 +2795,109 @@ app.post('/api/demo/seed', (req,res)=>{
 });
 
 // ★ P0-4 데이터 삭제(데모 환경 개인정보 리셋): 내 계정 관련 행 전부 삭제
+// ★ wipeUserData 로 전 표를 한 곳에서 관리한다 — 새 표가 생겨도 이 함수만 고치면 된다.
 app.post('/api/user/delete', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   const uid = u.id;
-  const wipe = ['robots','inventory','cell_tx','quest_logs','interact_logs','game_logs','visits',
-    'mailbox','learning_help_logs','chat_messages','learning_plans','weekly_goals','learner_profile',
-    'user_memories','chat_sessions','goal_claims','review_cards','world_lessons','village_props','guestbook','treasure_claims','llm_logs','workshop_logs','class_logs',
-    'nudges','mood_logs','focus_sessions','season_claims',
-    'campaign_facilities','campaign_events','campaign_journal','sort_progress'];
-  for(const t of wipe){ try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(uid); }catch(e){} }
-  try{ db.prepare('DELETE FROM friendships WHERE user_a=? OR user_b=?').run(uid,uid); }catch(e){}
-  try{ db.prepare('DELETE FROM friend_messages WHERE from_user=? OR to_user=?').run(uid,uid); }catch(e){}
-  try{ db.prepare('DELETE FROM cheers WHERE from_user=? OR to_user=?').run(uid,uid); }catch(e){}
-  try{ db.prepare('DELETE FROM friend_blocks WHERE user_id=? OR blocked_id=?').run(uid,uid); }catch(e){}
-  try{ db.prepare('DELETE FROM friend_reports WHERE reporter_id=? OR target_id=?').run(uid,uid); }catch(e){}
+  wipeUserData(uid);
   db.prepare('DELETE FROM users WHERE id=?').run(uid);
   res.json({ok:true});
+});
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) E «계정 PIN · 기기 이전»
+//   · PIN 은 평문 저장 금지 — SHA-256(hex) 만 보관한다(admin 키와 같은 고정길이 해시 비교 방식)
+//   · 비교는 전부 timing-safe(길이·자릿수 차이도 노출하지 않는다 — adminKeyMatches 와 동일 원리)
+//   · 무차별 대입은 daily_counters(kind='pin_fail') 로 «하루 5회» 까지
+//   · 기기 이전 코드는 «명문은 발급 응답 딱 한 번» + 10분 수명 + 1회 소비(쓰면 hash 비움)
+// ============================================================
+function sha256Hex(s){
+  return crypto.createHash('sha256').update(String(s == null ? '' : s)).digest('hex');
+}
+// ★ 고정길이 SHA-256 을 만든 뒤 timingSafeEqual 로 비교 — adminKeyMatches 와 같은 이중 해시 방식
+function safeHashEqual(a, b){
+  try{
+    const ha = crypto.createHash('sha256').update(String(a == null ? '' : a)).digest();
+    const hb = crypto.createHash('sha256').update(String(b == null ? '' : b)).digest();
+    return crypto.timingSafeEqual(ha, hb);
+  }catch(e){ return false; }
+}
+const PIN_FAIL_LIMIT = 5;             // 하루 실패 5회 — verify · claim 공용 상수
+const TRANSFER_TTL_MS = 10 * 60 * 1000;  // 기기 이전 코드 수명(10분)
+
+// E1 PIN 만들기/바꾸기(X-Token) — { pin: '1234' }
+app.post('/api/account/pin', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const pin = String((req.body && req.body.pin) || '').trim();
+  if(!/^\d{4}$/.test(pin)) return res.status(400).json({error:'PIN 은 숫자 4자리예요'});
+  db.prepare('UPDATE users SET pin_hash=? WHERE id=?').run(sha256Hex(pin), u.id);
+  res.json({ ok:true });
+});
+
+// E2 PIN 로그인 — { nickname, pin } → { ok, token } (기존 토큰 로그인 방식 재사용)
+app.post('/api/account/pin/verify', (req,res)=>{
+  const day = today();
+  const b = req.body || {};
+  const nickname = String(b.nickname || '').trim().slice(0, 20);
+  const pin = String(b.pin || '').trim();
+  const u = nickname ? db.prepare('SELECT * FROM users WHERE nickname=?').get(nickname) : null;
+  if(!u){
+    // 닉네임이 없어도 «어느 쪽이 틀렸는지» 알려주지 않는다(계정 탐색 방지)
+    try{ bumpDailyCounter(0, day, 'pin_fail'); }catch(e){}
+    return res.status(400).json({error:'닉네임이나 PIN 을 다시 확인해 줘'});
+  }
+  if(dailyCounterOf(u.id, day, 'pin_fail') >= PIN_FAIL_LIMIT || dailyCounterOf(0, day, 'pin_fail') >= PIN_FAIL_LIMIT)
+    return res.status(429).json({error:'오늘은 시도가 너무 많아요. 내일 다시 해 볼래요?'});
+  if(!u.pin_hash) return res.status(400).json({error:'PIN을 먼저 만들어 줘'});
+  if(!safeHashEqual(pin, u.pin_hash)){
+    try{ bumpDailyCounter(u.id, day, 'pin_fail'); }catch(e){}
+    return res.status(400).json({error:'PIN 이 틀렸어요. 다시 해 볼래?'});
+  }
+  // 성공 — 실패 카운트를 비우고(부모 인증과 같은 규칙) 기존 로그인 방식의 세션 토큰을 발급한다
+  try{ db.prepare("DELETE FROM daily_counters WHERE user_id=? AND day=? AND kind='pin_fail'").run(u.id, day); }catch(e){}
+  const token = crypto.randomUUID();
+  db.prepare('UPDATE users SET token=? WHERE id=?').run(token, u.id);
+  res.json({ ok:true, token, nickname: u.nickname });
+});
+
+// E3 기기 이전 코드 발급(X-Token) — 6자리 숫자, 10분 수명, 명문은 이 응답이 유일하다
+app.post('/api/account/transfer/code', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  db.prepare('UPDATE users SET transfer_hash=?, transfer_exp=? WHERE id=?')
+    .run(sha256Hex(code), new Date(Date.now() + TRANSFER_TTL_MS).toISOString(), u.id);
+  res.json({ ok:true, code });
+});
+
+// E4 기기 이전 받기 — { code } → { ok, token, nickname } (1회 소비)
+app.post('/api/account/transfer/claim', (req,res)=>{
+  const day = today();
+  // 코드로 유저를 먼저 찾는 구조라 실패 카운터는 «전역 버킷(user_id=0)» 으로 산다(하루 5회).
+  if(dailyCounterOf(0, day, 'pin_fail') >= PIN_FAIL_LIMIT)
+    return res.status(429).json({error:'오늘은 시도가 너무 많아요. 내일 다시 해 볼래요?'});
+  const code = String((req.body && req.body.code) || '').trim();
+  let hit = null;
+  try{
+    const rows = db.prepare("SELECT * FROM users WHERE transfer_hash IS NOT NULL AND transfer_hash<>''").all();
+    const now = Date.now();
+    for(const r of rows){
+      const exp = Date.parse(r.transfer_exp || '') || 0;
+      if(exp < now) continue;
+      if(safeHashEqual(code, r.transfer_hash)){ hit = r; break; }
+    }
+  }catch(e){}
+  if(!hit){
+    try{ bumpDailyCounter(0, day, 'pin_fail'); }catch(e){}
+    return res.status(400).json({error:'코드가 틀렸거나 만료됐어요'});
+  }
+  // 1회 소비 — hash/exp 를 비워 «같은 코드 두 번» 이 불가능하게 한다
+  db.prepare('UPDATE users SET transfer_hash=NULL, transfer_exp=NULL WHERE id=?').run(hit.id);
+  const token = crypto.randomUUID();
+  db.prepare('UPDATE users SET token=? WHERE id=?').run(token, hit.id);
+  res.json({ ok:true, token, nickname: hit.nickname });
 });
 
 // ★ P0-4 부모 승인 게이트: 간단한 곱셈 문제로 확인(자녀 보호 화면)
@@ -1872,13 +2916,20 @@ app.get('/api/parent/quiz', (_req,res)=>{
 app.post('/api/parent/verify', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  // ★ 무차별 대입 방지: 오늘 실패 5회 이상이면 하루 동안 잠근다(daily_counters 사용)
+  const day = today();
+  if(dailyCounterOf(u.id, day, 'parent_verify_fail') >= 5)
+    return res.status(429).json({error:'오늘은 시도가 너무 많아요. 내일 다시 해 볼래요?'});
   const { a, b, token, answer } = req.body || {};
   const na = Number(a), nb = Number(b);
-  if(!Number.isInteger(na) || !Number.isInteger(nb)) return res.status(400).json({error:'문제가 올바르지 않아요'});
+  const fail = ()=>{ try{ bumpDailyCounter(u.id, day, 'parent_verify_fail'); }catch(e){} };
+  if(!Number.isInteger(na) || !Number.isInteger(nb)){ fail(); return res.status(400).json({error:'문제가 올바르지 않아요'}); }
   // 서명 검증 — 토큰 조작으로 통과 불가
   const expected = quizSign(na, nb);
-  if(String(token||'') !== expected) return res.status(400).json({error:'문제가 올바르지 않아요'});
-  if(Number(answer) !== na*nb) return res.status(400).json({error:'정답이 아니에요. 다시 풀어볼래요?'});
+  if(String(token||'') !== expected){ fail(); return res.status(400).json({error:'문제가 올바르지 않아요'}); }
+  if(Number(answer) !== na*nb){ fail(); return res.status(400).json({error:'정답이 아니에요. 다시 풀어볼래요?'}); }
+  // 성공 — 실패 카운트를 초기화한다
+  try{ db.prepare("DELETE FROM daily_counters WHERE user_id=? AND day=? AND kind='parent_verify_fail'").run(u.id, day); }catch(e){}
   const row = db.prepare('SELECT play_bonus FROM users WHERE id=?').get(u.id);
   const nextBonus = Math.min(40, (row && row.play_bonus ? row.play_bonus : 0) + 20);
   db.prepare('UPDATE users SET parent_ok=1, play_bonus=? WHERE id=?').run(nextBonus, u.id);
@@ -1888,10 +2939,11 @@ app.post('/api/parent/verify', (req,res)=>{
 app.get('/api/parent/status', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
-  const row = db.prepare('SELECT parent_ok, play_minutes, play_bonus FROM users WHERE id=?').get(u.id);
+  const row = db.prepare('SELECT parent_ok, play_minutes, play_bonus, play_limit_delta FROM users WHERE id=?').get(u.id);
   res.json({ parentOk: !!(row && row.parent_ok), playMinutes: (row && row.play_minutes) || 0,
              playBonus: (row && row.play_bonus) || 0,
-             limit: DAILY_PLAY_LIMIT + ((row && row.play_bonus) || 0) });
+             // ★ 2026-11-21 (v1.74) C2: 한도 판정에 부모 조절 오프셋 반영
+             limit: DAILY_PLAY_LIMIT + ((row && row.play_bonus) || 0) + ((row && row.play_limit_delta) || 0) });
 });
 // 보호자/교사용 1페이지 대시보드 (2026-10-28)
 app.get('/api/parent/dashboard', (req,res)=>{
@@ -1910,18 +2962,55 @@ app.get('/api/parent/dashboard', (req,res)=>{
   const weekGames = db.prepare('SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND day>=?').get(u.id, wk).c;
   const weekMemories = db.prepare('SELECT COUNT(*) c FROM user_memories WHERE user_id=?').get(u.id).c;
   const weakFirst = (p.weak_topics||'').split(',')[0] || '';
+  // ★ 2026-11-20 / v1.70 ⑦ 오답 패턴(errorPatterns) — 최근 14일 «막힌 개념» top 2.
+  //   tip 은 해당 개념 knowledge_cards 의 hint_l2 만 사용(절대 hint_l3/정답을 노출하지 않는다).
+  //   trend 는 이번 주 vs 지난주 stuck 횟수 비교('up'|'same'|'down').
+  const wkStart = weekStartKST();
+  const wkPrev = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul'})
+    .format(new Date(Date.parse(wkStart + 'T00:00:00+09:00') - 7 * 86400000));
+  const TEACH_NO_CARD_TIP = '정답 대신 «어디부터 다를까?» 라고 물어봐 주세요';
+  const errorPatterns = db.prepare(`SELECT topic, COUNT(*) c, MAX(day) lastDay
+      FROM chat_analyses
+      WHERE user_id=? AND day>=? AND stuck=1
+        AND COALESCE(topic,'')<>'' AND topic<>'일상'
+      GROUP BY topic ORDER BY c DESC LIMIT 2`).all(u.id, dayKST(-13))
+    .map(r=>{
+      const card = db.prepare('SELECT hint_l2 FROM knowledge_cards WHERE topic=?').get(r.topic);
+      const thisWeek = db.prepare(`SELECT COUNT(*) c FROM chat_analyses
+        WHERE user_id=? AND topic=? AND stuck=1 AND day>=?`).get(u.id, r.topic, wkStart).c;
+      const lastWeek = db.prepare(`SELECT COUNT(*) c FROM chat_analyses
+        WHERE user_id=? AND topic=? AND stuck=1 AND day>=? AND day<?`).get(u.id, r.topic, wkPrev, wkStart).c;
+      return {
+        topic: r.topic,
+        count: r.c,
+        lastDay: r.lastDay || null,
+        tip: (card && card.hint_l2) ? String(card.hint_l2) : TEACH_NO_CARD_TIP,
+        trend: thisWeek > lastWeek ? 'up' : (thisWeek < lastWeek ? 'down' : 'same'),
+      };
+    });
   res.json({
     nickname: u.nickname, level: u.level||1,
     understanding: p.understanding||0, solved, chats,
     playMinutes: u.play_minutes||0,
-    limit: DAILY_PLAY_LIMIT + (u.play_bonus||0),
+    limit: DAILY_PLAY_LIMIT + (u.play_bonus||0) + (u.play_limit_delta||0),
     playBonus: u.play_bonus||0,
     friendChatEnabled: !!(p.friend_chat_enabled === undefined ? 1 : p.friend_chat_enabled),
     weekly: { studyDays, solved:weekSolved, chats:weekChats, games:weekGames, memories:weekMemories,
       suggestion: weakFirst ? `${weakFirst} 1문제 다시 풀기` : '새 주제 1개 읽기' },
     // ★ v1.50: 통계 대신 «오늘 아이와 나눌 말» 3문장. 학부모가 실제로 쓰는 건 이쪽이다.
     conversationStarters: parentStarters(u.id),
-    games, last7: rows
+    // ★ v1.70 ⑦: «아이가 자주 막히는 개념 + 어떻게 도와줄지» top 2
+    errorPatterns,
+    games, last7: rows,
+    // ★ 2026-11-21 (v1.74) C1/C2/F: 부모 두 가지 행동 + 편지 동의 상태를 대시보드로 돌려준다.
+    //   playLimit       = 40분 기준 + 부모 조절 오프셋(계약 필드)
+    //   cheerSentToday  = 오늘 가족 응원(tag='parent_cheer:<오늘>') 을 이미 보냈는지(하루 1통)
+    //   parentEmail     = 마스킹된 편지 수신 이메일(개인정보 최소화)
+    playLimit: DAILY_PLAY_LIMIT + (Number(u.play_limit_delta) || 0),
+    cheerSentToday: !!db.prepare("SELECT 1 FROM mailbox WHERE user_id=? AND tag=? LIMIT 1")
+      .get(u.id, 'parent_cheer:' + today()),
+    parentEmail: maskEmail(u.parent_email),
+    optin: Number(u.parent_optin) ? 1 : 0,
   });
 });
 // 보호자: 친구 채팅 허용/차단 (2026-10-30)
@@ -1939,6 +3028,59 @@ app.post('/api/parent/reset', (req,res)=>{
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   db.prepare('UPDATE users SET parent_ok=0 WHERE id=?').run(u.id);
   res.json({ok:true});
+});
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) C1 «가족의 한 마디» — 보호자가 아이 우편함에 응원 편지를 넣는다.
+//   · 인증은 기존 parent 엔드포인트와 같은 X-Token(아이 계정 토큰) 방식
+//   · tag='parent_cheer:<오늘>' — mailbox UNIQUE(user_id,tag) 가 «하루 1통» 을 자연 차단한다
+//   · 읽음 판정(/api/mailbox unread)에 parent_cheer 태그를 추가해 미확인 배지가 잡힌다
+// ============================================================
+app.post('/api/parent/cheer', (req,res)=>{
+  const u = authUser(req);
+  if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const text = String((req.body && req.body.text) || '').trim();
+  if(!text) return res.status(400).json({error:'한 마디를 적어 볼래요?'});
+  if(!isSafeText(text, 80)) return res.status(400).json({error:'아이에게 보내기 어려운 내용이에요'});
+  const day = today();
+  const tag = 'parent_cheer:' + day;
+  // sendMail 은 태그 중복(=오늘 이미 보냄)이면 false 를 돌려준다 — 별도 카운터가 필요 없다.
+  if(!sendMail(u.id, { title:'💌 가족의 한 마디', body:text, cell:0, tag }))
+    return res.status(429).json({error:'오늘은 이미 응원했어요. 내일 또 보내 볼래요?'});
+  res.json({ ok:true, tag });
+});
+
+// ★ 2026-11-21 (v1.74) C2 «플레이 시간 조절» — 부모가 하루 한도를 상대적으로 올리거나 내린다.
+//   delta 는 -10/0/10 중 하나. 총 오프셋은 -10~+20 으로 clamp(40분 기준 → 최종 30~60분).
+//   서버 판정(visit/playtime · user · status)도 이 오프셋을 함께 본다(화면과 판정 분열 방지).
+app.post('/api/parent/playtime', (req,res)=>{
+  const u = authUser(req);
+  if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const delta = Number((req.body && req.body.delta));
+  if(delta !== -10 && delta !== 0 && delta !== 10)
+    return res.status(400).json({error:'delta 는 -10, 0, 10 중 하나예요'});
+  const row = db.prepare('SELECT play_limit_delta FROM users WHERE id=?').get(u.id);
+  const next = Math.min(20, Math.max(-10, (Number(row && row.play_limit_delta) || 0) + delta));
+  db.prepare('UPDATE users SET play_limit_delta=? WHERE id=?').run(next, u.id);
+  res.json({ ok:true, playLimit: DAILY_PLAY_LIMIT + next, playLimitDelta: next });
+});
+
+// ★ 2026-11-21 (v1.74) F opt-in — «루미의 편지» 수신 동의(이메일 저장 + 동의 플래그).
+//   이메일은 마스킹해서만 대시보드로 내려간다. 동의 해제(optin=0) 해도 저장 이메일은 유지한다.
+app.post('/api/parent/optin', (req,res)=>{
+  const u = authUser(req);
+  if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const email = String(b.email || '').trim().slice(0, 120);
+  const optin = Number(b.optin) ? 1 : 0;
+  if(optin){
+    if(!email) return res.status(400).json({error:'편지를 받을 이메일을 적어 볼래요?'});
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return res.status(400).json({error:'이메일 모양을 다시 확인해 볼래요?'});
+  }
+  const keepEmail = email || u.parent_email || null;
+  db.prepare('UPDATE users SET parent_email=?, parent_optin=? WHERE id=?').run(keepEmail, optin, u.id);
+  res.json({ ok:true, optin, parentEmail: maskEmail(keepEmail) });
 });
 
 // ★ P0-2 성장 상태 조회(프론트 상단바/리포트 표시용)
@@ -1985,8 +3127,9 @@ app.post('/api/robots', async (req,res)=>{
   if (db.prepare('SELECT id FROM robots WHERE user_id=?').get(u.id))
     return res.status(409).json({error:'이미 로봇이 있어요'});
   const { personality, greeting, desc } = await generatePersonality(cleanPal);
-  const r = db.prepare('INSERT INTO robots(user_id,name,template,palette,personality,greeting) VALUES(?,?,?,?,?,?)')
-    .run(u.id, cleanName, template, JSON.stringify(cleanPal), personality, greeting);
+  // ★ desc 도 함께 저장 — /api/robots/me 가 다시 내려줄 수 있게 한다
+  const r = db.prepare('INSERT INTO robots(user_id,name,template,palette,personality,greeting,"desc") VALUES(?,?,?,?,?,?,?)')
+    .run(u.id, cleanName, template, JSON.stringify(cleanPal), personality, greeting, desc || null);
   grantCell(u.id, 50, 'robot_create');
   // ★ P0-2 로봇 완성 경험치(첫 상승이 눈에 보이도록 30 XP)
   const growth = addExp(u.id, 30);
@@ -2023,6 +3166,28 @@ app.get('/api/robot/recall', (req,res)=>{
   res.json({ ok:true, ask:true, concept, line, days });
 });
 
+// ★ v1.70 ⑤ 성장 서사 — «7일 이상 전에 막혔던 개념» 이 지금은 «마스터리 0.7 이상» 이거나
+//   «근 3일 안에 스스로 해결» 했다면, 그 성장을 루미가 먼저 말해 준다(LLM 없음, 비용 0).
+//   하루 최대 1회 — daily_counters(kind='robot_growth') 로 하루 1회만 이 분기를 태운다.
+function growthNarrativeTopic(uid){
+  try{
+    const rows = db.prepare(`SELECT DISTINCT COALESCE(NULLIF(topic,''), subject) AS t
+      FROM chat_analyses
+      WHERE user_id=? AND stuck=1 AND day<=?
+        AND COALESCE(NULLIF(topic,''), subject)<>'' AND COALESCE(NULLIF(topic,''), subject)<>'일상'
+      LIMIT 12`).all(uid, dayKST(-7));
+    for(const r of rows){
+      const t = String(r.t || '').trim();
+      if(!t) continue;
+      if(masteryOf(uid, t) >= 0.7) return t;
+      const solvedRecently = db.prepare(`SELECT 1 FROM learning_help_logs
+        WHERE user_id=? AND solved=1 AND subject=? AND day>=? LIMIT 1`).get(uid, t, dayKST(-2));
+      if(solvedRecently) return t;
+    }
+  }catch(e){}
+  return null;
+}
+
 // ★ v1.58 «같이 공부하는 로봇» — 아이가 들어오면 «기억하는 것» 으로 먼저 말을 건다.
 //   기능 안내(nudge)가 아니라 «너를 기억한다» 는 신호가 목적. LLM 없이 규칙으로 만든다(비용 0).
 app.get('/api/robot/hello', (req,res)=>{
@@ -2032,10 +3197,33 @@ app.get('/api/robot/hello', (req,res)=>{
   const stuck = stuckTopics(u.id, 7, 1)[0];
   const kstHour = Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',hour:'2-digit',hour12:false}).format(new Date()));
   const streak = Number(u.streak) || 1;
+  const day = today();
+  // ★ v1.71 «루미는 잊어버려» — 기분이 가라앉은 날 «다음», 성장 서사 «전에» 안개 분기가 온다.
+  //   decay≥50 인 가장 무거운 등불을 하루 1번만 되묻는다(robot_fog 카운터).
+  //   SOS 우편(fog_sos)과 «한 날 한 채널» — 우편이 이미 나갔거나(kind='fog:'+day) 이 분기가
+  //   먼저 나갔다면 fog_sos 를 같이 세워 우편이 중복으로 나가지 않게 한다.
+  const fogLamp = (mood.today !== 'low' && mood.lowCount < 2
+    && dailyCounterOf(u.id, day, 'robot_fog') === 0
+    && dailyCounterOf(u.id, day, 'fog_sos') === 0)
+    ? fogHeaviestReadonly(u.id, 50) : null;
+  // ★ v1.70 ⑤: 성장 서사는 «기분이 가라앉은 날» 다음, «막힌 개념 되묻기» 보다 먼저 온다.
+  //   (v1.71: 그 사이에 «기억 안개» 분기가 들어갔다)
+  const growthTopic = (mood.today !== 'low' && mood.lowCount < 2
+    && dailyCounterOf(u.id, day, 'robot_growth') === 0)
+    ? growthNarrativeTopic(u.id) : null;
   let line, kind;
   if(mood.today === 'low' || mood.lowCount >= 2){
     line = '오늘은 조금 조용히 있을게. 말하고 싶으면 불러 줘.';
     kind = 'mood';
+  } else if(fogLamp){
+    line = `«${fogLamp.topic}» …가물가물해. 다시 가르쳐 줄래?`;
+    kind = 'fog';
+    // ★ 2026-11-21 (v1.74) B1: 말로 처음 «안개» 를 겪어도 삼막 2막(ob_step→2)을 세운다.
+    try{ bumpDailyCounter(u.id, day, 'robot_fog'); bumpDailyCounter(u.id, day, 'fog_sos'); obAdvanceFog(u.id, day); }catch(e){}
+  } else if(growthTopic){
+    line = `«${growthTopic}»는 예전에 헷갈렸는데, 이제는 혼자 풀 수 있어졌네! 루미가 제일 뿌듯해.`;
+    kind = 'growth';
+    try{ bumpDailyCounter(u.id, today(), 'robot_growth'); }catch(e){}
   } else if(stuck){
     line = `어제 «${stuck.subject}»에서 막혔었지. 오늘은 같이 천천히 해 보자.`;
     kind = 'stuck';
@@ -2052,7 +3240,18 @@ app.get('/api/robot/hello', (req,res)=>{
     line = '어서 와. 오늘은 뭐부터 해 볼까?';
     kind = 'default';
   }
-  res.json({ ok:true, line, kind, mood: mood.today || null, stuck: stuck ? stuck.subject : null });
+  // ★ 2026-11-21 (v1.74) C3 «hello 전달» — 미읽은 가족 응원 편지 1통을 한 줄로 전달한다.
+  //   읽음 처리는 하지 않는다(전달과 수령 분리 — 아이가 우편함에서 직접 열어 받게).
+  let parentCheer = null;
+  try{
+    const cm = db.prepare(`SELECT body FROM mailbox WHERE user_id=? AND claimed=0
+      AND tag LIKE 'parent_cheer%' ORDER BY id DESC LIMIT 1`).get(u.id);
+    if(cm && cm.body) parentCheer = String(cm.body).slice(0, 80);
+  }catch(e){}
+  res.json({ ok:true, line, kind, mood: mood.today || null, stuck: stuck ? stuck.subject : null,
+    growth: growthTopic || null,    // ★ v1.70 ⑤: 이번에 «성장 서사» 를 말했는지(디버그/표시용)
+    fog: (kind === 'fog' && fogLamp) ? fogLamp.topic : null,   // ★ v1.71: 이번에 «기억 안개» 를 말했는지
+    ...(parentCheer ? { parentCheer } : {}) });   // ★ v1.74 계약: /api/robot/hello += parentCheer(선택)
 });
 
 app.get('/api/robots/me', async (req,res)=>{
@@ -2115,7 +3314,8 @@ app.post('/api/interact', async (req,res)=>{
                      : '아이가 로봇에게 인사할 때';
   // 동일한 프롬프트를 두 번 중복 작성하지 않도록 변수로 재사용
   const IP = `너는 DOROBUS의 로봇 "${robot.name}"(성격: ${robot.personality})다. ${situationKor} 상황이다. 어린이용 한국어 대사 한 문장만 출력해라 (25자 이내, 따옴표·설명·이모지 없이 대사만).`;
-  const txt = await callLLM(IP);
+  const ir = await callLLM(IP);
+  const txt = ir ? ir.text : null;
   // ★ P0-4 LLM 출력은 반드시 안전 필터를 통과해야 한다(미통과 시 프리셋으로 폴백)
   const safe = sanitizeLine(txt, 80);
   if(safe) return res.json({ line: safe, ai:true });
@@ -2130,6 +3330,9 @@ app.post('/api/quest/complete', (req,res)=>{
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   const q = db.prepare('SELECT * FROM daily_quests WHERE id=? AND quest_date=?').get(Number(req.body && req.body.questId), today());
   if (!q) return res.status(400).json({error:'오늘의 퀘스트가 아닙니다'});
+  // ★ AI 미션은 답변 제출(/api/quest/answer) 로만 완료한다 — 그냥 눌러서 보상 받는 걸 막는다
+  if(q.type === 'ai_mission')
+    return res.status(400).json({error:'AI 미션은 질문에 답해야 완료할 수 있어요'});
   try{
     db.prepare('INSERT INTO quest_logs(user_id,quest_id,reward) VALUES(?,?,?)').run(u.id, q.id, q.reward);
   }catch(e){ return res.status(400).json({error:'이미 완료한 퀘스트예요'}); }
@@ -2167,7 +3370,8 @@ app.post('/api/quest/answer', async (req,res)=>{
   const g = addExp(u.id, 20 + Math.floor(bonus/2));
   const robot = db.prepare('SELECT * FROM robots WHERE user_id=? ORDER BY id DESC LIMIT 1').get(u.id);
   const RP = `로봇 "${robot?robot.name:'루미'}"(성격: ${robot?robot.personality:'반짝이'})가 아이의 대답 "${text.slice(0,80)}"에 반응하는 한국어 한 문장 (25자 이내, 대사만). 출력은 어린이에게 안전하고 건전한 표현만 사용한다.`;
-  const raw = await callLLM(RP) || '';
+  const qr = await callLLM(RP);
+  const raw = (qr && qr.text) || '';
   // ★ P0-4 안전 필터: 미통과 시 프리셋 반응으로 폴백(아이 화면에 노출 전 필수)
   const reaction = sanitizeLine(raw, 80) || '오늘 이야기 들려줘서 고마워!';
   // ★ V15 주간 주제 보상: 주제에 맞게 참여한 아이에게 '주 1회' 우편 보상(수령형).
@@ -2536,11 +3740,14 @@ app.get('/api/mailbox', (req,res)=>{
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   const rows = db.prepare('SELECT id,title,body,cell,item_id,claimed,ts,tag FROM mailbox WHERE user_id=? ORDER BY id DESC LIMIT 50').all(u.id);
   // ★ 2026-11-04: 친구 알림(셀 없는 편지)도 미확인 배지에 잡힌다 → 재방문 이유가 된다.
-  const unread = rows.filter(r=>!r.claimed && (r.cell>0 || r.item_id || String(r.tag||'').startsWith('friend:'))).length;
+  // ★ 2026-11-21 (v1.74) C1: «가족의 한 마디»(parent_cheer) 도 미확인 배지에 잡힌다.
+  const unread = rows.filter(r=>!r.claimed && (r.cell>0 || r.item_id
+    || String(r.tag||'').startsWith('friend:') || String(r.tag||'').startsWith('parent_cheer'))).length;
   res.json({
     unread,
     mails: rows.map(r=>({
       id:r.id, title:r.title, body:r.body, cell:r.cell, claimed:!!r.claimed, ts:r.ts,
+      tag: r.tag || null,   // ★ v1.74: fog:/parent_cheer 태그 전달 — «다시 가르쳐 주기» 깊은 링크용
       item: r.item_id ? (db.prepare('SELECT name FROM items WHERE id=?').get(r.item_id)||{}).name : null,
     })),
   });
@@ -2616,7 +3823,8 @@ app.post('/api/class/attend', (req,res)=>{
   const code = String((req.body && req.body.code) || '').trim();
   const week = weekStartKST();
   // 오늘 시도 횟수 제한(코드 찾기 공격 방지). 성공/실패 무관하게 센다.
-  const tries = db.prepare("SELECT COUNT(*) c FROM workshop_logs WHERE user_id=? AND day=? AND kind='class_try'").get(u.id, today()).c;
+  // ★ 실제 기록은 kind='class_try'+횟수(class_try0, class_try1 …) 라 정확 일치로는 못 센다 → LIKE 로 통합
+  const tries = db.prepare("SELECT COUNT(*) c FROM workshop_logs WHERE user_id=? AND day=? AND kind LIKE 'class_try%'").get(u.id, today()).c;
   if(tries >= CLASS_ATTEMPT_LIMIT)
     return res.status(429).json({error:'오늘은 여러 번 틀렸어요. 선생님께 다시 물어보고 내일 해봐요!'});
   if(code !== CLASS_CODE){
@@ -2690,7 +3898,8 @@ app.post('/api/workshop/regenerate', async (req,res)=>{
     db.prepare("INSERT INTO workshop_logs(user_id,day,kind) VALUES(?,?,?)").run(u.id, today(), 'regen');
   }catch(e){ return res.status(400).json({error:'AI 성격 만들기는 하루에 한 번이에요. 내일 다시 해볼래요?'}); }
   const { personality, greeting, desc } = await generatePersonality(palette);
-  db.prepare('UPDATE robots SET personality=?, greeting=? WHERE id=?').run(personality, greeting, robot.id);
+  // ★ 재생성 시 desc 도 갱신해 저장한다
+  db.prepare('UPDATE robots SET personality=?, greeting=?, "desc"=? WHERE id=?').run(personality, greeting, desc || null, robot.id);
   res.json({ ok:true, personality, greeting, desc });
 });
 
@@ -2710,7 +3919,8 @@ app.post('/api/workshop/ask', async (req,res)=>{
   const topic = currentTopic();
   // v1.34: 대상 연령을 «초등 아이» 로 낮추고 «쉬운 말» 을 명시한다(어른 말투 방지).
   const AP = `너는 DOROBUS의 로봇 "${robot?robot.name:'루미'}"(성격: ${robot?robot.personality:'반짝이'})다. 초등학교 아이가 물었다: "${q}". 이번 주 주제는 "${topic.topic}"(CH.${topic.chapter})다. 아이가 바로 알아듣는 쉬운 한국어 두 문장으로만 답해라. 인사·설명·이모지 없이 답만.`;
-  const raw = await callLLM(AP) || '';
+  const ar = await callLLM(AP);
+  const raw = (ar && ar.text) || '';
   const safe = sanitizeLine(raw, 140);
   if(safe) return res.json({ ok:true, answer:safe, ai:true, left: Math.max(0, 4-asked) });
   // 폴백: 주제에 맞는 프리셋 답변(LLM 없이도 대화가 끊기지 않는다)
@@ -2728,11 +3938,24 @@ app.post('/api/workshop/ask', async (req,res)=>{
 //   평가 기준이 '안전·개인정보' 를 명시하므로, 이 기본값은 그 항목에서 감점된다.
 //   배포 시 ADMIN_KEY 를 반드시 설정하고, 안 했으면 관리자 API 는 전부 503.
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
+// ★ 키 비교는 타이밍 안전하게 — 길이 차이도 노출하지 않도록 양쪽을 SHA-256 으로
+//   고정 길이 해시한 뒤 timingSafeEqual 로 비교한다(이중 해시 방식).
+function adminKeyMatches(k){
+  try{
+    const a = crypto.createHash('sha256').update(String(k == null ? '' : k)).digest();
+    const b = crypto.createHash('sha256').update(String(ADMIN_KEY)).digest();
+    return crypto.timingSafeEqual(a, b);
+  }catch(e){ return false; }
+}
 function requireAdmin(req,res){
   // 키 미설정 상태에서는 아예 동작하지 않는다(fail-closed)
   if(!ADMIN_KEY){ res.status(503).json({error:'관리자 키가 설정되지 않았어요 (ADMIN_KEY 환경변수 필요)'}); return false; }
-  const k = req.get('X-Admin-Key') || (req.query && req.query.key) || '';
-  if(k !== ADMIN_KEY){ res.status(401).json({error:'관리자 키가 필요해요'}); return false; }
+  // ★ 헤더(x-admin-key) 우선 — 키가 URL 로그에 남지 않게 한다. 하위 호환으로 query·body 도 받는다.
+  const k = req.get('x-admin-key')
+    || (req.query && req.query.key)
+    || (req.body && req.body.key)
+    || '';
+  if(!adminKeyMatches(k)){ res.status(401).json({error:'관리자 키가 필요해요'}); return false; }
   return true;
 }
 
@@ -2839,9 +4062,8 @@ app.post('/api/admin/cleanup-demo', (req,res)=>{
   const junk = db.prepare("SELECT id,nickname FROM users WHERE nickname LIKE '시연%'").all();
   let n = 0;
   for(const u of junk){
-    for(const t of ['robots','inventory','cell_tx','quest_logs','interact_logs','game_logs','visits']){
-      try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(u.id); }catch(e){}
-    }
+    // ★ 7개 표만 지우던 예전 방식 대신 wipeUserData 로 전 표를 지운다(잔여 데이터 방지)
+    wipeUserData(u.id);
     db.prepare('DELETE FROM users WHERE id=?').run(u.id);
     n++;
   }
@@ -3114,7 +4336,8 @@ async function extractMemoryLLM(uid, msg, reply){
 - JSON만: {"memories":[{"kind":"...","key":"...","value":"...","confidence":0.0}]}
 아이: ${String(msg||'').slice(0,200)}
 로봇: ${String(reply||'').slice(0,180)}`;
-    const raw = await callLLM(prompt, { temperature:0.2, maxTokens:220, json:true });
+    const mr = await callLLM(prompt, { temperature:0.2, maxTokens:220, json:true });
+    const raw = mr ? mr.text : null;
     let j = null;
     try{ j = raw ? JSON.parse((raw.match(/\{[\s\S]*\}/) || [])[0]) : null; }catch(e){}
     const list = j && Array.isArray(j.memories) ? j.memories : [];
@@ -3147,6 +4370,7 @@ function parseChatJSON(raw){
   try{ const j = JSON.parse(m[0]); if(j && typeof j.reply === 'string' && j.reply.trim()) return j; }catch{}
   return null;
 }
+// 이번 주 월요일(KST) — weekStartKST() 의 유일한 정의(예전 중복 정의는 제거됨)
 function weekStartKST(){
   const d = new Date(Date.now() + 9*3600*1000);
   const diff = (d.getUTCDay() + 6) % 7;   // 월요일 시작
@@ -3175,6 +4399,34 @@ const CARD_ALIASES = {
   'AI 추천': ['추천','AI가 골라','비슷한','다음에 뭐'],
   'AI 윤리': ['윤리','개인정보','편향','책임','AI가 나쁜']
 };
+// ★ 2026-11-21 (v1.74) D1: 새 지식 카드 24장의 별칭 — 채팅 카드 매칭(matchCards) 이
+//   컴퓨터개론·수학·과학 주제도 «개념» 으로 찾게 한다(v1.51 원칙과 동일).
+Object.assign(CARD_ALIASES, {
+  '입출력': ['입출력','마우스','키보드','모니터','스피커','프린터'],
+  '바이너리': ['바이너리','이진법','binary','0과 1','비트'],
+  '메모리': ['메모리','작업 공간','임시 저장','열어 둔'],
+  'RAM·ROM': ['램','롬','ram','rom','기억 장치'],
+  '캐시': ['캐시','cache','보관함','임시 보관','서랍'],
+  'CPU 클록': ['클록','clock','ghz','메트로놈','cpu 속도','똑딱'],
+  '운영체제 프로세스': ['프로세스','운영체제','os','작업 관리자','동시에'],
+  '파일·디렉터리': ['폴더','디렉터리','디렉토리','파일','서랍'],
+  '데이터베이스 테이블': ['데이터베이스','테이블','db','출석부','행과 열'],
+  '네트워크 패킷': ['패킷','packet','소포','조각으로','나눠 보내'],
+  '프로토콜': ['프로토콜','protocol','여보세요','약속','통신 규칙'],
+  '압축': ['압축','zip','용량','말아 담','줄여 담'],
+  '곱셈 순서': ['곱셈','연산 순서','먼저 계산','사칙연산','계산 순서'],
+  '분수의 덧셈': ['분수','분모','분자','피자 조각','더하기'],
+  '약분·통분': ['약분','통분','간단한 분수','기약분수'],
+  '소수': ['소수','0.','눈금','십분의'],
+  '도형 넓이': ['넓이','면적','직사각형','타일','가로 세로'],
+  '각도': ['각도','직각','각도기','시계 바늘','벌어진'],
+  '물의 상태': ['얼음','수증기','상태','녹','끓'],
+  '온도와 열': ['온도','열','온기','이동'],
+  '빛의 반사': ['반사','거울','튕겨','손전등'],
+  '자석': ['자석','magnet','n극','s극','끌어당'],
+  '식물 광합성': ['광합성','양분','잎','식물의 부엌'],
+  '지층': ['지층','겹','화석','쌓'],
+});
 function matchCards(msg, chapter){
   const all = db.prepare('SELECT * FROM knowledge_cards').all();
   const text = String(msg || '').toLowerCase();
@@ -3246,15 +4498,108 @@ const STUCK_RULES = {
 };
 const STUCK_TYPES = ['concept','procedure','reading','careless'];
 
+// ★ 2026-11-20 / v1.70 ③c: L1(되묻기) 방식 — 열린 질문 대신 «두 가지 선택지» 를 제시한다.
+//   두 파이프라인(/api/chat · /api/chat/stream)이 같은 문장을 쓰도록 상수로 모은다.
+const L1_CHOICE_RULE = '[되묻기 방식] 되묻기는 열린 질문 대신 두 가지 구체적 선택지를 제시해라 (예: «분모를 먼저 통분해야 할까, 분자를 먼저 정리할까?»). 선택지 어느 쪽도 정답을 직접 알려주면 안 된다.';
+// ★ v1.70 ③c: LLM 실패 시 규칙 폴백 대사에도 «두 가지 선택지» 예시를 넣는다(계약 통일).
+const L1_FALLBACK_LINE = '같이 한 단계씩 해 보자. «예시를 먼저 볼까, 아니면 문제를 다시 읽어 볼까?» 둘 중 하나만 골라 보자.';
+// ★ v1.70 ⑥: learn 모드 시스템 프롬프트 말미에 붙는 태그 프로토콜(화면에는 태그가 보이지 않는다).
+// ★ v1.80 «전부 유도 / 전부 답변» 금지 — 턴마다 의도를 나눈다.
+//   ① 답을 명시적으로 요구 ② 지금 배우는 개념 ③ 그 외 지식 질문.
+const ASK_ANSWER_RE = /(그냥|바로|정답|답만|답을|알려줘|가르쳐줘|답이 뭐|답은)/;
+const ASK_KNOW_RE = /(뭐야|뭔가요|무엇|왜 |왜\?|어떻게|어디서|언제|누구|얼마|뜻|의미|차이|원리)/;
+function routeLearnIntent(msg, sess){
+  const m = String(msg || '');
+  if(ASK_ANSWER_RE.test(m)) return 'direct';            // «그냥 알려줘» → 바로 답
+  const cpt = (sess && sess.concept) ? String(sess.concept) : '';
+  const inConcept = cpt && (m.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => m.includes(String(a))));
+  if(inConcept) return 'guide';                          // 지금 배우는 개념 → 유도
+  if(ASK_KNOW_RE.test(m)) return 'direct';               // 그 외 지식 질문 → 설명
+  return 'guide';
+}
+// 직접 설명 모드의 규칙 — «답을 대신 풀어 주지» 않고 «개념을 설명» 한다.
+const DIRECT_RULE = '[직접 설명] 이번 턴은 힌트가 아니라 설명이다. 두 문장, 아주 쉬운 말로 핵심만. 문제의 «정답 자체» 를 대신 말하지는 말고 개념을 설명한다. 끝에 짧은 확인 질문 1개.';
+
+const TAG_LINE_RULE = '응답의 마지막 줄은 아이에게 보이지 않는 태그 한 줄로 끝내라: ⟦stuck:concept|procedure|reading|careless|none⟧';
+
+// ★ v1.70 ⑥: ⟦stuck:…⟧ 태그 줄 분리기.
+//   마지막 줄이 태그면 { reply: 태그를 뗀 본문, stuck: 유효 타입 } 을 돌려준다.
+//   «none»·알 수 없는 값·태그 없음은 stuck=null → 기존 규칙 추정(guessStuckType)을 그대로 쓴다.
+function parseTagLine(text){
+  const s = String(text || '');
+  const m = s.match(/⟦\s*stuck\s*:\s*([a-zA-Z]+)\s*⟧\s*$/);
+  if(!m) return { reply: s.trim(), stuck: null };
+  const val = String(m[1] || '').toLowerCase();
+  const stuck = STUCK_TYPES.includes(val) ? val : null;
+  // 본문 중간에 태그 조각이 남아 있으면 함께 지운다(모델이 여러 줄 출력할 경우 대비)
+  const reply = s.slice(0, m.index).replace(/⟦\s*stuck[^⟧]*⟧/g, '').replace(/\s+$/, '').trim();
+  return { reply, stuck };
+}
+
+// ============================================================
+// ★ 2026-11-20 / v1.70 ③a 관심사 도메인 — 최근 3일 user 메시지에서 아이의 관심 영역을 찾아
+//   «비유는 이 영역에서 들어 준다» 로 프롬프트에 주입한다. 히트가 없으면 아무것도 넣지 않는다.
+// ============================================================
+const INTEREST_HINTS = [
+  ['게임',   /(게임|게임기|마인크래프트|롤|배틀|캐릭터|레벨업|점수|스테이지|보스|히어로)/],
+  ['운동',   /(운동|축구|야구|농구|달리기|달리|자전거|수영|태권도|배드민턴|공놀이|농구)/],
+  ['음악',   /(음악|노래|가수|아이돌|케이팝|피아노|기타|춤|댄스|콘서트|멜로디)/],
+  ['동물',   /(동물|강아지|고양이|햄스터|공룡|토끼|곰|펭귄|사자|호랑이|물고기|새)/],
+  ['만들기', /(만들기|공작|종이접기|블록|레고|미로|그리기|그림|색칠|붙이기|조립)/],
+  ['요리',   /(요리|맛있|음식|빵|케이크|과자|김치|라면|치즈|간식|반찬)/],
+];
+function interestDomainOf(uid){
+  try{
+    const rows = db.prepare(`SELECT content FROM chat_messages
+      WHERE user_id=? AND role='user' AND substr(ts,1,10)>=? ORDER BY id DESC LIMIT 40`)
+      .all(uid, dayKST(-2));   // 오늘~2일 전 = 최근 3일
+    for(const r of rows){
+      for(const [dom, re] of INTEREST_HINTS){ if(re.test(String(r.content||''))) return dom; }
+    }
+  }catch(e){}
+  return null;
+}
+
+// ★ v1.70 ④ 좌절 신호 — 규칙 3가지 중 하나라도 맞으면 이번 턴은 «힌트 대신 다독임».
+//   1) 같은 단계 연속 2턴 + 이번 턴도 confused
+//   2) 오늘 confused user 메시지 3개 이상(이번 턴 포함)
+//   3) 최근 2개 user 메시지가 모두 10자 미만 + 부정 단어
+const FRUSTRATED_RE = /(모르겠|몰라|어려워|이해가 안)/;
+const FRUSTRATED_NEG_RE = /(모르겠|몰라|어려워|힘들|싫어|포기|속상|짜증)/;
+function frustrationOf(uid, msg, sess, day){
+  const m = String(msg || '');
+  const confusedNow = FRUSTRATED_RE.test(m);
+  // 1) 같은 단계에서 이미 2턴 이상 버텼는데 이번 턴도 «모르겠다»
+  if(sess && Number(sess.stage_turns || 0) >= 2 && confusedNow) return true;
+  try{
+    // 2) 오늘의 confused 메시지 수(저장된 것 + 이번 턴)
+    const rows = db.prepare(`SELECT content FROM chat_messages
+      WHERE user_id=? AND role='user' AND substr(ts,1,10)=?`).all(uid, day);
+    let confusedToday = rows.filter(r => FRUSTRATED_RE.test(String(r.content||''))).length;
+    if(confusedNow) confusedToday++;
+    if(confusedToday >= 3) return true;
+    // 3) 직전 메시지 + 이번 턴이 둘 다 짧고(10자 미만) 부정적
+    const prevLast = rows.length ? String(rows[rows.length - 1].content || '') : null;
+    if(prevLast != null){
+      const pair = [m, prevLast];
+      if(pair.every(t => t.trim().length < 10 && FRUSTRATED_NEG_RE.test(t))) return true;
+    }
+  }catch(e){}
+  return false;
+}
+
 // ★ v1.54 스트리밍 경로가 /api/chat 과 «같은 판단» 을 쓰도록 문맥만 따로 모은다.
-function buildChatContext(u, mode, msg, day){
+// ★ v1.70 ③④: 관심사 비유 도메인(interest)·숙련도 힌트 축소(fade)·좌절 신호(frustrated) 를
+//   같은 자리에서 계산해 두 파이프라인이 같은 판단을 쓰게 한다.
+function buildChatContext(u, mode, msg, day, style = 'auto'){
   const robot = db.prepare('SELECT * FROM robots WHERE user_id=? ORDER BY id DESC LIMIT 1').get(u.id);
   const profile = profileFor(u.id);
   const topic = currentTopic();
   const moodRow = db.prepare('SELECT mood FROM mood_logs WHERE user_id=? AND day=?').get(u.id, day);
   const moodNote = moodRow && MOODS[moodRow.mood]
     ? `[아이의 오늘 기분] ${MOODS[moodRow.mood].ko} — 말투는 ${MOODS[moodRow.mood].tone}.` : '';
-  const cards = mode === 'learn' ? matchCards(msg, topic.chapter).slice(0, 1) : [];
+  let cards = mode === 'learn' ? matchCards(msg, topic.chapter).slice(0, 1) : [];
+
   const focusCard = mode === 'learn'
     ? (cards.find(c =>
         msg.includes(c.topic) ||
@@ -3264,16 +4609,39 @@ function buildChatContext(u, mode, msg, day){
     : null;
   const sess = mode === 'learn' ? getSession(u.id, day, 'learn') : null;
   const baseLevel = sess ? stageLevel(sess.stage) : 1;
-  const confused = /(모르겠|모르겟|어려워|몰라|이해가 안)/.test(msg);
+  // ★ «힌트 한 단계 더» 버튼 고정 문구 화이트리스트 — 키워드(모르겠/몰라)가 없어도 즉시 한 단계 올린다.
+  //   이게 없으면 버튼 첫 클릭에서 wantLevel 이 그대로라 L1 이 그대로 반복됐다.
+  const explicitHintUp = /힌트.*한\s*단계\s*더|한\s*단계\s*더\s*(알려|보여|주)/.test(msg);
+  const confused = /(모르겠|모르겟|어려워|몰라|이해가 안)/.test(msg) || explicitHintUp;
   const gotIt = /(알겠|이해했|맞았|맞아|다 했|풀었)/.test(msg);
+  // ★ v1.70 ④: 좌절 턴은 단계를 올리지 않는다(힌트 에스컬레이션 동결).
+  const frustrated = mode === 'learn' ? frustrationOf(u.id, msg, sess, day) : false;
   let wantLevel = baseLevel;
+  if(sess && explicitHintUp) wantLevel = Math.min(3, baseLevel + 1);
   if(sess && confused && sess.stage_turns >= 1) wantLevel = Math.min(3, baseLevel + 1);
   if(sess && sess.stage_turns >= 2 && baseLevel < 3) wantLevel = Math.min(3, baseLevel + 1);
+  if(frustrated) wantLevel = baseLevel;
+  if(frustrated && sess && Number(sess.stage_turns || 0) >= 2) wantLevel = Math.min(3, baseLevel + 1);
   const knownConcept = (focusCard && focusCard.topic) || (sess && sess.concept) || topic.topic;
   const stuckGuess = guessStuckType(msg);
+  // ★ v1.70 ③a: 최근 3일 대화에서 관심 도메인을 찾는다(비유에 그 영역을 쓰게 함).
+  const interest = mode === 'learn' ? interestDomainOf(u.id) : null;
+  // ★ v1.70 ③b: 숙련도 0.75 이상이면 비유·예시를 덧붙이지 않는다(힌트 점점 흐리게).
+  const fade = mode === 'learn' && !!focusCard && masteryOf(u.id, focusCard.topic) >= 0.75;
+  // ★ v1.78: «모르겠어» 처럼 개념 키워드가 없는 턴은 «이 대화의 개념» 카드로 고정한다.
+  //   (키워드 미검출 시 matchCards 가 같은 챕터의 다른 카드를 골라, 반복문 대화에 변수 설명이 섞였다)
+  if(mode === 'learn' && sess && sess.concept){
+    const cpt = String(sess.concept);
+    const hit = msg.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => msg.includes(String(a)));
+    if(!hit){ const fixed = teachCardFor(cpt); if(fixed) cards = [fixed]; }
+  }
+  // ★ v1.80: 이번 턴이 «설명» 인지 «유도» 인지 먼저 정한다.
+  const intent = mode === 'learn' ? routeLearnIntent(msg, sess) : 'chat';
+  const direct = mode === 'learn' && (style === 'direct' || (style === 'auto' && intent === 'direct'));
   const cardText = cards.map(c => {
-    if(wantLevel <= 1) return `- ${c.concept}: ${c.hint_l1}`;
-    if(wantLevel === 2) return `- ${c.concept}: ${c.analogy} / 힌트: ${c.hint_l2}`;
+    if(direct) return `- ${c.concept}: ${String(c.analogy || '').trim()} ${String(c.hint_l2 || '').trim()}`.trim();
+    if(wantLevel <= 1) return `- ${c.concept}: «${c.hint_l1}» — 이 문장을 그대로 아이에게 물어라. 개념을 설명하지 마라.`;
+    if(wantLevel === 2) return fade ? `- ${c.concept}: ${c.hint_l2}` : `- ${c.concept}: ${c.analogy} / 힌트: ${c.hint_l2}`;
     return `- ${c.concept}: ${c.hint_l3}`;
   }).join('\n') || '(없음)';
   // ★ v1.66: 맥락은 세션 «메모» 가 들고 있으므로 원문은 더 줄인다(비용).
@@ -3282,8 +4650,16 @@ function buildChatContext(u, mode, msg, day){
     .all(u.id, histLimit).reverse();
   const sessionMemo = (mode === 'learn' && sess && sess.summary) ? String(sess.summary).slice(0,180) : '';
   const memText = memoryPrompt(retrieveMemories(u.id, msg, 1));
+  // ★ v1.71 «루미는 잊어버려» — learn 모드에서 안개 진한 등불(decay≥60) «1개만» 프롬프트에 주입한다.
+  //   루미는 스스로 확신 있던 말을 어색하게 하며 다시 가르쳐 달라 한다. 퀴즈 정답은 여전히 절대 말하지 않는다.
+  let fogNote = '';
+  if(mode === 'learn'){
+    const fl = fogHeaviestReadonly(u.id, 60);
+    if(fl) fogNote = `[기억 안개] 루미는 «${fl.topic}» 을(를) 많이 잊었다. 이 개념이 나오면 스스로 확신 있던 말을 어색하게 말하고 «어렸을 때 확실했는데…» 하며 아이에게 다시 가르쳐 달라 고할 수 있다(단 퀴즈 정답은 여전히 절대 말하지 않는다).`;
+  }
   return { robot, profile, topic, moodNote, cards, focusCard, sess, baseLevel, confused, gotIt,
-    wantLevel, knownConcept, stuckGuess, cardText, hist, sessionMemo, memText };
+    wantLevel, knownConcept, stuckGuess, cardText, hist, sessionMemo, memText, fogNote,
+    interest, fade, frustrated, intent, direct };
 }
 
 // ★ v1.50 «진단 → 계획 → 설명» 의 연결고리.
@@ -3315,10 +4691,16 @@ function dayLabel(d){
   return String(d).slice(5).replace('-', '/');
 }
 // «오늘 딱 하나» — 첫 화면은 기능 목록이 아니라 한 걸음이어야 한다.
+// ★ v1.70 ①: 2순위 개념을 «최근에 막힌 곳» 에서 «가장 약한 개념» 으로 업그레이드한다.
+//   concept_mastery 에 데이터가 있으면 score<0.75 인 가장 약한 개념을 우선하고,
+//   마스터리 기록이 전혀 없으면 기존 stuckTopics 로 그대로 폴백한다(결정론 보장).
 function nextActionFor(uid){
   const day = today();
   const mood = moodTrend(uid);
   const stuck = stuckTopics(uid, 7, 1)[0];
+  // ★ 2026-11-21 (v1.74) A3 ①: 선수개념 미달 개념은 목록 «끝» 으로 밀린 순서에서 고른다(삭제 없음).
+  const weak = weakestTopicsOrdered(uid, 12).find(w => (Number(w.score) || 0) < 0.75) || null;
+  const focus = weak ? { subject: weak.topic, last: weak.last_day } : (stuck ? { subject: stuck.subject, last: stuck.last } : null);
   const due = dueReviewCount(uid);
   let plan = null;
   const row = db.prepare('SELECT plan_json FROM learning_plans WHERE user_id=? AND day=?').get(uid, day);
@@ -3330,11 +4712,21 @@ function nextActionFor(uid){
     return { kind:'mood', title:'오늘은 3분만 이야기해 볼까?',
       reason:'요즘 기분이 조금 가라앉아 있었어', cta:'이야기하기', target:'chat' };
   }
-  // 2) 최근에 막힌 개념이 있으면 그 문제부터.
-  if(stuck){
-    return { kind:'stuck', title:`«${stuck.subject}» 한 문제만 같이 풀기`,
-      reason:`${dayLabel(stuck.last)} 여기서 막혔었어`, cta:'같이 풀기', target:'learn',
-      concept: stuck.subject };
+  // 1-1) ★ 2026-11-21 (v1.74) A1 «안개의 탑» — 기분 다음, 약한 개념 «전에» 탑을 내민다.
+  //   오늘 탑이 아직 끝나지 않았고(tower_ended 0) decay≥30 인 등불이 있으면 그 한 번은 탑 차례다.
+  //   프론트 계약: { kind:'tower', fogCount } — 이번 답변은 탑 카드로 대체된다.
+  if(dailyCounterOf(uid, day, 'tower_ended') === 0){
+    try{
+      const { lamps } = lampsFor(uid);
+      const fogCount = lamps.filter(l => Number(l.decay) >= 30).length;
+      if(fogCount > 0) return { kind:'tower', fogCount };
+    }catch(e){}
+  }
+  // 2) 가장 약한 개념(마스터리) 또는 최근에 막힌 개념이 있으면 그 문제부터.
+  if(focus){
+    return { kind:'stuck', title:`«${focus.subject}» 한 문제만 같이 풀기`,
+      reason: weak ? '지금 제일 약한 개념이야' : `${dayLabel(focus.last)} 여기서 막혔었어`,
+      cta:'같이 풀기', target:'learn', concept: focus.subject };
   }
   // 3) 복습 카드가 밀렸으면 복습.
   if(due > 0){
@@ -3388,7 +4780,8 @@ function planFallback(u, profile, opts){
   const m3 = Math.max(1, total - m1 - m2);
   const o = opts || {};
   const stuckList = o.stuck || [];
-  const focus = stuckList[0] ? stuckList[0].subject : null;
+  // ★ v1.70 ①: 1단계 초점은 «가장 약한 개념(마스터리)» 이 1순위, 그다음 «최근에 막힌 개념».
+  const focus = (o.weak && o.weak.topic) || (stuckList[0] ? stuckList[0].subject : null);
   // ★ 기분이 가라앉은 날은 «분량을 줄이고 대화부터». 학습량을 채우는 게 목적이 아니다.
   if(o.lowMood){
     return [
@@ -3400,7 +4793,8 @@ function planFallback(u, profile, opts){
   }
   return [
     focus
-      ? { type:'review', title:`${dayLabel(stuckList[0].last)} 막힌 ${focus}`, desc:'막혔던 그 문제부터',
+      ? { type:'review', title: (o.weak && o.weak.topic) === focus ? `가장 약한 개념: ${focus}` : `${dayLabel(stuckList[0].last)} 막힌 ${focus}`,
+          desc: (o.weak && o.weak.topic) === focus ? '가장 약한 개념부터 시작해요' : '막혔던 그 문제부터',
           minutes:m1, message:`${focus}이 아직 헷갈려. 같이 볼까?` }
       : { type:'concept', title:`개념: ${weak}`, desc:'짧은 비유로 이해하기', minutes:m1, message:`${weak}이 뭐야? 쉽게 알려줘.` },
     { type:'puzzle', title:'오늘의 퍼즐 3문제', desc:'4지선다로 확인하기', minutes:m2, message:'' },
@@ -3442,11 +4836,15 @@ async function generatePlan(u, force){
   const memTextPlan = memoryPrompt(retrieveMemories(u.id, topic.topic, 8));
   // ★ v1.50: 쌓여만 있던 «막힌 개념·복습 대기·기분» 을 계획의 첫 문장으로 끌어올린다.
   const diag = stuckTopics(u.id, 7, 3);
+  // ★ v1.70 ①: 가장 약한 개념(마스터리 최저)을 1단계 초점으로 쓴다(데이터가 있을 때만).
+  //   ★ 2026-11-21 (v1.74) A3 ①: 선수개념 미달 개념은 목록 끝으로 밀려 «다음 순서» 로 자연히 넘어간다.
+  const weakTop = weakestTopicsOrdered(u.id, 1)[0] || null;
   const due = dueReviewCount(u.id);
   const mood = moodTrend(u.id);
   const lowMood = mood.today === 'low' || mood.lowCount >= 2;
   const diagText = diag.map(x=>`${x.subject}(${x.c}회, 마지막 ${x.last})`).join(', ') || '(없음)';
-  let steps = planFallback(u, profile, { stuck: diag, lowMood }), source = 'fallback';
+  const weakText = weakTop ? `${weakTop.topic}(점수 ${Number(weakTop.score).toFixed(2)})` : '(없음)';
+  let steps = planFallback(u, profile, { stuck: diag, lowMood, weak: weakTop }), source = 'fallback';
   try{
     const prompt = `너는 초등 저학년도 알아듣는 학습 코치 '루미'다. 아래 학습자 데이터를 보고 오늘의 학습 계획을 만들어라.
 - 이번 주 주제: ${topic.topic} (CH.${topic.chapter})
@@ -3458,13 +4856,14 @@ async function generatePlan(u, force){
 - 관심 주제: ${profile.pref_subjects||'(없음)'}
 - 난이도: ${profile.pref_difficulty||'normal'}
 [오늘의 진단 — 반드시 반영]
+- 가장 약한 개념(마스터리 최저): ${weakText}
 - 최근 7일 막힌 개념: ${diagText}
 - 오늘 복습 카드: ${due}장
 - 오늘 기분: ${mood.today||'기록 없음'} (최근 3일 low ${mood.lowCount}회)
 - 기억:
 ${memTextPlan}
 규칙:
-0) 최근 막힌 개념이 있으면 **1단계는 그 개념의 review**(없으면 concept)로 고정한다. 제목에 그 개념 이름을 넣는다.
+0) 가장 약한 개념이 있으면 **1단계는 그 개념의 review**, 없으면 최근 막힌 개념, 그것도 없으면 concept 로 고정한다. 제목에 그 개념 이름을 넣는다.
 ${lowMood ? '0-1) 오늘 기분이 가라앉았다. **2단계로 줄이고**, 1단계는 type="chat" «3분 이야기» 로 한다. 분량을 채우지 마라.\n' : ''}1) ${lowMood?'2':'3'}단계, 총 ${lowMood?Math.max(4,Math.round((profile.pref_minutes||10)/2)):(profile.pref_minutes||10)}분 내외.
 2) type은 concept / puzzle / review / game / chat 중 하나.
 3) concept·review는 message에 아이가 채팅에 그대로 보낼 한 문장(존댓말, 60자 이내).
@@ -3472,7 +4871,8 @@ ${lowMood ? '0-1) 오늘 기분이 가라앉았다. **2단계로 줄이고**, 1�
 5) game은 game에 mole 또는 shooter.
 6) JSON만 출력: {"steps":[{"type":"concept","title":"...","desc":"...","minutes":2,"message":"..."},...]}
 `;
-    const raw = await callLLM(prompt, { temperature:0.4, maxTokens:380, json:true });
+    const pr = await callLLM(prompt, { temperature:0.4, maxTokens:380, json:true });
+    const raw = pr ? pr.text : null;
     let j = null;
     try{ j = raw ? JSON.parse((raw.match(/\{[\s\S]*\}/) || [])[0]) : null; }catch(e){ j = null; }
     let clean = normalizePlanSteps(j && j.steps);
@@ -3481,9 +4881,13 @@ ${lowMood ? '0-1) 오늘 기분이 가라앉았다. **2단계로 줄이고**, 1�
     else console.log('⚠️ [plan] LLM plan invalid:', raw ? String(raw).slice(0,180) : '(no response)');
   }catch(e){}
   // 계획이 왜 이렇게 생겼는지 한 줄로 남긴다 — 아이가 «루미가 기억한다» 를 눈으로 본다.
+  // ★ v1.70 ①: 마스터리 데이터가 있으면 «가장 약한 개념» 이 1순위, 없으면 기존 «어제 막힌 곳».
   let focus = null;
   if(lowMood){
     focus = { kind:'mood', label:'오늘은 3분만 이야기부터', reason:'기분이 가라앉은 날은 대화가 먼저예요' };
+  }else if(weakTop){
+    focus = { kind:'stuck', label:`${weakTop.topic} · 가장 약한 개념부터`,
+      reason:'가장 약한 개념부터 시작해요' };
   }else if(diag.length){
     focus = { kind:'stuck', label:`${diag[0].subject} · ${dayLabel(diag[0].last)} 막힌 곳`,
       reason:'루미가 어제 막힌 곳을 기억하고 있어요' };
@@ -3500,6 +4904,23 @@ app.get('/api/plan/today', async (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   const force = !!(req.query && String(req.query.refresh) === '1');
+  // ★ refresh 남발 방지: 하루 2회까지만 새로 짜고, 초과하면 저장된 계획을 그대로 돌려준다.
+  //   (refresh=1 은 LLM 1회를 태우므로 무한 새로고침으로 LLM 비용이 터지는 것을 막는다)
+  if(force){
+    const n = bumpDailyCounter(u.id, today(), 'plan_refresh');
+    if(n > 2){
+      const row = db.prepare('SELECT plan_json, source FROM learning_plans WHERE user_id=? AND day=?').get(u.id, today());
+      if(row){
+        try{
+          const plan = JSON.parse(row.plan_json);
+          const done = plan.steps.filter(s=>s.done).length;
+          return res.json({ ok:true, plan, source: row.source || 'cached', done,
+            allDone: done === plan.steps.length, focus: plan.focus || null, limited:true });
+        }catch(e){}
+      }
+      return res.status(429).json({error:'오늘은 계획 새로 짜기를 다 썼어요. 내일 다시 해 볼래요?'});
+    }
+  }
   try{
     const { plan, source } = await generatePlan(u, force);
     const done = plan.steps.filter(s=>s.done).length;
@@ -3526,10 +4947,10 @@ app.get('/api/llm/usage', (req,res)=>{
       COALESCE(SUM(completion_tokens),0) completionTokens,
       COALESCE(SUM(total_tokens),0) totalTokens,
       COALESCE(SUM(prompt_chars),0) promptChars
-    FROM llm_logs WHERE user_id=? AND substr(ts,1,10)=?`).get(u.id, d);
+    FROM llm_logs WHERE user_id=? AND ts>=? AND ts<?`).get(u.id, d, dayKST(1));
   const week = db.prepare(`SELECT substr(ts,1,10) day, COUNT(*) calls,
       COALESCE(SUM(total_tokens),0) totalTokens
-    FROM llm_logs WHERE user_id=? AND substr(ts,1,10)>=? GROUP BY day ORDER BY day`)
+    FROM llm_logs WHERE user_id=? AND ts>=? GROUP BY day ORDER BY day`)
     .all(u.id, dayKST(-6));
   const models = db.prepare(`SELECT model, COUNT(*) calls, COALESCE(SUM(total_tokens),0) totalTokens
     FROM llm_logs WHERE user_id=? GROUP BY model ORDER BY calls DESC`).all(u.id);
@@ -3647,7 +5068,8 @@ ${memTextGoal}
 3) 아이가 이해할 쉬운 한국어.
 4) JSON만: {"goals":[{"type":"concept","title":"...","target":3,"unit":"개"},...]}
 `;
-    const raw = await callLLM(prompt, { temperature:0.4, maxTokens:260, json:true });
+    const gr = await callLLM(prompt, { temperature:0.4, maxTokens:260, json:true });
+    const raw = gr ? gr.text : null;
     let j = null;
     try{ j = raw ? JSON.parse((raw.match(/\{[\s\S]*\}/) || [])[0]) : null; }catch(e){}
     const clean = normalizeGoals(j && j.goals);
@@ -3765,7 +5187,10 @@ function worldQuestState(uid, day){
   const done = new Set(rows.filter(r=>r.done && r.quest !== '__skip__').map(r=>r.quest));
   const skipReady = rows.some(r=>r.quest === '__skip__');
   const stars = db.prepare('SELECT COUNT(*) c FROM world_stars WHERE user_id=? AND day=?').get(uid, day).c;
-  return { done, skipReady, stars };
+  // ★ 오늘 이미 주운 빛 조각 인덱스(0..2) — 재입장 시 클라이언트가 별을 되살리지 않도록 복원용으로 내려준다.
+  const starsCollected = db.prepare('SELECT star FROM world_stars WHERE user_id=? AND day=? ORDER BY star').all(uid, day)
+    .map(r=>Number(r.star)).filter(n=>Number.isInteger(n) && n >= 0);
+  return { done, skipReady, stars, starsCollected };
 }
 
 app.get('/api/world/quest', (req,res)=>{
@@ -3774,6 +5199,7 @@ app.get('/api/world/quest', (req,res)=>{
   const day = today();
   const st = worldQuestState(u.id, day);
   res.json({ ok:true, day, reward: WORLD_QUEST_REWARD, skipReady: st.skipReady, stars: st.stars,
+    stars_collected: st.starsCollected,
     quests: WORLD_QUESTS.map(q=>({ key:q.key, prop:q.prop, kind:q.kind, label:q.label,
       text:q.text, cond:q.cond, done: st.done.has(q.key) })) });
 });
@@ -4148,6 +5574,8 @@ function analyzeChatText(msg, reply, mode, opts){
     stuck: CA_STUCK_RE.test(m) ? 1 : 0,
     hint_level: o.hintLevel == null ? null : Number(o.hintLevel),
     solved: o.solved ? 1 : 0,
+    // ★ word_count 는 이름과 달리 «단어 수» 가 아니라 공백을 정리한 뒤의 «문자 수» 다.
+    //   (통계·화면 호환을 위해 컬럼 이름은 그대로 둔다)
     word_count: m.replace(/\s+/g, ' ').trim().length,
     question_count: (m.match(/\?/g) || []).length,
     reply_len: r.length,
@@ -4163,13 +5591,17 @@ function recordChatAnalysis(uid, userMsgId, aiMsgId, msg, reply, mode, opts){
   const o = opts || {};
   const day = String(o.day || today()).slice(0, 10);
   const a = analyzeChatText(msg, reply, mode, o);
-  db.prepare(`INSERT OR IGNORE INTO chat_analyses(
+  // ★ v1.70 ⑥: learn 파이프라인이 남긴 ⟦stuck:…⟧ 태그가 있으면 규칙 추정(guessStuckType)보다 우선한다.
+  if(o.stuckType && STUCK_TYPES.includes(String(o.stuckType))) a.stuck = 1;
+  const ir = db.prepare(`INSERT OR IGNORE INTO chat_analyses(
       user_id,user_msg_id,ai_msg_id,day,mode,topic,subject,intent,sentiment,stuck,
       hint_level,solved,word_count,question_count,reply_len,reply_has_hint,reply_has_praise,keywords)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(uid, userMsgId, aiMsgId, day, mode || 'chat', a.topic, a.subject, a.intent, a.sentiment,
       a.stuck, a.hint_level, a.solved, a.word_count, a.question_count, a.reply_len,
       a.reply_has_hint, a.reply_has_praise, a.keywords);
+  // ★ v1.70 ①: 막힘 기록(stuck=1)이 «새로» 쓰였을 때만 마스터리 감점(rebuild 재집계 시 중복 방지).
+  if(a.stuck === 1 && a.topic && ir && ir.changes) bumpMastery(uid, a.topic, 'stuck');
   const agg = db.prepare(`SELECT COUNT(*) turns, SUM(word_count) words, SUM(stuck) stuck,
       SUM(solved) solved, SUM(COALESCE(hint_level,0)) hints
     FROM chat_analyses WHERE user_id=? AND day=?`).get(uid, day);
@@ -4224,8 +5656,11 @@ app.post('/api/chat', async (req,res)=>{
   if(used >= limit) return res.status(429).json({error:'오늘은 여기까지! 내일 또 이야기하자.'});
 
   // ★ 2026-10-31: "잊어줘" 명령 — 기억만 삭제하고 고정 응답
-  if(mode === 'chat' && /(잊어줘|잊어\s*줘|기억하지\s*마|잊어)/.test(msg)){
-    const topic = msg.replace(/(잊어줘|잊어\s*줘|기억하지\s*마|잊어)/g,'').replace(/["'“”]/g,'').replace(/기억/g,'').trim();
+  //   ★ 정규식을 «명령형» 으로만 좁힌다. 예전 /(…|잊어)/ 는 «잊어버렸어(기억 안 남)» 까지
+  //     삭제 명령으로 오인해 기억을 지워 버렸다. 잊어버렸(과거형)은 절대 매치하지 않는다.
+  const FORGET_RE = /(잊어\s*줘|잊어버려\s*줘|기억하지\s*마|기억에서\s*지워)/;
+  if(mode === 'chat' && FORGET_RE.test(msg)){
+    const topic = msg.replace(FORGET_RE, '').replace(/["'“”]/g,'').replace(/기억/g,'').trim();
     const { removed } = forgetMemories(u.id, topic);
     const reply = topic
       ? (removed ? `"${topic}" 기억은 지웠어. 다른 기억은 그대로야.` : `"${topic}" 기억은 없었어.`)
@@ -4261,7 +5696,8 @@ app.post('/api/chat', async (req,res)=>{
   // ★ 질문 키워드 우선 → 없으면 이번 주 챕터 → 그래도 없으면 랜덤.
   //   (예전엔 챕터만 봐서 "변수가 뭐야?"에 AI 추천 카드가 들어가는 문제가 있었다)
   // ★ v1.51: «개념» 으로 찾는다(동의어·태그 포함). 못 찾으면 챕터 → 랜덤 순으로 내려간다.
-  const cards = mode === 'learn' ? matchCards(msg, topic.chapter).slice(0, 1) : [];
+  let cards = mode === 'learn' ? matchCards(msg, topic.chapter).slice(0, 1) : [];
+
   // ★ 2026-10-29: 이번 질문과 실제로 맞은 카드 = 약점/해결 기록의 기준
   // ★ v1.51: «분모» 처럼 주제어가 아닌 말로도 카드를 잡을 수 있게 별칭까지 본다.
   const focusCard = mode === 'learn'
@@ -4274,17 +5710,42 @@ app.post('/api/chat', async (req,res)=>{
   // ★ v1.51 «대화 상태» — 같은 단계를 계속 반복하지 않게 서버가 단계를 들고 있는다.
   const sess = mode === 'learn' ? getSession(u.id, day, 'learn') : null;
   const baseLevel = sess ? stageLevel(sess.stage) : 1;
-  const confused = /(모르겠|모르겟|어려워|몰라|이해가 안)/.test(msg);
+  // ★ «힌트 한 단계 더» 버튼 고정 문구 화이트리스트 — 키워드(모르겠/몰라)가 없어도 즉시 한 단계 올린다.
+  //   이게 없으면 버튼 첫 클릭에서 wantLevel 이 그대로라 L1 이 그대로 반복됐다.
+  const explicitHintUp = /힌트.*한\s*단계\s*더|한\s*단계\s*더\s*(알려|보여|주)/.test(msg);
+  const confused = /(모르겠|모르겟|어려워|몰라|이해가 안)/.test(msg) || explicitHintUp;
   const gotIt = /(알겠|이해했|맞았|맞아|다 했|풀었)/.test(msg);
   let wantLevel = baseLevel;
+  if(sess && explicitHintUp) wantLevel = Math.min(3, baseLevel + 1);
   if(sess && confused && sess.stage_turns >= 1) wantLevel = Math.min(3, baseLevel + 1);
   if(sess && sess.stage_turns >= 2 && baseLevel < 3) wantLevel = Math.min(3, baseLevel + 1);
   const knownConcept = (focusCard && focusCard.topic) || (sess && sess.concept) || topic.topic;
   const stuckGuess = guessStuckType(msg);
+  // ★ v1.70 ④: 좌절 턴 판정 — 스트리밍(buildChatContext)과 같은 규칙. 좌절 턴은 단계를 동결한다.
+  const frustrated = mode === 'learn' ? frustrationOf(u.id, msg, sess, day) : false;
+  if(frustrated && sess) wantLevel = baseLevel;
+  if(frustrated && sess && Number(sess.stage_turns || 0) >= 2) wantLevel = Math.min(3, baseLevel + 1);
+  // ★ v1.70 ③a: 관심 도메인(비유 영역) / ③b: 숙련도 높으면 힌트 축소
+  const interest = mode === 'learn' ? interestDomainOf(u.id) : null;
+  const fade = mode === 'learn' && !!focusCard && masteryOf(u.id, focusCard.topic) >= 0.75;
+  // ★ v1.71 «루미는 잊어버려» — learn 모드에서 안개 진한 등불(decay≥60) 1개만 주입(스트림과 동일 규칙).
+  let fogNoteLLM = '';
+  if(mode === 'learn'){
+    const fl = fogHeaviestReadonly(u.id, 60);
+    if(fl) fogNoteLLM = `[기억 안개] 루미는 «${fl.topic}» 을(를) 많이 잊었다. 이 개념이 나오면 스스로 확신 있던 말을 어색하게 말하고 «어렸을 때 확실했는데…» 하며 아이에게 다시 가르쳐 달라 고할 수 있다(단 퀴즈 정답은 여전히 절대 말하지 않는다).`;
+  }
   // ★ v1.52: 카드 전체(비유+예시+힌트 3단계)를 다 넣지 않고 «지금 단계에 필요한 것» 만 넣는다.
+  // ★ v1.70 ③b: fade 시 L2 는 예시(비유)를 빼고 hint_l2 한 줄만 남긴다.
+  // ★ v1.78: «모르겠어» 처럼 개념 키워드가 없는 턴은 «이 대화의 개념» 카드로 고정한다.
+  //   (키워드 미검출 시 matchCards 가 같은 챕터의 다른 카드를 골라, 반복문 대화에 변수 설명이 섞였다)
+  if(mode === 'learn' && sess && sess.concept){
+    const cpt = String(sess.concept);
+    const hit = msg.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => msg.includes(String(a)));
+    if(!hit){ const fixed = teachCardFor(cpt); if(fixed) cards = [fixed]; }
+  }
   const cardText = cards.map(c => {
-    if(wantLevel <= 1) return `- ${c.concept}: ${c.hint_l1}`;
-    if(wantLevel === 2) return `- ${c.concept}: ${c.analogy} / 힌트: ${c.hint_l2}`;
+    if(wantLevel <= 1) return `- ${c.concept}: «${c.hint_l1}» — 이 문장을 그대로 아이에게 물어라. 개념을 설명하지 마라.`;
+    if(wantLevel === 2) return fade ? `- ${c.concept}: ${c.hint_l2}` : `- ${c.concept}: ${c.analogy} / 힌트: ${c.hint_l2}`;
     return `- ${c.concept}: ${c.hint_l3}`;
   }).join('\n') || '(없음)';
   // ★ v1.52: 원문 6턴 → 2턴(학습)·3턴(수다). 나머지 맥락은 세션 «메모» 가 대신한다.
@@ -4297,49 +5758,64 @@ app.post('/api/chat', async (req,res)=>{
   const mems = retrieveMemories(u.id, msg, 1);   // ★ v1.52: 관련 기억 top 3 만
   const memText = memoryPrompt(mems);
 
+  const intent = mode === 'learn' ? routeLearnIntent(msg, sess) : 'chat';
+  const direct = mode === 'learn' && (b.style === 'direct' || (b.style === 'auto' && intent === 'direct'));
   const system = `너는 DOROBUS의 로봇 "${robot?robot.name:'루미'}"(성격: ${robot?robot.personality:'반짝이'})다.
 대상: 초등 저학년~고학년(7-11세). 아주 쉬운 한국어.
 이번 주 주제: "${topic.topic}".
 ${moodNote}
-[모드=${mode}] ${CHAT_MODE_RULES[mode]}
+[모드=${mode}] ${(typeof c !== 'undefined' ? c.direct : direct) ? DIRECT_RULE : CHAT_MODE_RULES[mode]}
 ${mode === 'learn' ? `[이번 대화] 목표: "${knownConcept}" · 지금 단계: L${wantLevel}${sess ? ` (이 단계 ${sess.stage_turns + 1}번째)` : ''}
 ${sessionMemo ? `[지금까지의 대화]
 ${sessionMemo}
 ` : ''}[막힘 유형] ${stuckGuess} — ${STUCK_RULES[stuckGuess]}
-[말하기] 두 문장·90자. 끝에 반드시 질문 1개.
+${interest ? `[아이의 관심사] 비유는 «${interest}» 영역에서 들어 준다\n` : ''}${fade ? `[숙련도 높음] 힌트는 한 줄로만. 비유·예시를 덧붙이지 마라\n` : ''}${wantLevel <= 1 ? L1_CHOICE_RULE + '\n' : ''}${frustrated ? `[감정 신호] 아이가 좌절 중이다. 이번 턴은 새 힌트를 주지 말고, 한 문장으로 «틀려도 뇌가 자라는 거야» 류의 성장 마인드셋 다독임 + 편안해할 짧은 질문으로 마무리해라. 정답·힌트 금지.\n` : ''}${fogNoteLLM ? fogNoteLLM + '\n' : ''}[말하기] 두 문장·90자. 끝에 반드시 질문 1개. ${TAG_LINE_RULE}
 ` : ''}[지식 카드]
 ${cardText}
 ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: {"reply":"...","hintLevel":1|2|3|null,"stuckType":"concept|procedure|reading|careless|null","followUp":"...","safety":"ok"}`;
 
   let raw = null;
   const t0 = Date.now();
+  let llmRes = null;
   try{
-    raw = await callLLM('', {
+    llmRes = await callLLM('', {
       messages: [{ role:'system', content: system }, ...hist, { role:'user', content: msg }],
       temperature: mode==='learn' ? 0.7 : 0.9,
       // ★ v1.52: 학습은 «두 문장» 이면 되므로 출력 상한을 낮춘다(출력 토큰이 곧 비용).
       maxTokens: mode === 'learn' ? 140 : 170,
-      // 짧은 대화는 싼 모델 먼저, 학습만 품질 우선.
-      // ★ v1.56: 수다(chat) 도 EXAONE 우선. 마음 체크(reflect) 만 싼 모델 우선.
+      // ★ v1.57 주석 정정: LLM_FORCE_FAST 기본값(true) 이면 prefer:'quality' 는 동작하지 않고
+      //   모든 모드가 «싼 모델(DeepSeek) 우선» 이다. 품질 우선은 LLM_FORCE_FAST=0 일 때만 유효.
       prefer: (mode === 'learn' || mode === 'chat') ? 'quality' : 'fast',
     });
+    raw = llmRes ? llmRes.text : null;
   }catch(e){ raw = null; }
-  const us = lastLLMUsage || {};
+  // ★ 계량은 반환값(llmRes) 기준 — 모듈 전역은 동시 요청에 오염된다.
+  const us = (llmRes && llmRes.usage) || {};
   try{ db.prepare(`INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok,
       prompt_tokens,completion_tokens,total_tokens,prompt_chars) VALUES(?,?,?,?,?,?,?,?,?)`)
-    .run(u.id, mode, lastLLMModel, Date.now()-t0, raw ? 1 : 0,
+    .run(u.id, mode, (llmRes && llmRes.model) || null, Date.now()-t0, raw ? 1 : 0,
       us.prompt_tokens || null, us.completion_tokens || null, us.total_tokens || null,
-      lastLLMPromptChars || null); }catch(e){}
+      (llmRes && llmRes.promptChars) || null); }catch(e){}
 
   const parsed = parseChatJSON(raw);
   let reply = parsed ? String(parsed.reply).trim() : (raw ? String(raw).trim() : '');
+  // ★ v1.70 ⑥: learn 모드는 ⟦stuck:…⟧ 태그 줄을 본문에서 떼고, 유효한 태그면 막힘 유형 판정에 우선한다.
+  //   태그가 없으면 parseTagLine 은 원문을 그대로 돌려준다(기존 동작과 동일).
+  let tagStuck = null;
+  if(mode === 'learn'){
+    const tl = parseTagLine(reply);
+    tagStuck = tl.stuck;
+    reply = tl.reply;
+  }
   // ★ v1.51: 힌트 단계는 «서버 상태» 가 기준. LLM 은 한 단계만 올릴 수 있고, 되돌릴 수는 없다.
   const llmLevel = parsed && [1,2,3].includes(Number(parsed.hintLevel)) ? Number(parsed.hintLevel) : wantLevel;
   let finalLevel = Math.max(wantLevel, Math.min(llmLevel, wantLevel + 1));
   finalLevel = Math.max(1, Math.min(3, finalLevel));
   // 첫 턴은 반드시 «되묻기(L1)» 에서 시작한다 — 바로 답을 주지 않는 것이 이 제품의 약속이다.
   if(sess && (sess.turns || 0) === 0) finalLevel = 1;
-  let hintLevel = mode === 'learn' ? finalLevel : null;
+  // ★ v1.70 ④: 좌절 턴은 단계를 올리지 않는다(«이번 턴 승급 금지»).
+  if(frustrated && sess && Number(sess.stage_turns || 0) < 2) finalLevel = baseLevel;
+  let hintLevel = mode === 'learn' ? (direct ? null : finalLevel) : null;
   let followUp = parsed && parsed.followUp ? sanitizeLine(String(parsed.followUp), 60) : null;
 
   // ★ 학습 모드: 정답 누설 차단
@@ -4348,10 +5824,36 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
     hintLevel = 3; finalLevel = 3;
   }
   // ★ v1.51: 배움 모드에서는 «두 문장» 이면 충분하다. 길면 아이가 생각을 멈춘다.
-  reply = mode === 'learn' ? limitSentences(sanitizeLine(reply, 180), 2, 90) : sanitizeLine(reply, 180);
+  //   안전 필터 길이 상한은 채팅 파이프라인 공통 600(한국어 정상 응답 오탐 방지).
+  reply = mode === 'learn' ? limitSentences(sanitizeLine(reply, 180, 600), 2, 90) : sanitizeLine(reply, 180, 600);
+  // ★ v1.77: «L1·L2·L3 가 다 같은 설명» 문제. 모델이 카드의 단계별 문장을 무시하고
+  //   매번 정의를 말하므로, 응답이 «질문으로 끝나지 않으면» 그 단계의 카드 문장으로 교체한다.
+  //   → L1 은 반드시 되묻기, L2 는 비유, L3 는 다음 한 단계. 세 단계가 구조적으로 달라진다.
+  // ★ v1.78: L3 인데 «다독임» 문장이 나오면(모델이 좌절 지시를 따라감) 실제 «다음 한 단계» 로 교체.
+  if(mode === 'learn' && finalLevel >= 3 && /(괜찮아|자라|숨 한 번|기분은|편해졌)/.test(reply)){
+    const c3 = cards[0] || {};
+    reply = `${String(c3.hint_l3 || '').trim() || '먼저 한 단계만 해 보자.'} 지금 해 볼래?`;
+  }
+  if(mode === 'learn'){
+    const endsWithQ = /(까|래|니|어때|볼까|줄래|싶어|맞아|알겠어|있어|없어|볼래|했어|될까|줄까)\s*[?？]\s*$/.test(reply.trim());
+    if(!endsWithQ){
+      const c = cards[0] || {};
+      if(finalLevel <= 1){
+        reply = `같이 생각해 보자. ${String(c.hint_l1 || '').trim() || L1_FALLBACK_LINE}`;
+      }else if(finalLevel === 2){
+        const ana = String(c.analogy || '').trim();
+        const h2 = String(c.hint_l2 || '').trim();
+        reply = `${ana ? ana + ' ' : ''}${h2 ? h2 + ' ' : ''}이걸 네 생활에서 본 적 있어?`.trim();
+      }else{
+        const h3 = String(c.hint_l3 || '').trim();
+        reply = `${h3 || '먼저 한 단계만 해 보자.'} 지금 해 볼래?`;
+      }
+      reply = limitSentences(reply, 2, 110);
+    }
+  }
   if(!reply){
     reply = mode==='learn'
-      ? ((cards[0] && cards[0].hint_l1) || '같이 한 단계씩 해 보자. 지금 어디까지 했어?')
+      ? ((cards[0] && cards[0].hint_l1) || L1_FALLBACK_LINE)   // ★ v1.70 ③c: 폴백도 «두 가지 선택지» 예시로 통일
       : '지금은 생각이 잠깐 멈췄어. 다시 말해 줄래?';
     hintLevel = mode==='learn' ? 1 : null;
   }
@@ -4368,6 +5870,8 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
       grantCell(u.id, 5, 'learning');
       solvedNow = true;
       const solvedTopic = focusCard ? focusCard.topic : topic.topic;
+      // ★ v1.70 ①: 스스로 해결 → 마스터리 가점(learning_help_logs solved=1 기록과 함께)
+      bumpMastery(u.id, solvedTopic, 'solved');
       upsertMemory(u.id, { kind:'learning', key:'understood:'+solvedTopic, value:solvedTopic+' 이해', confidence:0.9, source:'chat' });
     }
   }
@@ -4379,6 +5883,8 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
 
   saveChatTurn(u.id, msg, reply, mode, {
     hintLevel, followUp, solved: solvedNow,
+    // ★ v1.70 ⑥: 태그로 확정된 막힘 유형을 분석에 전달(chat_analyses.stuck 판정 우선순위)
+    stuckType: tagStuck || null,
     // ★ 6-1 점검에서 발견: 카드가 안 잡혔을 때 «이번 주 주제» 를 topic 으로 저장하면
     //   막힘 집계(stuckTopics)가 «멈춘 기계의 노래» 를 «아이가 막힌 개념» 으로 착각한다.
     topic: focusCard ? focusCard.topic : null
@@ -4387,10 +5893,15 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
   // ★ v1.51 대화 상태 저장 — 다음 턴이 «어디까지 왔는지» 알고 시작한다.
   let sessionInfo = null;
   if(mode === 'learn' && sess){
-    const stuckType = (parsed && STUCK_TYPES.includes(String(parsed.stuckType)))
-      ? String(parsed.stuckType) : stuckGuess;
-    const nextStage = (gotIt && finalLevel >= 2) ? 'confirm' : ('L' + finalLevel);
-    const stageTurns = nextStage === sess.stage ? (sess.stage_turns + 1) : 1;
+    // ★ v1.70 ⑥: ⟦stuck:…⟧ 태그가 유효하면 LLM JSON·규칙 추정보다 우선한다.
+    const stuckType = tagStuck
+      || ((parsed && STUCK_TYPES.includes(String(parsed.stuckType)))
+        ? String(parsed.stuckType) : stuckGuess);
+    // ★ v1.70 ④: 좌절 턴은 단계(stage)도, 단계 턴 수(stage_turns)도 진행시키지 않는다(동결).
+    const nextStage = (direct || frustrated) ? sess.stage : ((gotIt && finalLevel >= 2) ? 'confirm' : ('L' + finalLevel));
+    // ★ v1.78: 좌절 턴에도 단계 턴 수는 올린다. 동결하면 «모르겠어» 가 반복될 때
+    //   stage_turns 가 2 에 멈춰 다독임만 무한 반복되고 L3 에 도달하지 못한다.
+    const stageTurns = direct ? (sess.stage_turns || 0) : ((nextStage === sess.stage) ? ((sess.stage_turns || 0) + 1) : 1);
     const memo = buildSessionSummary(sess.summary, msg, reply);
     db.prepare(`UPDATE chat_sessions SET stage=?, stage_turns=?, turns=turns+1, concept=?, stuck_type=?,
       summary=?, updated_at=datetime('now','+9 hours') WHERE id=?`)
@@ -4416,6 +5927,8 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
                ? '오늘 대화는 여기까지. 내일 이어서 보자!' : null,
              left: Math.max(0, limit - used - 1),
              understanding: p2.understanding || 0, solved: solvedNow,
+             // ★ v1.70 ④: 좌절 턴일 때만 frustration:true (프론트 표시용)
+             ...(frustrated ? { frustration: true } : {}),
              remembered: remembered.map(m=>m.value),
              balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
   // LLM 기반 심층 기억 추출은 응답 뒤 백그라운드에서
@@ -4438,6 +5951,7 @@ app.post('/api/chat/explain', async (req,res)=>{
     .get(u.id, day).c;
   if(used >= EXPLAIN_DAILY) return res.status(429).json({error:'오늘은 설명을 충분히 했어! 내일 또 들려줘.'});
   let reply = null;
+  let llmRes = null;
   const t0 = Date.now();
   try{
     const prompt = `너는 7-11세 아이의 학습 친구 '루미'다. 아이가 방금 «${concept}»을 자기 말로 설명했다.
@@ -4447,12 +5961,15 @@ app.post('/api/chat/explain', async (req,res)=>{
 2) 설명에서 한 군데만 골라 «만약 ~라면?» 형태의 질문 1개.
 3) 2문장, 80자 이내, 존댓말. 정답을 말하지 마라.
 JSON만: {"reply":"..."}`;
-    const raw = await callLLM(prompt, { temperature:0.5, maxTokens:220, json:true });
+    const er = await callLLM(prompt, { temperature:0.5, maxTokens:220, json:true });
+    llmRes = er;
+    const raw = er ? er.text : null;
     const j = parseChatJSON(raw);
     if(j && j.reply) reply = String(j.reply);
   }catch(e){ reply = null; }
+  // ★ 계량은 반환값 기준(모듈 전역 오염 제거)
   try{ db.prepare('INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok) VALUES(?,?,?,?,?)')
-    .run(u.id, 'explain', lastLLMModel, Date.now()-t0, reply ? 1 : 0); }catch(e){}
+    .run(u.id, 'explain', (llmRes && llmRes.model) || null, Date.now()-t0, reply ? 1 : 0); }catch(e){}
   if(!reply){
     const short = text.length > 38 ? text.slice(0,38) + '…' : text;
     reply = `«${short}» 라고 설명했구나. 그럼 만약 ${concept}에서 숫자가 하나 바뀌면 어떻게 될까?`;
@@ -4467,8 +5984,334 @@ JSON만: {"reply":"..."}`;
   }catch(e){}
   upsertMemory(u.id, { kind:'taught', key:'taught:'+concept, value:text.slice(0,160),
     confidence:0.95, source:'explain' });
+  const lampRes = lightLamp(u.id, concept);   // ★ v1.71: teach-back 이 끝나면 기억 등불을 밝힌다(lit_day=오늘, 안개 리셋)
   db.prepare('UPDATE users SET understanding = understanding + 1 WHERE id=?').run(u.id);
-  res.json({ ok:true, reply, concept, saved:true, left: Math.max(0, EXPLAIN_DAILY-used-1) });
+  const coTaught = coTeacherOf(u.id, concept);   // ★ v1.71: 친구도 가르친 개념이면 닉네임만(내용 비공개)
+  res.json({ ok:true, reply, concept, saved:true, left: Math.max(0, EXPLAIN_DAILY-used-1),
+    ...(coTaught ? { coTaught } : {}),
+    // ★ 2026-11-21 (v1.74) B1 삼막 1막: «첫 등불» 인 그 한 번만 firstLamp 로 알려준다.
+    ...(lampRes && lampRes.first ? { firstLamp:true } : {}) });
+});
+
+// ============================================================
+// ★ 2026-11-20 / v1.70 ② «루미가 틀려볼게» — 루미가 두 문장을 말하고 아이가 틀린 문장을 찾는다.
+//   teach-back 의 반전 모드: 아이가 «채점자» 가 된다. 셀은 지급하지 않는다(explain 과 동일).
+//   · GET  /api/teach/challenge        — 하루 3회(daily_counters), LLM 우선 + 결정론 폴백
+//   · POST /api/teach/challenge/answer — pendingTeach(메모리 Map) 채점, 정답 오답 모두 why 반환
+//   정답 문장·이유(why)에는 hint_l3/퀴즈 정답을 절대 담지 않는다(hint_l2 이하만 사용).
+// ============================================================
+const TEACH_DAILY_LIMIT = 3;
+// LLM 출력은 재계산할 수 없으므로 «출제 당시의 정답» 을 메모리에만 둔다(서버 재시작이면 자연 만료).
+const pendingTeach = new Map();   // user_id → { day, a, b, correctChoice, concept }
+
+// 한글 받침 판정 — «(이)라는» 조사 붙이기용
+function koIraNeun(word){
+  const last = String(word || '').slice(-1);
+  if(!/[가-힣]/.test(last)) return '이라는';
+  return ((last.charCodeAt(0) - 0xAC00) % 28 === 0) ? '라는' : '이라는';
+}
+
+// 개념에 맞는 지식 카드 찾기 — topic 정확 → 별칭/태그 매칭 순
+function teachCardFor(concept){
+  const c = String(concept || '').trim();
+  if(!c) return null;
+  const exact = db.prepare('SELECT * FROM knowledge_cards WHERE topic=?').get(c);
+  if(exact) return exact;
+  const all = db.prepare('SELECT * FROM knowledge_cards').all();
+  const low = c.toLowerCase();
+  return all.find(k => String(k.topic||'').toLowerCase() === low)
+    || all.find(k => (CARD_ALIASES[k.topic] || []).some(a => a && a.toLowerCase() === low))
+    || all.find(k => String(k.tags||'').split(',').some(t => t.trim() && t.trim().toLowerCase() === low))
+    || null;
+}
+
+// 결정론 폴백 출제 — 지식 카드 문장(analogy/hint_l2)에서 «옳은 문장» 을 고쳐 쓰고,
+//   소형 변형 템플릿으로 «틀린 문장» 을 만든다.
+//   변형 2종: ①대상 교체(다른 카드의 개념 정의를 끼워 넣기) ②인과 반전(순서·원인을 뒤집은 보편 오개념)
+function teachFallbackPair(concept, uid, day){
+  const card = teachCardFor(concept);
+  // 옳은 문장: 비유(analogy) → hint_l2 첫 문장 → 개념 정의 순으로 결정론적으로 고쳐 쓴다.
+  let right = '';
+  if(card && card.analogy){
+    right = `${concept}는 ${String(card.analogy).trim()}처럼 생각하면 돼.`;
+  }else if(card && card.hint_l2){
+    right = String(card.hint_l2).trim().split(/[.!?]/)[0] + '.';
+  }else if(card && card.concept){
+    right = `${concept}는 ${String(card.concept).trim()}${koIraNeun(String(card.concept).trim())} 뜻이야.`;
+  }else{
+    right = `${concept}는 차근차근 배우면 충분히 이해할 수 있는 개념이야.`;
+  }
+  // 대상 교체용 «다른 카드» — 개념 이름+날짜 해시로 결정적으로 고른다(재호출에도 같은 결과)
+  const others = db.prepare(`SELECT topic, concept FROM knowledge_cards
+    WHERE topic<>? AND concept IS NOT NULL AND concept<>''`).all(concept);
+  let wrong;
+  if(others.length){
+    const seed = Math.abs(String(uid + '|' + day + '|' + concept).split('').reduce((a,ch)=>(a*31 + ch.charCodeAt(0))>>>0, 7));
+    const other = others[seed % others.length];
+    wrong = `${concept}는 ${other.concept}${koIraNeun(other.concept)} 뜻이야.`;
+  }else{
+    wrong = `${concept}는 결과를 먼저 정하고 그다음에 이유를 찾아도 돼.`;   // 인과 반전(보편 오개념)
+  }
+  return { right: right.slice(0, 60), wrong: wrong.slice(0, 60) };
+}
+
+// 출제 — LLM 우선, 실패 시 결정론 폴백. 항상 { a, b, correctChoice, concept } 형태를 보장(빈 화면 금지).
+async function generateTeachChallenge(u, concept){
+  const day = today();
+  // LLM 우선: 한 문장은 옳게, 한 문장은 «흔한 오류» 로. 퀴즈 정답(기호·숫자)은 옳은 문장에 직접 쓰지 않는다.
+  try{
+    const prompt = `너는 7-11세 아이의 학습 친구 '루미'다. 개념 «${concept}»에 대해 두 문장을 만들어라.
+- 한 문장은 옳은 설명, 한 문장은 아이들이 흔히 저지르는 오류를 담은 설명이다.
+- 각 문장은 40자 이내, 아이 눈높이 한국어, 존댓말 없이 반말.
+- 옳은 문장에는 이 개념의 퀴즈 정답(기호·숫자·공식)을 직접 쓰지 마라. 개념을 말로 설명해야 한다.
+- 오류 문장은 «살짝 틀린» 설명이어야 한다. 그냥 반대말인 뻔한 문장은 금지.
+- 아이에게 안전하고 건전한 표현만 쓴다.
+출력 형식을 정확히 지켜라(설명·번호·따옴표 금지):
+A|첫 번째 문장
+B|두 번째 문장`;
+    const tr = await callLLM(prompt, { temperature:0.6, maxTokens:200 });
+    const txt = tr && tr.text ? String(tr.text) : '';
+    const mA = txt.match(/^A\s*\|\s*(.+)$/m), mB = txt.match(/^B\s*\|\s*(.+)$/m);
+    const a = mA ? sanitizeLine(mA[1], 60) : null;
+    const b = mB ? sanitizeLine(mB[1], 60) : null;
+    if(a && b && a !== b){
+      const seed = Math.abs(String(u.id + '|' + day + '|' + concept).split('').reduce((x,ch)=>(x*31 + ch.charCodeAt(0))>>>0, 7));
+      const correctChoice = (seed % 2 === 0) ? 'a' : 'b';
+      return { a, b, correctChoice, concept, source:'llm' };
+    }
+  }catch(e){}
+  // 결정론 폴백(카드 문장 + 변형 템플릿) — LLM 이 죽어도 항상 출제된다
+  const fb = teachFallbackPair(concept, u.id, day);
+  const seed = Math.abs(String(u.id + '|' + day + '|' + concept + '|fb').split('').reduce((x,ch)=>(x*31 + ch.charCodeAt(0))>>>0, 7));
+  const correctChoice = (seed % 2 === 0) ? 'a' : 'b';
+  return correctChoice === 'a'
+    ? { a: fb.right, b: fb.wrong, correctChoice, concept, source:'fallback' }
+    : { a: fb.wrong, b: fb.right, correctChoice, concept, source:'fallback' };
+}
+
+// 루미가 «틀려 보기» 도전을 출제한다(하루 3회).
+app.get('/api/teach/challenge', async (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const day = today();
+  // 일일 한도 — daily_counters 로 남발을 막는다(LLM 예산 보호).
+  if(dailyCounterOf(u.id, day, 'teach_challenge') >= TEACH_DAILY_LIMIT)
+    return res.status(429).json({error:'오늘 도전은 3번 다 했어! 내일 루미가 또 틀려 볼게.'});
+  // 개념 선정: ①최근 학습 세션 개념 → ②가장 약한 개념(마스터리) → ③최근 막힌 개념
+  let concept = null;
+  try{
+    const s = db.prepare(`SELECT concept FROM chat_sessions
+      WHERE user_id=? AND concept IS NOT NULL AND concept<>'' ORDER BY updated_at DESC LIMIT 1`).get(u.id);
+    if(s && String(s.concept).trim()) concept = String(s.concept).trim().slice(0, 40);
+  }catch(e){}
+  if(!concept){
+    const w = weakestTopics(u.id, 1)[0];
+    if(w && String(w.topic).trim()) concept = String(w.topic).trim().slice(0, 40);
+  }
+  if(!concept){
+    const s = stuckTopics(u.id, 7, 1)[0];
+    if(s && String(s.subject).trim()) concept = String(s.subject).trim().slice(0, 40);
+  }
+  if(!concept) return res.status(404).json({error:'오늘 배운 게 아직 없어요. 같이 공부하고 올까?'});
+  const q = await generateTeachChallenge(u, concept);
+  // 이전 날짜의 미답변 도전은 버린다(하루 단위 정합)
+  pendingTeach.set(u.id, { day, a:q.a, b:q.b, correctChoice:q.correctChoice, concept });
+  bumpDailyCounter(u.id, day, 'teach_challenge');
+  // 어느 문장이 옳은지는 응답에 담지 않는다 — 채점은 POST /api/teach/challenge/answer 가 한다.
+  const coTaught = coTeacherOf(u.id, concept);   // ★ v1.71: 친구도 가르친 개념이면 닉네임만(내용 비공개)
+  res.json({ ok:true, concept, statements:[{id:'a', text:q.a}, {id:'b', text:q.b}],
+    ...(coTaught ? { coTaught } : {}) });
+});
+
+// 도전 채점 — 출제 기록(메모리 Map)이 없으면 먼저 받아 달라고 한다.
+//   정답: bumpMastery('correct') + understanding +2(explain 스타일) / 오답: bumpMastery('wrong').
+//   셀은 지급하지 않는다(teach-back 계열 = explain 와 동일 원칙).
+app.post('/api/teach/challenge/answer', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const choice = String(b.choice || '').toLowerCase();
+  if(choice !== 'a' && choice !== 'b') return res.status(400).json({error:'a 또는 b 중에 하나만 골라 줘'});
+  const p = pendingTeach.get(u.id);
+  if(!p || p.day !== today()) return res.status(404).json({error:'먼저 도전을 받아 줄래?'});
+  pendingTeach.delete(u.id);   // 1회 채점 후 소멸 — 재전송으로 점수 파밀 불가
+  const correct = choice === p.correctChoice;
+  const card = db.prepare('SELECT hint_l2 FROM knowledge_cards WHERE topic=?').get(p.concept);
+  let why;
+  let lampRes = null;
+  if(correct){
+    // why 는 정답을 알려주는 문장이 아니라 «한 번 더 생각하게 하는» 힌트(hint_l2 이하만).
+    why = (card && card.hint_l2)
+      ? String(card.hint_l2)
+      : `«${p.concept}» 문장을 잘 구분했어! 왜 그렇게 생각했는지 한마디만 더 해 볼래?`;
+    bumpMastery(u.id, p.concept, 'correct');
+    lampRes = lightLamp(u.id, p.concept);   // ★ v1.71: 도전 정답도 등불을 밝힌다(bumpMastery 유지)
+    // explain(/api/chat/explain) 과 같은 스타일: users.understanding 를 서서히 올린다(+2)
+    db.prepare('UPDATE users SET understanding = understanding + 2 WHERE id=?').run(u.id);
+  }else{
+    why = (card && card.hint_l2)
+      ? `아직이야! 힌트: ${card.hint_l2}`
+      : `괜찮아, 틀려 보면 뇌가 자라는 거야. «${p.concept}» 문장을 한 번 더 천천히 읽어 볼래?`;
+    bumpMastery(u.id, p.concept, 'wrong');
+  }
+  res.json({ ok:true, correct, correctChoice: p.correctChoice, why,
+    // ★ 2026-11-21 (v1.74) B1: 정답 응답에만 삼막 플래그를 단다(1막=첫 등불 · 3막=첫 수정화).
+    ...(lampRes && lampRes.first ? { firstLamp:true } : {}),
+    ...(lampRes && lampRes.crystalNow ? { crystalNow:true } : {}) });
+});
+
+// ============================================================
+// ★ 2026-11-20 / v1.71 «루미는 잊어버려» — 기억 등불 / 안개 속의 탑 / 마을 루틴 엔드포인트.
+//   전부 결정론(날짜의 순수 함수) · LLM 없음 · 셀 미지급(보상 = «루미의 기억이 맑아지는 것»).
+//   프론트 계약: /api/lamps · /api/tower/today · /api/tower/answer · /api/robot/routine
+// ============================================================
+
+// GET /api/lamps — 기억 등불 전체(decay 내림차순) + SOS(가장 안개 진 등불, 없으면 null)
+//   ★ 2026-11-21 (v1.74) A2/A3/B1 계약 확장:
+//     · teachCount      — «빛의 조각» 명예 카운트(users.teach_count)
+//     · nextBadge       — 다음 딱지 { at:10|50|100, have } (10/50/100 모두 받았으면 null)
+//     · sosFirst        — «안개를 처음 겪음» 순간이 이번 응답까지 미전달 상태면 true(1회만)
+//     · 등불별 blockedBy — 선수개념 중 decay≥50 인 첫 토픽(없으면 null — «먼저 «X» 부터» 표시용)
+app.get('/api/lamps', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const day = today();
+  const { lamps, sos, sosFirst } = lampsFor(u.id);
+  // ★ B1 2막 전달 보장: hello/next-action 등 «다른 길» 에서 먼저 안개를 겪었어도
+  //   보류 플래그(ob_sos_pending)를 이 응답으로 소비해 «최초 1회» 가 누락되지 않게 한다.
+  let sosFirstOut = !!sosFirst;
+  try{
+    if(dailyCounterOf(u.id, day, 'ob_sos_pending') > 0){
+      sosFirstOut = true;
+      db.prepare("DELETE FROM daily_counters WHERE user_id=? AND day=? AND kind='ob_sos_pending'").run(u.id, day);
+    }
+  }catch(e){}
+  const uRow = db.prepare('SELECT teach_count FROM users WHERE id=?').get(u.id);
+  const teachCount = Number((uRow && uRow.teach_count) || 0);
+  const decayMap = new Map(lamps.map(l => [l.topic, l.decay]));
+  res.json({ ok:true,
+    teachCount,
+    nextBadge: nextBadgeFor(teachCount),
+    ...(sosFirstOut ? { sosFirst:true } : {}),
+    lamps: lamps.map(l => ({ topic: l.topic, decay: l.decay, crystal: l.crystal ? 1 : 0,
+      reinforce: l.reinforce, litDay: l.lit_day, immune: String(l.immune_day || '') === day,
+      blockedBy: blockedByFor(l.topic, decayMap) })),
+    sos });
+});
+
+// GET /api/tower/today — «안개 속의 탑» 출제.
+//   floors 의 statement 에 «왜곡 여부» 표시를 주지 않는다 — 아이가 원래 말/안개 낀 말을 맞히는 게 놀이.
+app.get('/api/tower/today', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const day = today();
+  const { lamps } = lampsFor(u.id);
+  const deck = towerDeckFor(u.id, day, lamps);
+  if(!deck.length) return res.status(404).json({ error:'기억 등불이 아직 없어요. 루미에게 뭔가 가르쳐 줄래?' });
+  const boss = towerIsBoss(day);
+  const floors = towerStateFor(u.id, day, deck, boss);
+  res.json({ ok:true, day,
+    floors: floors.map(f => ({ floor: f.floor, concept: f.concept, statement: f.statement })),
+    boss,
+    clearedMask: dailyCounterOf(u.id, day, 'tower_clears'),
+    ended: dailyCounterOf(u.id, day, 'tower_ended') >= 1 });
+});
+
+// POST /api/tower/answer — «원래 말 vs 안개 낀 말» 판정.
+//   순서 강제: floor 는 반드시 popcount(clearedMask) 와 같아야 한다(아래층부터).
+//   정답 → clearedMask 비트 + 그 층 등불 immune_day=오늘 + understanding(+1, BOSS +3).
+//   오답 → fogPenalize + tower_ended(오늘 종료). 셀은 지급하지 않는다.
+app.post('/api/tower/answer', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const day = today();
+  if(dailyCounterOf(u.id, day, 'tower_ended') >= 1)
+    return res.status(429).json({ error:'오늘의 탑은 여기까지… 내일 다시 올래?' });
+  const choice = String(b.choice || '').toLowerCase();
+  if(choice !== 'original' && choice !== 'fogged')
+    return res.status(400).json({ error:'원래 말인지 안개 낀 말인지 골라 줘' });
+  const { lamps } = lampsFor(u.id);
+  const deck = towerDeckFor(u.id, day, lamps);
+  if(!deck.length) return res.status(404).json({ error:'기억 등불이 아직 없어요. 루미에게 뭔가 가르쳐 줄래?' });
+  const boss = towerIsBoss(day);
+  const floors = towerStateFor(u.id, day, deck, boss);
+  const floor = Number(b.floor);
+  if(!Number.isInteger(floor) || floor < 0 || floor >= floors.length)
+    return res.status(400).json({ error:'그런 층은 없어. 탑을 다시 볼래?' });
+  const clearedMask = dailyCounterOf(u.id, day, 'tower_clears');
+  if(towerPopcount(clearedMask) !== floor)
+    return res.status(400).json({ error:'아래층부터 차례대로 올라가야 해' });
+  const info = floors[floor];
+  const expected = info.fogged ? 'fogged' : 'original';
+  if(choice === expected){
+    const mask = towerClearBitSet(u.id, day, floor);
+    // ★ 이 층의 등불은 오늘 안개 면역(다시 가르친 것과 같은 효과)
+    try{ db.prepare('UPDATE memory_lamps SET immune_day=? WHERE user_id=? AND topic=?').run(day, u.id, info.concept); }catch(e){}
+    const isBossFloor = boss && floor === deck.length;
+    db.prepare('UPDATE users SET understanding = understanding + ? WHERE id=?').run(isBossFloor ? 3 : 1, u.id);
+    return res.json({ ok:true, correct:true, concept: info.concept, clearedMask: mask,
+      done: towerPopcount(mask) >= floors.length });
+  }
+  fogPenalize(u.id, info.concept);
+  towerEndedSet(u.id, day);
+  // why 는 «그 문장의 정체» 를 부드럽게 알려주는 한 줄(원래 문장은 taught/카드 비유만 사용 — 정답 아님).
+  const why = info.fogged
+    ? `사실 이 문장은 안개가 흐린 말이었어. 루미의 원래 말은 «${info.original}» 이야. 다시 가르쳐 주면 기억이 맑아져!`
+    : `«${info.statement}» 는 안개 안 낀 «원래 말» 이었어. 괜찮아, 루미의 기억은 내일도 여기 있을게!`;
+  return res.json({ ok:true, correct:false, expected, concept: info.concept, clearedMask, ended:true, why });
+});
+
+// POST /api/robot/routine — 마을 스팟 «하루의 시작 인사». 전부 결정론 규칙(LLM 없음).
+//   well(우물)=복습 · mill(풍차)=새 개념 · bell(종탑)=자랑.
+app.post('/api/robot/routine', (req,res)=>{
+  const u = authUser(req);
+  if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const spot = String((req.body || {}).spot || '');
+  if(!['well','mill','bell'].includes(spot)) return res.status(400).json({error:'마을 장소가 알 수 없어'});
+  const day = today();
+  let opener = '';
+  if(spot === 'well'){
+    // ★ 우물 = 복습. 가장 안개 진 등불을 «흘러가는 물» 에 빌려서 다시 배우기를 청한다.
+    const fl = fogHeaviestReadonly(u.id, 1);
+    if(fl){
+      opener = `«${fl.topic}» 이 물처럼 흘러가고 있어… 여기서 다시 배워 줄래?`;
+    }else{
+      const due = dueReviewCount(u.id);
+      opener = due > 0
+        ? `우물이 반짝여. 밀린 복습 카드 ${due}장, 여기서 한 장 볼래?`
+        : '오늘은 복습할 카드가 없어. 물이 이만큼 맑아!';
+    }
+  }else if(spot === 'mill'){
+    // ★ 풍차 = 새 개념. 오늘 계획의 다음 단계 → 없으면 가장 약한 개념 → 이번 주 주제.
+    let next = null;
+    try{
+      const row = db.prepare('SELECT plan_json FROM learning_plans WHERE user_id=? AND day=?').get(u.id, day);
+      const plan = row ? JSON.parse(row.plan_json) : null;
+      const steps = (plan && plan.steps) || [];
+      next = steps.find(s => !s.done) || null;
+    }catch(e){}
+    const concept = (next && next.title) || (weakestTopics(u.id, 1)[0] || {}).topic || currentTopic().topic;
+    opener = `풍차가 도는 김에 «${concept}» 도 머리에 돌려 볼까?`;
+  }else{
+    // ★ 종탑 = 자랑. 최근 수정 구슬 → 최근 taught 순으로 «자랑거리» 를 고른다.
+    let topic = null, crystal = false;
+    try{
+      const c = db.prepare('SELECT topic FROM memory_lamps WHERE user_id=? AND crystal=1 ORDER BY lit_day DESC LIMIT 1').get(u.id);
+      if(c){ topic = String(c.topic); crystal = true; }
+    }catch(e){}
+    if(!topic){
+      try{
+        const m = db.prepare("SELECT key FROM user_memories WHERE user_id=? AND kind='taught' ORDER BY updated_at DESC LIMIT 1").get(u.id);
+        if(m) topic = String(m.key || '').replace(/^taught:/, '').replace(/_/g, ' ').trim().slice(0, 40);
+      }catch(e){}
+    }
+    opener = (crystal && topic)
+      ? `«${topic}» 는 이제 수정 구슬이 됐어! 종처럼 울리고 다녀도 돼.`
+      : (topic ? `«${topic}» 를 배운 게 루미의 자랑이야. 종소리처럼 마을에 퍼뜨려 볼래?`
+               : '종탑은 자랑할 때 가장 크게 울려. 오늘 뭘 배웠어?');
+  }
+  res.json({ ok:true, opener });
 });
 
 // ★ v1.54 «진짜 토큰 스트리밍» — 모델이 만드는 대로 흘려보낸다.
@@ -4498,19 +6341,39 @@ app.post('/api/chat/stream', async (req,res)=>{
   res.on('close', ()=>{ closed = true; });
   const send = (o)=>{ if(closed) return; try{ res.write(`data: ${JSON.stringify(o)}\n\n`); }catch(e){} };
 
-  const c = buildChatContext(u, mode, msg, day);
-  send({ type:'meta', mode, hintLevel: mode === 'learn' ? c.wantLevel : null,
+  const c = buildChatContext(u, mode, msg, day, b.style);
+  send({ type:'meta', mode, hintLevel: mode === 'learn' ? (c.direct ? null : c.wantLevel) : null,
     session: c.sess ? { stage:c.sess.stage, level:c.wantLevel, turns:(c.sess.turns||0)+1, stuckType:c.stuckGuess } : null,
     concept: c.knownConcept });
+
+  // ★ v1.78: L1 은 LLM 을 부르지 않는다 — 카드의 «되묻기» 문장을 그대로 보낸다.
+  //   모델이 매번 정의를 말해 «L1·L2·L3 가 다 같은 설명» 이 되던 문제를 규칙으로 고정(비용·지연도 절감).
+  if(mode === 'learn' && !c.direct && (c.wantLevel || 1) <= 1 && c.focusCard && String(c.focusCard.hint_l1 || '').trim()){
+    const line = `같이 생각해 보자. ${String(c.focusCard.hint_l1).trim()}`;
+    try{
+      saveChatTurn(u.id, msg, line, mode, { hintLevel: 1, topic: c.focusCard.topic });
+      if(c.sess){
+        db.prepare(`UPDATE chat_sessions SET stage='L1', stage_turns=1, turns=turns+1, concept=?, updated_at=datetime('now','+9 hours') WHERE id=?`)
+          .run(c.knownConcept, c.sess.id);
+      }
+    }catch(e){}
+    send({ type:'delta', text: line });
+    send({ type:'done', ok:true, mode, reply: line, hintLevel: 1, followUp:null, explain:null,
+      session: c.sess ? { stage:'L1', level:1, turns:(c.sess.turns || 0) + 1, stuckType: c.stuckGuess } : null,
+      wrapUp:null, left: Math.max(0, limit - used - 1),
+      understanding: (profileFor(u.id).understanding || 0), solved:false,
+      balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+    return res.end();
+  }
 
   const system = `너는 DOROBUS의 로봇 "${c.robot?c.robot.name:'루미'}"(성격: ${c.robot?c.robot.personality:'반짝이'})다.
 대상: 초등 저학년~고학년(7-11세). 아주 쉬운 한국어.
 이번 주 주제: "${c.topic.topic}"(CH.${c.topic.chapter}). 학습자 Lv.${u.level||1}, understanding ${c.profile.understanding||0}.
 ${c.moodNote}
-[모드=${mode}] ${CHAT_MODE_RULES[mode]}
+[모드=${mode}] ${(typeof c !== 'undefined' ? c.direct : direct) ? DIRECT_RULE : CHAT_MODE_RULES[mode]}
 ${mode === 'learn' ? `[이번 대화] 목표: "${c.knownConcept}" · 지금 단계: L${c.wantLevel}${c.sess ? ` (이 단계 ${c.sess.stage_turns + 1}번째)` : ''} · 이미 해본 것: ${c.wantLevel > 1 ? 'L1 되묻기' : '없음'}${c.wantLevel > 2 ? ', L2 비유' : ''}
 ${c.sessionMemo ? `[지금까지의 대화]\n${c.sessionMemo}\n` : ''}[막힘 유형] ${c.stuckGuess} — ${STUCK_RULES[c.stuckGuess]}
-[말하기] 두 문장·90자. 끝에 반드시 질문 1개.
+${c.interest ? `[아이의 관심사] 비유는 «${c.interest}» 영역에서 들어 준다\n` : ''}${c.fade ? `[숙련도 높음] 힌트는 한 줄로만. 비유·예시를 덧붙이지 마라\n` : ''}${c.wantLevel <= 1 ? L1_CHOICE_RULE + '\n' : ''}${c.frustrated ? `[감정 신호] 아이가 좌절 중이다. 이번 턴은 새 힌트를 주지 말고, 한 문장으로 «틀려도 뇌가 자라는 거야» 류의 성장 마인드셋 다독임 + 편안해할 짧은 질문으로 마무리해라. 정답·힌트 금지.\n` : ''}${c.fogNote ? c.fogNote + '\n' : ''}[말하기] 두 문장·90자. 끝에 반드시 질문 1개. ${TAG_LINE_RULE}
 ` : ''}[지식 카드]
 ${c.cardText}
 [루미가 기억하는 것]
@@ -4519,33 +6382,73 @@ ${c.memText}
 
   const t0 = Date.now();
   let full = '';
+  let llmRes = null;
+  // ★ v1.70 ⑥: delta 차단 — 누적 텍스트에 «⟦» 가 나타나면 화면에는 그 앞부분만 보내고
+  //   이후 delta 는 전부 끊는다(아이 화면에 태그가 노출되지 않게). 누적(acc)은 계속 쌓아
+  //   done 시점에 parseTagLine 으로 본문만 꺼낸다.
+  let tagSeen = false;
+  let acc = '';
+  const onDelta = (d)=>{
+    if(tagSeen) return;
+    acc += d;
+    const idx = acc.indexOf('⟦');
+    if(idx >= 0){
+      tagSeen = true;
+      const before = acc.slice(0, idx);
+      if(before) send({ type:'delta', text: before });
+      return;
+    }
+    send({ type:'delta', text: d });
+  };
   try{
-    full = await callLLMStream('', {
+    llmRes = await callLLMStream('', {
       messages: [{ role:'system', content: system }, ...c.hist, { role:'user', content: msg }],
       temperature: mode === 'learn' ? 0.7 : 0.9,
       maxTokens: mode === 'learn' ? 140 : 170,
-      // ★ v1.56: 수다(chat) 도 EXAONE 우선. 마음 체크(reflect) 만 싼 모델 우선.
+      // ★ v1.57 주석 정정: LLM_FORCE_FAST 기본값(true) 이면 prefer:'quality' 는 동작하지 않고
+      //   모든 모드가 «싼 모델(DeepSeek) 우선» 이다. 품질 우선은 LLM_FORCE_FAST=0 일 때만 유효.
       prefer: (mode === 'learn' || mode === 'chat') ? 'quality' : 'fast',
       // ★ v1.58: 화면에서도 «두 문장» 을 지킨다 — 세 번째 문장이 시작되면 읽기를 멈춘다.
       maxSentences: mode === 'learn' ? 2 : 0,
-    }, (d)=>{ send({ type:'delta', text:d }); });
+    }, onDelta);
+    full = (llmRes && llmRes.text) || '';
   }catch(e){ full = ''; }
-  const us = lastLLMUsage || {};
+  // ★ v1.70 ⑥: learn 모드는 누적 텍스트에서 태그 줄을 뗀다(저장·done.reply 에 태그가 남지 않는다).
+  //   태그가 없으면 parseTagLine 은 원문을 그대로 돌려준다(기존 동작과 동일).
+  let tagStuck = null;
+  if(mode === 'learn'){
+    const tl = parseTagLine(full);
+    tagStuck = tl.stuck;
+    full = tl.reply;
+  }
+  // ★ 계량은 반환값(llmRes) 기준 — 모듈 전역은 동시 요청에 오염된다.
+  const us = (llmRes && llmRes.usage) || {};
   try{ db.prepare(`INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok,
       prompt_tokens,completion_tokens,total_tokens,prompt_chars) VALUES(?,?,?,?,?,?,?,?,?)`)
-    .run(u.id, mode, lastLLMModel, Date.now()-t0, full ? 1 : 0,
+    .run(u.id, mode, (llmRes && llmRes.model) || null, Date.now()-t0, full ? 1 : 0,
       us.prompt_tokens || null, us.completion_tokens || null, us.total_tokens || null,
-      lastLLMPromptChars || null); }catch(e){}
+      (llmRes && llmRes.promptChars) || null); }catch(e){}
 
   // 스트리밍에서는 이미 보낸 글을 되돌릴 수 없으므로, 저장·요약용 텍스트만 다듬는다.
-  let reply = sanitizeLine(String(full || '').trim(), 600);
+  //   (안전 필터 길이 상한은 채팅 파이프라인 공통 600)
+  let reply = sanitizeLine(String(full || '').trim(), 600, 600);
   if(!reply){
     reply = mode === 'learn'
-      ? ((c.cards[0] && c.cards[0].hint_l1) || '같이 한 단계씩 해 보자. 지금 어디까지 했어?')
+      ? ((c.cards[0] && c.cards[0].hint_l1) || L1_FALLBACK_LINE)   // ★ v1.70 ③c: 폴백도 «두 가지 선택지» 예시로 통일
       : '지금은 생각이 잠깐 멈췄어. 다시 말해 줄래?';
     if(!full) send({ type:'delta', text: reply });
   }
   if(mode === 'learn') reply = limitSentences(reply, 2, 90);
+
+  // ★ 정답 누설 차단 — 비스트리밍 /api/chat 과 같은 규칙. 스트리밍은 이미 보낸 delta 를
+  //   되돌릴 수 없으므로, done 이벤트의 reply 로 «힌트 치환 텍스트» 를 내려
+  //   최종 표시·저장이 누설본을 그대로 쓰지 않게 한다(프론트는 done.reply 를 최종 텍스트로 반영).
+  let hintLevel = mode === 'learn' ? (c.direct ? null : c.wantLevel) : null;
+  if(mode === 'learn' && /(정답은|정답:|```)/.test(reply)){
+    reply = (c.cards[0] && c.cards[0].hint_l3) || '정답 대신 힌트를 줄게. 먼저 스스로 한 단계만 해 볼까?';
+    hintLevel = 3;
+    send({ type:'delta', text: reply });
+  }
 
   // ★ v1.58: 스트리밍에도 «스스로 해결» 보상을 연결한다(비스트리밍과 같은 규칙·같은 상한).
   let solvedNow = false;
@@ -4560,6 +6463,8 @@ ${c.memText}
       db.prepare("UPDATE learner_profile SET understanding = understanding + 3, updated_at=datetime('now','+9 hours') WHERE user_id=?").run(u.id);
       grantCell(u.id, 5, 'learning');
       solvedNow = true;
+      // ★ v1.70 ①: 스스로 해결 → 마스터리 가점(스트리밍 solvedNow 포함)
+      bumpMastery(u.id, learned, 'solved');
       upsertMemory(u.id, { kind:'learning', key:'understood:'+learned, value:learned+' 이해',
         confidence:0.9, source:'chat' });
     }
@@ -4571,17 +6476,23 @@ ${c.memText}
 
   let sessionInfo = null;
   if(mode === 'learn' && c.sess){
-    const nextStage = (c.gotIt && c.wantLevel >= 2) ? 'confirm' : ('L' + c.wantLevel);
-    const stageTurns = nextStage === c.sess.stage ? (c.sess.stage_turns + 1) : 1;
+    // ★ v1.70 ④: 좌절 턴은 단계(stage)·단계 턴 수(stage_turns)를 동결한다.
+    const nextStage = (c.direct || c.frustrated) ? c.sess.stage : ((c.gotIt && c.wantLevel >= 2) ? 'confirm' : ('L' + c.wantLevel));
+    // ★ v1.78: 좌절 턴에도 단계 턴 수를 올린다(동결하면 다독임만 무한 반복).
+    const stageTurns = c.direct ? (c.sess.stage_turns || 0) : ((nextStage === c.sess.stage) ? ((c.sess.stage_turns || 0) + 1) : 1);
     const memo = buildSessionSummary(c.sess.summary, msg, reply);
+    // ★ v1.70 ⑥: 태그가 유효하면 규칙 추정보다 우선한다.
+    const stuckType = tagStuck || c.stuckGuess;
     db.prepare(`UPDATE chat_sessions SET stage=?, stage_turns=?, turns=turns+1, concept=?, stuck_type=?,
       summary=?, updated_at=datetime('now','+9 hours') WHERE id=?`)
-      .run(nextStage, stageTurns, c.knownConcept, c.stuckGuess, memo, c.sess.id);
-    sessionInfo = { stage: nextStage, level: c.wantLevel, turns: (c.sess.turns||0)+1, stuckType: c.stuckGuess };
+      .run(nextStage, stageTurns, c.knownConcept, stuckType, memo, c.sess.id);
+    sessionInfo = { stage: nextStage, level: c.wantLevel, turns: (c.sess.turns||0)+1, stuckType };
   }
   saveChatTurn(u.id, msg, reply, mode, {
-    hintLevel: mode === 'learn' ? c.wantLevel : null,
+    hintLevel,   // ★ 누설 차단 시 3 로 저장(비스트리밍과 동일)
     followUp: null, solved: solvedNow,
+    // ★ v1.70 ⑥: 태그로 확정된 막힘 유형을 분석에 전달
+    stuckType: tagStuck || null,
     topic: c.focusCard ? c.focusCard.topic : null
   });
 
@@ -4589,12 +6500,20 @@ ${c.memText}
     ? { concept: c.focusCard ? c.focusCard.topic : '',
         prompt: '방금 이해한 걸 네 말로 설명해 줄래? 루미가 들을게.' }
     : null;
+  // ★ v1.78: L3 인데 «다독임» 만 나오면 실제 «다음 한 단계» 로 덮어쓴다.
+  //   (스트리밍은 생성 중 교체가 불가능하므로 done 이벤트의 reply 로 덮어쓴다 — 프론트가 이 값으로 갱신)
+  if(mode === 'learn' && (c.wantLevel || 0) >= 3 && /(괜찮아|자라|숨 한 번|기분은|편안해|편해졌)/.test(reply)){
+    const c3 = c.focusCard || {};
+    reply = `${String(c3.hint_l3 || '').trim() || '먼저 한 단계만 해 보자.'} 지금 해 볼래?`;
+  }
   const p2 = profileFor(u.id);
-  send({ type:'done', ok:true, mode, reply, hintLevel: mode === 'learn' ? c.wantLevel : null,
+  send({ type:'done', ok:true, mode, reply, hintLevel,   // ★ 누설 차단 시 치환 텍스트+힌트 레벨 3
     followUp:null, explain, session: sessionInfo,
     wrapUp: (mode === 'learn' && sessionInfo && sessionInfo.turns >= 6)
       ? '오늘 대화는 여기까지. 내일 이어서 보자!' : null,
     left: Math.max(0, limit - used - 1), understanding: p2.understanding || 0, solved: solvedNow,
+    // ★ v1.70 ④: 좌절 턴일 때만 frustration:true (프론트 표시용)
+    ...(c.frustrated ? { frustration: true } : {}),
     balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
   res.end();
 });
@@ -4686,12 +6605,14 @@ app.post('/api/chat/analysis/rebuild', (req,res)=>{
 });
 
 // 대화 초기화 시 «분석 결과» 도 함께 지운다 — 원문만 지우면 고아 분석행이 남는다.
+// ★ chat_sessions(힌트 단계 상태)도 같이 지운다 — 안 그러면 다음 대화가 «어제 단계»에서 이어진다.
 app.post('/api/chat/reset', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   db.prepare('DELETE FROM chat_analyses WHERE user_id=?').run(u.id);
   db.prepare('DELETE FROM chat_reports WHERE user_id=?').run(u.id);
   db.prepare('DELETE FROM chat_messages WHERE user_id=?').run(u.id);
+  db.prepare('DELETE FROM chat_sessions WHERE user_id=?').run(u.id);
   db.prepare("UPDATE learner_profile SET last_summary=NULL, updated_at=datetime('now','+9 hours') WHERE user_id=?").run(u.id);
   res.json({ ok:true });
 });
@@ -4719,25 +6640,56 @@ function seededShuffle(arr, seed){
   }
   return a;
 }
+function puzzleSeed(uid){ return [...today()].reduce((a,c)=>a*31 + c.charCodeAt(0), uid * 97); }
+// ★ 오늘의 퍼즐 카드 id 집합 재계산 — hint_l3(사실상 정답)를 이 집합에만 내려 주기 위함
+function dailyPuzzleIds(uid){
+  const all = db.prepare('SELECT id FROM knowledge_cards ORDER BY id').all();
+  return seededShuffle(all, puzzleSeed(uid)).slice(0, 3).map(c=>c.id);
+}
+// ★ 마지막 연습 세트(메모리) — 연습 모드는 매번 재추첨이므로 이번에 실제로 준 카드만 기억한다
+const lastPracticeSet = new Map(); // user_id → { day, ids:[...] }
 app.get('/api/puzzle/today', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
   const all = db.prepare('SELECT * FROM knowledge_cards ORDER BY id').all();
-  const seed = [...today()].reduce((a,c)=>a*31 + c.charCodeAt(0), u.id * 97);
+  const seed = puzzleSeed(u.id);
   // ★ 2026-10-28: 연습 모드는 5문제·보상 없음. 오늘의 퍼즐은 3문제·+30셀.
   const practice = !!(req.query && String(req.query.practice) === '1');
   const count = practice ? 5 : 3;
   const picked = practice
     ? seededShuffle(all, Date.now() + u.id).slice(0, count)
     : seededShuffle(all, seed).slice(0, count);
+  if(practice) lastPracticeSet.set(u.id, { day: today(), ids: picked.map(c=>c.id) });
   const questions = picked.map(c=>{
     let quiz = {}; try{ quiz = JSON.parse(c.quiz || '{}'); }catch(e){}
+    // ★ hint_l3 는 대부분 «다음 단계» 를 알려줘 사실상 정답이다 — 오늘의 퍼즐 응답에 담지 않고,
+    //   아이가 요청할 때만 POST /api/puzzle/hint(level=3) 로 꺼내 준다.
     return { cardId:c.id, topic:c.topic, question:quiz.q, options:quiz.options || [],
-             hints:[c.hint_l1, c.hint_l2, c.hint_l3] };
+             hints:[c.hint_l1, c.hint_l2] };
   });
   const done = practice ? false
     : !!db.prepare("SELECT id FROM game_logs WHERE user_id=? AND day=? AND kind='puzzle'").get(u.id, today());
   res.json({ ok:true, questions, reward: practice ? 0 : 30, done, practice });
+});
+
+// ★ 힌트 요청(필요할 때만 한 단계씩) — 퍼즐 목록 응답에는 hint_l3 를 실어 보내지 않는다.
+//   요청: POST /api/puzzle/hint  body: { cardId:Number, level:1|2|3 }  (X-Token 인증)
+//   응답: { ok:true, level, text:'힌트 문장' }  — level=3 일 때만 hint_l3 를 돌려준다.
+app.post('/api/puzzle/hint', (req,res)=>{
+  const u = authUser(req);
+  if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const b = req.body || {};
+  const card = db.prepare('SELECT * FROM knowledge_cards WHERE id=?').get(Number(b.cardId)||0);
+  if(!card) return res.status(404).json({error:'문제를 찾을 수 없어요'});
+  const level = Math.max(1, Math.min(3, Number(b.level)||1));
+  // ★ L3 힌트는 사실상 정답 — 오늘의 퍼즐(또는 직전 연습 세트)에 포함된 카드에만 내려 준다.
+  //   그 외 카드를 열거해 정답 힌트를 긁어 가는 것을 막는다.
+  const ps = lastPracticeSet.get(u.id);
+  const allowed = level < 3
+    || dailyPuzzleIds(u.id).includes(card.id)
+    || (ps && ps.day === today() && ps.ids.includes(card.id));
+  const text = level === 1 ? card.hint_l1 : level === 2 ? card.hint_l2 : card.hint_l3;
+  res.json({ ok:true, level, text: (allowed ? text : null) || '이 문제엔 준비된 힌트가 없어. 한 번 더 생각해 보자!' });
 });
 
 app.post('/api/puzzle/answer', (req,res)=>{
@@ -4758,6 +6710,12 @@ app.post('/api/puzzle/answer', (req,res)=>{
         ON CONFLICT(user_id,card_id,due_date) DO UPDATE SET wrong_count=wrong_count+1, done=0`)
         .run(u.id, card.id, card.topic, quiz.q || '틀린 문제', JSON.stringify(quiz.options||[]), Number(quiz.answer), due);
     }catch(e){}
+    // ★ v1.70 ①: 오답 → 마스터리 감점. 같은 문제를 하루에 여러 번 «틀린 채 재전송» 해 점수를
+    //   끌어내리는 재전송 공격을 막기 위해, 개념당 하루 1회만 반영한다(daily_counters 가드).
+    //   bumpDailyCounter 의 반환값(증가 후 현재값)이 1일 때만 = 오늘 첫 오답일 때만 반영한다.
+    if(bumpDailyCounter(u.id, today(), 'puzzle_wrong:' + card.id) === 1){
+      bumpMastery(u.id, card.topic, 'wrong');
+    }
     const out = { ok:true, correct:false, hint: card.hint_l2 || '한 번 더 생각해 보자.' };
     // v1.37: 힌트를 다 쓴 뒤 또 틀리면 «정답을 알려주고» 다음 문제로 넘어갈 수 있게 한다(P3)
     if(Number(hintsLeft) <= 0){ out.reveal = Number(quiz.answer); out.next = true; }
@@ -4779,6 +6737,9 @@ app.post('/api/puzzle/answer', (req,res)=>{
     db.prepare("INSERT INTO game_logs(user_id,day,kind,score,reward) VALUES(?,?,?,?,?)")
       .run(u.id, today(), 'puzzle', f, reward);
   }catch(e){ return res.status(400).json({error:'오늘은 이미 풀었어!'}); }
+  // ★ v1.70 ①: 정답 → 마스터리 가점. game_logs UNIQUE(user,day,kind) 가드 덕에 하루 1회만 여기 온다.
+  //   (중간 문제(!final) 정답은 재전송으로 점수를 올릴 수 있어 가점을 넣지 않는다)
+  bumpMastery(u.id, card.topic, 'correct');
   grantCell(u.id, reward, 'game');
   const g = addExp(u.id, 15);
   res.json({ ok:true, correct:true, reward, firstTry:f, growth:g,
@@ -4810,6 +6771,8 @@ app.post('/api/review/answer', (req,res)=>{
     return res.json({ ok:true, correct:false, hint:(card && card.hint_l2) || '한 번 더 생각해 보자.' });
   }
   db.prepare('UPDATE review_cards SET done=1 WHERE id=?').run(r.id);
+  // ★ v1.70 ①: 복습 정답 → 마스터리 가점(done 플래그가 재전송을 막아 하루 1회만 반영된다)
+  bumpMastery(u.id, r.topic, 'review');
   grantCell(u.id, 5, 'review');
   const card = db.prepare('SELECT analogy FROM knowledge_cards WHERE id=?').get(r.card_id);
   res.json({ ok:true, correct:true, reward:5, explain:(card && card.analogy) || '',
@@ -4871,6 +6834,8 @@ app.post('/api/world/lesson/answer', (req,res)=>{
       hint: (c && c.hint_l2) || '한 번 더 생각해 보자.' });
   }
   db.prepare('UPDATE world_lessons SET solved=1 WHERE id=?').run(row.id);
+  // ★ v1.70 ①: 마을 수업 정답 → 마스터리 가점(solved 플래그가 재전송을 막는다)
+  bumpMastery(u.id, c.topic, 'lesson');
   grantCell(u.id, 5, 'world_lesson');
   const doneCnt = db.prepare('SELECT COUNT(*) c FROM world_lessons WHERE user_id=? AND day=? AND solved=1').get(u.id, today()).c;
   res.json({ ok:true, correct:true, reward:5, done:doneCnt, total:WORLD_ST,
@@ -4907,7 +6872,8 @@ app.post('/api/world/starfall', (req,res)=>{
   const u = authUser(req);
   if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
   const d = today();
-  const c = db.prepare("SELECT COUNT(*) c FROM cell_tx WHERE user_id=? AND source='starfall' AND substr(created_at,1,10)=?").get(u.id, d).c;
+  // ★ cell_tx 에는 created_at 이 없다(ts 컬럼 사용) — 잘못된 컬럼명으로 조회가 항상 실패했었다
+  const c = db.prepare("SELECT COUNT(*) c FROM cell_tx WHERE user_id=? AND source='starfall' AND substr(ts,1,10)=?").get(u.id, d).c;
   if(c >= 5) return res.json({ ok:true, capped:true, reward:0 });
   grantCell(u.id, 3, 'starfall');
   res.json({ ok:true, reward:3, balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
@@ -5444,7 +7410,8 @@ function seasonBoardRow(u){
   const s = db.prepare('SELECT * FROM seasons WHERE start_week<=? AND end_week>=? ORDER BY id DESC LIMIT 1').get(wk,wk);
   const claimed = !!db.prepare('SELECT 1 FROM season_claims WHERE user_id=? AND week=?').get(u.id, wk);
   return { weekStart:wk, name:s?s.name:'기본 시즌', tasks, done:tasks.filter(t=>t.done).length,
-           total:SEASON_TASKS.length, claimed, reward:s?(s.reward_cell||30):30 };
+           // ★ ?? 30 — 운영자가 0셀로 «보상 없음» 을 의도해도 30 으로 되돌려지던 버그 수정
+           total:SEASON_TASKS.length, claimed, reward:s?(s.reward_cell ?? 30):30 };
 }
 app.get('/api/season/board', (req,res)=>{
   const u = authUser(req);
@@ -5513,6 +7480,135 @@ app.post('/api/admin/season', (req,res)=>{
   if(!name) return res.status(400).json({error:'name 이 필요해요'});
   const r = db.prepare('INSERT INTO seasons(name,start_week,end_week,reward_cell) VALUES(?,?,?,?)').run(name,start,end,reward);
   res.json({ ok:true, id:r.lastInsertRowid });
+});
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) D2 지식 카드 관리(운영자 CRUD) — 알려진 문제 #3(knowledge_cards 무 UI) 종료.
+//   · GET    /api/admin/cards      — 목록(topic/퀴즈 질문/prereq/완성 상태)
+//   · POST   /api/admin/cards      — 추가(필드 검증 · topic 중복 금지)
+//   · PUT    /api/admin/cards/:id  — 편집(퀴즈/힌트/prereq 중심 — 준 필드만 갱신)
+//   · DELETE /api/admin/cards/:id  — 삭제
+//   «완성 상태(status)» 판정: concept · 퀴즈(질문+보기 4+정답 0~3) · 힌트 3단계가 모두 있으면 ok.
+// ============================================================
+// 저장된 quiz 문자열 → { q, options, answer } 객체(망가진 행도 안전하게 {})
+function cardQuizParse(quizRaw){
+  let qz = {};
+  try{ qz = (typeof quizRaw === 'string' ? JSON.parse(quizRaw) : (quizRaw || {})) || {}; }catch(e){ qz = {}; }
+  if(!Array.isArray(qz.options)) qz.options = [];
+  return qz;
+}
+function cardStatus(row){
+  const qz = cardQuizParse(row.quiz);
+  const ans = Number(qz.answer);
+  const ok = row.concept && String(qz.q || '').trim()
+    && qz.options.length === 4 && qz.options.every(o => String(o || '').trim())
+    && Number.isInteger(ans) && ans >= 0 && ans < 4
+    && row.hint_l1 && row.hint_l2 && row.hint_l3;
+  return ok ? 'ok' : 'incomplete';
+}
+// 카드 본문 검증 — 문제가 있으면 한국어 오류 문자열, 없으면 null
+function cardValidationError(b){
+  const topic = String(b.topic || '').trim();
+  if(!topic) return 'topic 이 필요해요';
+  if(topic.length > 60) return 'topic 은 60자 이내예요';
+  const concept = String(b.concept || '').trim();
+  if(!concept) return 'concept 이 필요해요';
+  const qz = b.quiz || {};
+  if(!String(qz.q || '').trim()) return '퀴즈 질문(quiz.q) 이 필요해요';
+  if(!Array.isArray(qz.options) || qz.options.length !== 4 || qz.options.some(o => !String(o || '').trim()))
+    return '보기(quiz.options) 는 빈 칸 없이 4 개여야 해요';
+  const ans = Number(qz.answer);
+  if(!Number.isInteger(ans) || ans < 0 || ans > 3) return '정답 번호(quiz.answer) 는 0~3 이어야 해요';
+  return null;
+}
+app.get('/api/admin/cards', (req,res)=>{
+  if(!requireAdmin(req,res)) return;
+  const rows = db.prepare('SELECT * FROM knowledge_cards ORDER BY chapter, id').all();
+  const cards = rows.map(r=>{
+    const qz = cardQuizParse(r.quiz);
+    return {
+      id:r.id, topic:r.topic, chapter:r.chapter, concept:r.concept || '',
+      analogy:r.analogy || '', example:r.example || '',
+      hint_l1:r.hint_l1 || '', hint_l2:r.hint_l2 || '', hint_l3:r.hint_l3 || '',
+      prereq:r.prereq || '', tags:r.tags || '',
+      question: String(qz.q || ''), quiz:qz, status: cardStatus(r),
+    };
+  });
+  res.json({ ok:true, total: cards.length, cards });
+});
+app.post('/api/admin/cards', (req,res)=>{
+  if(!requireAdmin(req,res)) return;
+  const b = req.body || {};
+  const norm = {
+    topic: String(b.topic || '').trim().slice(0, 60),
+    chapter: Math.max(1, Math.min(9, Math.round(Number(b.chapter) || 1))),
+    concept: String(b.concept || '').trim().slice(0, 120),
+    analogy: String(b.analogy || '').trim().slice(0, 120),
+    example: String(b.example || '').trim().slice(0, 120),
+    hint_l1: String(b.hint_l1 || '').trim().slice(0, 120),
+    hint_l2: String(b.hint_l2 || '').trim().slice(0, 160),
+    hint_l3: String(b.hint_l3 || '').trim().slice(0, 160),
+    prereq: String(b.prereq || '').trim().split(',').map(s => s.trim()).filter(Boolean).slice(0, 4).join(','),
+    tags: String(b.tags || '').trim().slice(0, 120),
+    quiz: { q:String((b.quiz && b.quiz.q) || '').trim().slice(0, 120),
+      options: Array.isArray(b.quiz && b.quiz.options) ? b.quiz.options.map(o => String(o || '').trim().slice(0, 60)) : [],
+      answer: Math.round(Number(b.quiz && b.quiz.answer) || 0) },
+  };
+  const e = cardValidationError(norm);
+  if(e) return res.status(400).json({error:e});
+  if(db.prepare('SELECT id FROM knowledge_cards WHERE topic=?').get(norm.topic))
+    return res.status(409).json({error:'같은 topic 카드가 이미 있어요'});
+  const r = db.prepare(`INSERT INTO knowledge_cards(topic,chapter,concept,analogy,example,hint_l1,hint_l2,hint_l3,quiz,tags,prereq)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(norm.topic, norm.chapter, norm.concept, norm.analogy, norm.example,
+         norm.hint_l1, norm.hint_l2, norm.hint_l3, JSON.stringify(norm.quiz), norm.tags, norm.prereq);
+  res.json({ ok:true, id:r.lastInsertRowid });
+});
+app.put('/api/admin/cards/:id', (req,res)=>{
+  if(!requireAdmin(req,res)) return;
+  const id = Number(req.params.id) || 0;
+  const cur = db.prepare('SELECT * FROM knowledge_cards WHERE id=?').get(id);
+  if(!cur) return res.status(404).json({error:'그 카드는 없어요'});
+  const b = req.body || {};
+  // ★ 준 필드만 갱신(quiz/hints/prereq 중심). 안 준 필드는 기존값 유지 — 실수로 내용을 지우는 일을 막는다.
+  const merged = {
+    topic: b.topic !== undefined ? String(b.topic).trim().slice(0, 60) : String(cur.topic),
+    chapter: b.chapter !== undefined ? Math.max(1, Math.min(9, Math.round(Number(b.chapter) || 1))) : Number(cur.chapter) || 1,
+    concept: b.concept !== undefined ? String(b.concept).trim().slice(0, 120) : String(cur.concept || ''),
+    analogy: b.analogy !== undefined ? String(b.analogy).trim().slice(0, 120) : String(cur.analogy || ''),
+    example: b.example !== undefined ? String(b.example).trim().slice(0, 120) : String(cur.example || ''),
+    hint_l1: b.hint_l1 !== undefined ? String(b.hint_l1).trim().slice(0, 120) : String(cur.hint_l1 || ''),
+    hint_l2: b.hint_l2 !== undefined ? String(b.hint_l2).trim().slice(0, 160) : String(cur.hint_l2 || ''),
+    hint_l3: b.hint_l3 !== undefined ? String(b.hint_l3).trim().slice(0, 160) : String(cur.hint_l3 || ''),
+    tags: b.tags !== undefined ? String(b.tags).trim().slice(0, 120) : String(cur.tags || ''),
+    prereq: b.prereq !== undefined
+      ? String(b.prereq).trim().split(',').map(s => s.trim()).filter(Boolean).slice(0, 4).join(',')
+      : String(cur.prereq || ''),
+    quiz: cardQuizParse(b.quiz !== undefined ? b.quiz : cur.quiz),
+  };
+  const qz = merged.quiz;
+  qz.q = String(qz.q || '').trim().slice(0, 120);
+  qz.options = (Array.isArray(qz.options) ? qz.options : []).map(o => String(o || '').trim().slice(0, 60));
+  while(qz.options.length < 4) qz.options.push('');
+  qz.options = qz.options.slice(0, 4);
+  qz.answer = Math.round(Number(qz.answer) || 0);
+  merged.quiz = qz;
+  const e = cardValidationError(merged);
+  if(e) return res.status(400).json({error:e});
+  if(merged.topic !== cur.topic && db.prepare('SELECT id FROM knowledge_cards WHERE topic=?').get(merged.topic))
+    return res.status(409).json({error:'같은 topic 카드가 이미 있어요'});
+  db.prepare(`UPDATE knowledge_cards SET topic=?, chapter=?, concept=?, analogy=?, example=?,
+    hint_l1=?, hint_l2=?, hint_l3=?, quiz=?, tags=?, prereq=? WHERE id=?`)
+    .run(merged.topic, merged.chapter, merged.concept, merged.analogy, merged.example,
+         merged.hint_l1, merged.hint_l2, merged.hint_l3, JSON.stringify(merged.quiz), merged.tags, merged.prereq, id);
+  res.json({ ok:true, updated:id });
+});
+app.delete('/api/admin/cards/:id', (req,res)=>{
+  if(!requireAdmin(req,res)) return;
+  const id = Number(req.params.id) || 0;
+  const r = db.prepare('DELETE FROM knowledge_cards WHERE id=?').run(id);
+  if(!r.changes) return res.status(404).json({error:'그 카드는 없어요'});
+  res.json({ ok:true, deleted:id });
 });
 
 
@@ -5592,6 +7688,107 @@ app.post('/api/thoughts/fix', (req, res) => {
     balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance
   });
 });
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) F «루미의 편지» — 오래 떠난 아이의 보호자에게 «기억 안개» 알림 메일.
+//   SOFT DEPENDENCY — 절대 하드 require 하지 않는다. nodemailer 미설치 · MAIL_SMTP_* 미설정이면
+//   «조용히 꺼진다»(기능 없음 = 원래 동작). 배포 환경이 메일을 못 써도 서버는 죽지 않는다.
+//   실행 조건(전부 충족해야 보낸다):
+//   · KST 19 시 시간대 + daily_counters(user_id=0, kind='mailrun') 의 «오늘 안 보냄»
+//   · 대상: parent_optin=1 · parent_email 있음 · 마지막 로그인 ≥3일 경과 · decay≥50 등불 존재
+//   · 사용자 주간 한도: 최근 7일 안에 outmail 2회까지(kind='outmail' — 하루 1행이라 행 수 = 횟수)
+//   · 내용은 «개념 이름 + 일수» 만 — 아이의 대화·성적 등 개인 데이터는 보내지 않는다.
+// ============================================================
+let nodemailer = null;
+try{ nodemailer = require('nodemailer'); }catch(e){ /* 미설치 — 기능 조용히 꺼짐 */ }
+const MAIL_SMTP_HOST = String(process.env.MAIL_SMTP_HOST || '');
+const MAIL_SMTP_PORT = Number(process.env.MAIL_SMTP_PORT || 587);
+const MAIL_SMTP_USER = String(process.env.MAIL_SMTP_USER || '');
+const MAIL_SMTP_PASS = String(process.env.MAIL_SMTP_PASS || '');
+const MAIL_FROM = String(process.env.MAIL_FROM || MAIL_SMTP_USER);
+const MAIL_READY = !!(nodemailer && MAIL_SMTP_HOST && MAIL_SMTP_USER && MAIL_SMTP_PASS && MAIL_FROM);
+if(!MAIL_READY) console.log('ℹ️ [mail] 루미의 편지 꺼짐 — nodemailer 미설치 또는 MAIL_SMTP_HOST/USER/PASS 환경변수 없음');
+else console.log(`✉️ [mail] 루미의 편지 준비됨 — ${MAIL_SMTP_HOST}:${MAIL_SMTP_PORT}`);
+
+// 이메일 마스킹 — «lm*****@163.com» 처럼 앞 2글자 + 도메인만 남긴다(대시보드 표시용).
+function maskEmail(e){
+  const s = String(e || '');
+  const at = s.indexOf('@');
+  if(at <= 0) return '';
+  const name = s.slice(0, at), dom = s.slice(at);
+  return name.slice(0, 2) + '*'.repeat(Math.max(1, Math.min(12, name.length - 2))) + dom;
+}
+// 지금이 KST 19 시 시간대인가(순수 판정 — 타이머는 이 함수만 믿는다)
+function isMailHourKST(){
+  try{
+    const h = Number(new Intl.DateTimeFormat('en-GB', { timeZone:'Asia/Seoul', hour:'2-digit', hour12:false }).format(new Date()));
+    return h === 19;
+  }catch(e){ return false; }
+}
+// 최근 7일 안에 «루미의 편지» 를 보낸 횟수(daily_counters.kind='outmail' — 하루 1행 = 1회)
+function outmailCount7d(uid){
+  try{
+    return db.prepare("SELECT COUNT(*) c FROM daily_counters WHERE user_id=? AND kind='outmail' AND day>=?")
+      .get(uid, dayKST(-6)).c;
+  }catch(e){ return 0; }
+}
+let mailTransporter = null;
+async function rumiLetterRun(){
+  if(!MAIL_READY) return;                 // 기능 꺼짐 — 아무 것도 하지 않는다
+  if(!isMailHourKST()) return;            // 19 시 시간대가 아니면 대기
+  const day = today();
+  if(dailyCounterOf(0, day, 'mailrun') > 0) return;   // 오늘 이미 실행 — 멱등 보장
+  try{
+    const cand = db.prepare(`SELECT id, nickname, parent_email, last_visit FROM users
+      WHERE parent_optin=1 AND parent_email IS NOT NULL AND parent_email<>''`).all();
+    let sent = 0, checked = 0;
+    if(!mailTransporter){
+      mailTransporter = nodemailer.createTransport({
+        host: MAIL_SMTP_HOST, port: MAIL_SMTP_PORT, secure: MAIL_SMTP_PORT === 465,
+        auth: { user: MAIL_SMTP_USER, pass: MAIL_SMTP_PASS },
+      });
+    }
+    for(const u of cand){
+      checked++;
+      // 마지막 활동 ≥3일(로그인 기록 last_visit 기준 — 기록이 아예 없으면 오래 떠난 것으로 본다)
+      const lv = String(u.last_visit || '');
+      const idleDays = lv ? daysBetween(lv, day) : 99;
+      if(idleDays < 3) continue;
+      // decay≥50 인 등불이 있어야 «기억 안개» 알림일 가치가 있다(읽기 전용 조회 — SOS 우편 부작용 없음)
+      const fog = fogHeaviestReadonly(u.id, 50);
+      if(!fog) continue;
+      if(outmailCount7d(u.id) >= 2) continue;   // 주간 한도: 7일 2통
+      const subject = `«루미» 가 «${u.nickname}» 를 기다려요`;
+      const text = [
+        '안녕하세요, 보호자님.',
+        `${u.nickname} 님이 루미와 ${idleDays}일 동안 함께하지 않았어요.`,
+        `루미의 기억 중 «${fog.topic}» 이 안개로 많이 흐려졌어요.`,
+        `오늘 «${fog.topic}» 를 한 번 다시 가르쳐 주면 루미의 기억이 맑아져요.`,
+        '',
+        '(이 편지는 개념 이름과 일수만 담고 있습니다. 아이의 대화·성적 같은 개인 데이터는 보내지 않아요.)',
+        '(편지 수신을 원하지 않으면 루미 앱의 보호자 화면에서 동의를 끄세요.)',
+      ].join('\n');
+      try{
+        await mailTransporter.sendMail({ from: MAIL_FROM, to: String(u.parent_email), subject, text });
+        bumpDailyCounter(u.id, day, 'outmail');
+        sent++;
+      }catch(e){
+        console.log('⚠️ [mail] 발송 실패(#' + u.id + '):', e.message);
+      }
+    }
+    bumpDailyCounter(0, day, 'mailrun');   // 하루 1회 실행 완료 표시(실패가 있어도 재시도는 내일)
+    if(checked || sent) console.log(`✉️ [mail] 루미의 편지: 대상 ${checked}명 중 ${sent}통 발송`);
+  }catch(e){
+    console.log('⚠️ [mail] 루미의 편지 실행 오류:', e.message);
+  }
+}
+// «매시 정각» 요구의 단순·확실 변형: 부팅 시각과 무관하게 19시 창을 놓치지 않도록
+// 10분 폴링 + mailrun 일일 플래그로 «하루 1회» 를 보장한다(cron·외부 의존 없음, 프로세스 내 타이머).
+try{
+  const mailTick = setInterval(()=>{ rumiLetterRun(); }, 10 * 60 * 1000);
+  if(mailTick && mailTick.unref) mailTick.unref();   // 타이머가 종료를 막지 않게
+  setTimeout(()=>{ rumiLetterRun(); }, 90 * 1000);   // 부팅 직후에도 19시 창이면 즉시 한 번 확인
+}catch(e){ console.log('⚠️ [mail] 타이머 시작 실패:', e.message); }
 
 // 마지막 에러 핸들러 — 스택/내부 정보 노출 방지
 app.use((err,_req,res,_next)=>{ console.error('💥', err); res.status(500).json({error:'서버 오류가 났어요'}); });
