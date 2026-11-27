@@ -1738,12 +1738,13 @@ for(const [n,t,p,end] of seedSaleEnd){
 }
 // 이미 팔리고 있는 «무지개 스킨» 은 프론트 팔레트가 없어 사도 색이 안 바뀌었다 → v1.64 에서 팔레트 추가.
 
-// ---------- 3. LLM — 1차(사용자 지정 모델) → 2차(DeepSeek) → 프리셋 ----------
+// ---------- 3. LLM — 기본: DeepSeek → 1차(EXAONE) → 프리셋; LLM_FORCE_FAST=0: 1차 → DeepSeek ----------
 // ★ 2026-11-11: «새 API 를 DeepSeek 앞에 두고, 그 모델이 안 되면 DeepSeek 으로» 요청 반영.
-//   - 1차: PRIMARY_LLM_BASE_URL + PRIMARY_LLM_MODEL + primary_key.txt (OpenAI 호환)
-//   - 2차: DeepSeek (기존 동작 그대로)
-//   - 모델별 독립 회로 차단: 1차가 죽으면 60초(401/402 는 10분) 동안 건너뛰어
-//     매 요청마다 1차 타임아웃을 기다리지 않게 한다.
+//   v1.57부터 기본 실행 순서는 LLM_FORCE_FAST=1 (DeepSeek 우선)이다.
+//   - provider 배열: PRIMARY_LLM_BASE_URL + PRIMARY_LLM_MODEL + primary_key.txt (OpenAI 호환)
+//     → DeepSeek. 실행 순서는 LLM_FORCE_FAST로 정렬된다(기본 DeepSeek 우선).
+//   - 모델별 독립 회로 차단: 한 provider가 죽으면 60초(401/402 는 10분) 동안 건너뛰어
+//     매 요청마다 그 provider의 타임아웃을 기다리지 않게 한다.
 //   - 주소/모델명이 없으면 DeepSeek 단독으로 동작한다(하위 호환, 배포 안전).
 const fs = require('fs');
 function readKeyFile(name){
@@ -1784,7 +1785,9 @@ if(process.env.ROOMI_TEST_NO_LLM === '1') LLM_PROVIDERS.length = 0;
 const llmDown = {};
 let lastLLMModel = DEEPSEEK_MODEL;
 if(!PRIMARY_READY) console.log('ℹ️ [LLM] 1차 모델 미설정(주소·모델명 필요) → DeepSeek 단독');
-else console.log(`ℹ️ [LLM] 1차 ${PRIMARY_MODEL} → 2차 ${DEEPSEEK_MODEL}`);
+else console.log(LLM_FORCE_FAST
+  ? `ℹ️ [LLM] 1차 ${DEEPSEEK_MODEL} → 2차 ${PRIMARY_MODEL}`
+  : `ℹ️ [LLM] 1차 ${PRIMARY_MODEL} → 2차 ${DEEPSEEK_MODEL}`);
 
 function withTimeout(promise, ms){
   let t;

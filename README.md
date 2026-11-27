@@ -211,13 +211,14 @@ The database file is created on first run, including tables and seed data. Depen
 
 ### LLM chain
 
-The app tries the **primary model first** (LG K-EXAONE 2.5 via the EXAONE API Platform) and falls
-back to **DeepSeek** when the primary is unreachable, returns an error, times out, or returns an
-empty answer. If both fail, a deterministic Korean preset is used so the child never sees an empty
-reply. Each provider has its own circuit breaker, so a broken primary does not add latency to every
-later request.
+By default (`LLM_FORCE_FAST` unset), the app tries **DeepSeek first** and falls back to the
+**primary model** (LG K-EXAONE 2.5 via the EXAONE API Platform) when DeepSeek is unreachable,
+returns an error, times out, or returns an empty answer. Set `LLM_FORCE_FAST=0` to restore the
+quality-first order: EXAONE first, DeepSeek fallback. If both fail, a deterministic Korean preset
+is used so the child never sees an empty reply. Each provider has its own circuit breaker, so a
+broken provider does not add latency to every later request.
 
-The primary model is a reasoning model: reasoning cannot be disabled, so requests use
+EXAONE (when used) is a reasoning model: reasoning cannot be disabled, so requests use
 `reasoning_effort: low`, a larger token budget, and a longer timeout (`~22 s` for a full chat
 prompt vs `~1.5 s` for DeepSeek). Leading newlines in its answers are stripped.
 
