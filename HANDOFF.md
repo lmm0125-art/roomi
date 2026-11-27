@@ -531,6 +531,73 @@ node --experimental-sqlite tests/teach-upgrade.mjs
 BASE_URL=http://127.0.0.1:3931 node scripts/verifier-bench.mjs   # needs a running server with project keys
 ```
 
+### 14.2 Verifier gate coverage (v1.85)
+
+The deterministic gate (`contradictsCardOps` in `lib/learning-rules.js`, table `CARD_OP_RULES`) runs before the LLM on every teach-back. Regenerate this table with `node scripts/gate-coverage.mjs > docs/gate-coverage.md`. No negative-number or ratio/proportion card exists in the current 40-card set, so no rule was written for them.
+
+카드 40장 · 규칙 있음 28장 · 규칙 없음 12장
+
+| 카드 | 게이트 규칙 | 위험도 | 이유 | 규칙 크기 |
+|---|---|---|---|---|
+| 곱셈 순서 | 있음 | H | 곱셈도 앞에서부터 계산한다는 오개념 | anchors 2 · ops 0 · phrases 3 |
+| 도형 넓이 | 있음 | H | 넓이를 더하기로 구하거나 둘레와 혼동 | anchors 3 · ops 2 · phrases 3 |
+| 리스트 | 있음 | H | 인덱스를 1부터 세는 오개념(대부분의 언어와 다름) | anchors 5 · ops 0 · phrases 7 |
+| 변수 | 있음 | H | 변수 값은 바꿀 수 없다는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| 분수의 덧셈 | 있음 | H | 분자·분모 연산 오개념(빼기·곱하기)이 가장 흔하다 | anchors 2 · ops 9 · phrases 0 |
+| 산술 연산 | 있음 | H | 나눗셈은 항상 작아진다는 오개념 | anchors 2 · ops 0 · phrases 4 |
+| 소수 | 있음 | H | 자릿수가 많을수록 큰 수라는 오개념(0.45 > 0.5) | anchors 3 · ops 0 · phrases 5 |
+| 식물 광합성 | 있음 | H | 식물이 흙을 먹는다는 오개념 | anchors 2 · ops 0 · phrases 5 |
+| 약분·통분 | 있음 | H | 분자·분모를 더하거나 빼서 약분하는 오개념 | anchors 2 · ops 4 · phrases 2 |
+| 온도와 열 | 있음 | H | 차가움이 옮겨 간다는 오개념 | anchors 5 · ops 0 · phrases 3 |
+| 자석 | 있음 | H | 모든 것을 끌어당긴다는 오개념 | anchors 1 · ops 0 · phrases 6 |
+| 조건문 | 있음 | H | if 조건이 거짓이어도 실행된다는 오개념 | anchors 2 · ops 0 · phrases 2 |
+| 지층 | 있음 | H | 위쪽 지층이 더 오래됐다는 오개념(반대) | anchors 1 · ops 0 · phrases 5 |
+| RAM·ROM | 있음 | H | 램이 전원을 꺼도 남는다는 오개념 | anchors 2 · ops 0 · phrases 3 |
+| 각도 | 있음 | M | 각도가 변의 길이에 비례한다는 오개념 | anchors 3 · ops 0 · phrases 4 |
+| 네트워크 패킷 | 있음 | M | 패킷은 통째로 보낸다는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| 문자열 | 있음 | M | 글자를 숫자처럼 뺄 수 있다는 오개념 | anchors 2 · ops 2 · phrases 0 |
+| 물의 상태 | 있음 | M | 끓으면 분자가 사라진다는 오개념 | anchors 4 · ops 0 · phrases 3 |
+| 바이너리 | 있음 | M | 0 과 1 의 의미 혼동 | anchors 3 · ops 0 · phrases 2 |
+| 반복문 | 있음 | M | 반복문은 한 번만 실행된다는 오개념 | anchors 3 · ops 0 · phrases 1 |
+| 빛의 반사 | 있음 | M | 거울이 빛을 흡수한다는 오개념 | anchors 2 · ops 0 · phrases 2 |
+| 압축 | 있음 | M | 압축하면 정보가 늘어난다는 오개념 | anchors 1 · ops 0 · phrases 3 |
+| 운영체제 프로세스 | 있음 | M | 프로세스 = 프로그램 파일이라는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| 캐시 | 있음 | M | 캐시는 영구 저장이라는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| 함수 | 있음 | M | 함수는 반드시 값을 돌려줘야 한다는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| AI 윤리 | 있음 | M | AI 는 항상 공정하다는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| CPU 클록 | 있음 | M | 클록이 높으면 무조건 빠르다는 오개념 | anchors 3 · ops 0 · phrases 4 |
+| while 반복 | 있음 | M | while 은 횟수를 정해야 한다는 오개념 | anchors 1 · ops 0 · phrases 2 |
+| 데이터베이스 테이블 | 없음 | L | 테이블·행 혼동 — 오개념 문구가 뚜렷하지 않음 | — |
+| 디버깅 | 없음 | L | 디버깅 — 단순 개념 | — |
+| 메모리 | 없음 | L | 작업 공간과 저장 장치 혼동 — 구체 문구가 다양함 | — |
+| 비교 연산 | 없음 | L | 비교 기호(=, ==) 혼동 — 문장 패턴이 일정하지 않음 | — |
+| 오류 메시지 | 없음 | L | 오류 — 단순 개념 | — |
+| 이벤트 | 없음 | L | 이벤트 — 단순 개념 | — |
+| 입력 | 없음 | L | 입력 장치 — 단순 개념 | — |
+| 입출력 | 없음 | L | 입출력 장치 — 단순 개념 | — |
+| 출력 | 없음 | L | 출력 장치 — 단순 개념 | — |
+| 파일·디렉터리 | 없음 | L | 폴더 개념 — 오개념 문구가 뚜렷하지 않음 | — |
+| 프로토콜 | 없음 | L | 약속 개념 — 오개념 문구가 뚜렷하지 않음 | — |
+| AI 추천 | 없음 | L | AI 추천 — 단순 개념 | — |
+
+
+### 14.3 Verifier benchmark results (v1.85)
+
+Run: `BASE_URL=... node scripts/verifier-bench.mjs [scripts/verifier-holdout.json]` against a live server with the project's keys (DeepSeek first, 8 s budget). Each sentence uses a fresh account.
+
+| Set | n | correct | misconception / wrong | False accept | False reject | Median / max latency |
+|---|---|---|---|---|---|---|
+| Dataset, run A (`verifier-dataset.json`) | 48 scored (+1 ambiguous) | 12 | 36 | 0 | 0 | 0.79 s / 1.52 s |
+| Dataset, run B | 48 scored (+1 ambiguous) | 12 | 36 | 0 (1 counted before relabel: ambiguous list sentence) | 0 | 0.81 s / 1.39 s |
+| Held-out (`verifier-holdout.json`, not used to write rules) | 17 | 7 | 10 | 0 | **1 of 7** correct rejected (「변수에 새 값을 넣으면 예전 값은 사라져」) | 0.88 s / 1.30 s |
+
+Caveats:
+- **Rule bias.** The gate phrases were written after seeing the dataset sentences, so dataset results overstate the gate. The held-out set is the honest estimate for the model alone (plus operation-word rules).
+- **Gate-decided sentences** (under 0.1 s): 17 of 49 in the dataset, all misconceptions. No correct sentence was gated.
+- **Ambiguous label.** 「리스트는 번호를 써야 하니까 이름으로는 못 꺼내」 is largely true of lists. It is recorded but not scored.
+- **Sample size.** 49 and 17 sentences, one or two runs each. Not a statistical estimate.
+- **Model choice unchanged.** No second opinion or model switch was made (needs approval).
+
 ## 15. Next tasks (in order)
 
 1. **Range-predicate cleanup**: replace remaining `substr(ts,1,10)` filters with
