@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261127b">
+<link rel="stylesheet" href="style.css?v=20261127c">
 </head>
 <body>
 
@@ -85,7 +85,7 @@
     <div class="brand">
       <div class="brand-mark"><svg viewBox="0 0 48 48"><use href="#roomi-logo"/></svg></div>
       <!-- ★ 2026-11-21 (v1.74): 버전 표기 갱신 — 논리/편의 빅 배치(설정 화면 · 탭바 · 삼막 인도) -->
-      <div class="brand-text"><b>Roo<span>Mi</span><em class="ver">v1.82</em></b><span>루미 · AI 학습 파트너</span></div>
+      <div class="brand-text"><b>Roo<span>Mi</span><em class="ver">v1.83</em></b><span>루미 · AI 학습 파트너</span></div>
     </div>
 
     <nav class="side-nav">
@@ -187,13 +187,13 @@
 
           <div class="guest-card">
             <h3>루미 시작하기</h3>
-            <input id="nickname" maxlength="12" placeholder="닉네임을 입력하세요" aria-label="닉네임">
+            <input id="nickname" maxlength="20" placeholder="닉네임을 입력하세요" aria-label="닉네임">
             <button id="btn-start" class="btn primary big">시작하기</button>
             <button id="btn-demo" class="btn ghost big demo-btn">🎬 데모 계정으로 바로 보기</button>
             <!-- ★ 2026-11-21 (v1.74) C6: 다른 기기에서 이어하기 — PIN 로그인 + 기기 이전 코드(계약 E2/E4) -->
             <button id="btn-continue" class="btn ghost big demo-btn">🔑 이어서 하기 (PIN · 기기 이전 코드)</button>
             <div id="continue-row" class="continue-row hidden">
-              <input id="cont-nick" maxlength="12" placeholder="닉네임" aria-label="닉네임">
+              <input id="cont-nick" maxlength="20" placeholder="닉네임" aria-label="닉네임">
               <div class="cont-line">
                 <input id="cont-pin" inputmode="numeric" maxlength="4" placeholder="PIN 숫자 4자리" aria-label="PIN">
                 <button id="cont-pin-go" class="btn primary">PIN 으로 이어하기</button>
@@ -1352,6 +1352,7 @@
       <input id="gate-a" type="number" inputmode="numeric" placeholder="정답" maxlength="4">
       <div class="gate-msg" id="gate-msg"></div>
       <button id="gate-ok" class="btn primary big">확인하기</button>
+      <button id="gate-back" class="btn ghost">돌아가기</button>
       <p class="hint">승인 없이 계속하면 제한된 시간만 플레이할 수 있어요.</p>
     </div>
   </div>
@@ -1459,9 +1460,9 @@
 <script src="https://cdn.jsdelivr.net/npm/babylonjs@7.54.3/babylon.js" defer onerror="window.__bjsFailed=true"></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@7.54.3/babylonjs.loaders.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-materials@7.54.3/babylonjs.materials.min.js" defer></script>
-<script src="app.js?v=20261127b"></script>
+<script src="app.js?v=20261127c"></script>
 <!-- ★ 2026-11-21 (v1.74) C8: world.js 캐시도 함께 bump(index.html 담당) — world.js 본체는 월드 담당이 고친다 -->
-<script src="world.js?v=20261127b"></script>
+<script src="world.js?v=20261127c"></script>
 </body>
 </html>
 

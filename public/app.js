@@ -1224,11 +1224,14 @@ async function verifyParent(){
     clearPendingLock();      // ★ v1.74 C2: 유예 상태도 함께 초기화
     state.windDown = false;
     startPlayTimer();
+    // ★ 2026-11-27 (v1.83) A2: 승인 뒤 시작 화면에 머물지 않게 방으로 바로 들어간다(로그인 때 막혀 있던 진입).
+    if(state.user && !$('#screen-start').classList.contains('hidden')){ try{ await enter(); }catch(err){} }
   }catch(e){
+    // ★ 2026-11-27 (v1.83) A5: 오류 문구가 보이도록 게이트를 연 채로 둔다. «돌아가기» 로 오버레이에 돌아간다.
     msg.textContent = e.message || '정답이 아니에요.';
-    // 시간 초과 상태였다면, 보호자가 틀렸을 때 다시 초과 창으로 돌아간다
-    // (그래야 '내일 다시 올게요' 선택지가 사라지지 않는다)
-    if(state.overLimit) showOverplay({ minutes: (state.playMinutes||0) });
+    msg.style.color = '#c92a2a';
+    $('#gate-a').value = '';
+    try{ $('#gate-a').focus(); }catch(err){}
   }
 }
 // 시간 초과 안내를 띄운다
@@ -4157,6 +4160,8 @@ $("#memory-stage").addEventListener("click", (e)=>{
 });
 // 부모 승인 게이트 버튼 (P0-4)
 $("#gate-ok").addEventListener("click", verifyParent);
+// ★ 2026-11-27 (v1.83) A5: 게이트에서 돌아가기 → 시간 초과 오버레이로
+$('#gate-back')?.addEventListener('click', ()=>{ closeParentGate(); if(state.overLimit) showOverplay({ minutes: state.playMinutes||0 }); });
 $("#gate-a").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); verifyParent(); } });
 $("#overplay-parent").addEventListener("click", openParentGate);
 $("#overplay-ok").addEventListener("click", ()=>{
@@ -5609,6 +5614,7 @@ function chatAddLive(role, hint){
     }
   };
 }
+let _lastChatLimitMsg = '';   // 마지막 429(일일 한도) 문구
 async function chatStreamRequest(body, onDelta){
   const headers = { 'Content-Type':'application/json' };
   const tk = localStorage.getItem(SK.token);
@@ -5625,6 +5631,12 @@ async function chatStreamRequest(body, onDelta){
   arm();
   try{
     const res = await fetch(API + '/api/chat/stream', { method:'POST', headers, body: JSON.stringify(body), signal: ac ? ac.signal : undefined });
+    if(res.status === 429){
+      // ★ 2026-11-27 (v1.83) D4: 일일 한도는 서버 문구(«오늘은 여기까지!…»)를 그대로 보여 준다.
+      let m = ''; try{ m = (await res.json()).error || ''; }catch(e){}
+      const err = new Error(m || 'limit'); err.limit = true; err.serverMessage = m;
+      throw err;
+    }
     if(!res.ok || !res.body) throw new Error('stream ' + res.status);
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -5661,6 +5673,7 @@ async function chatStreamOnce(text, solved){
       partial += d; live.push(d);
     });
   }catch(e){
+    if(e && e.limit){ _lastChatLimitMsg = e.serverMessage || ''; return 'limit'; }
     if(live){ live.end(partial); return 'partial'; }
     return 'fail';
   }
@@ -5818,6 +5831,10 @@ async function sendChat(solved){
   let streamState = 'fail';
   try{ streamState = await chatStreamOnce(text, solved); }catch(e){ streamState = 'fail'; }
   chatTyping(false);
+  if(streamState === 'limit'){
+    // ★ 2026-11-27 (v1.83) D4: 한도 도달 → 서버 문구를 보여 주고, 입력은 되돌리지 않는다(다시 칠 이유가 없다).
+    chatAdd('assistant', _lastChatLimitMsg || '오늘은 여기까지! 내일 또 이야기하자.');
+  }
   if(streamState === 'fail'){
     chatAdd('assistant', '잠깐 문제가 생겼어요. 다시 눌러줄래?');
     // ★ 2026-11-21 (v1.74) A1 «흘려보내기 실패 시 원문 복귀»: 첫 delta 도 못 받고 실패하면

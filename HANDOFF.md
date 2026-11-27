@@ -1,6 +1,6 @@
 # RooMi — Engineering Handoff (for Claude)
 
-> **Last verified**: 2026-11-27 · app version **v1.82** · local tests `npm test` (unit + regression) all PASS (online smoke 442/442 was v1.80 — re-run after deploy)
+> **Last verified**: 2026-11-27 · app version **v1.83** · local tests `npm test` (unit + regression) all PASS (online smoke 442/442 was v1.80 — re-run after deploy)
 > **Live demo**: https://my-dorobot.app.workbuddy.host/?sharecode=M3SXYFV64Y
 > **Owner**: 이멍멍 (Hanyang ERICA, AI major) · IC-PBL course project
 > **Read this file fully before touching code.** It supersedes `CODEX_CONTEXT.md` (Oct 2026, obsolete).
@@ -347,6 +347,10 @@ Do **not** award cells for lighting lamps (economy ceiling, §8).
   Teach-back verification: `checkTeachBack` — LLM yes/no when available, otherwise a card-keyword rule (≥2 hits).
   Unverified explanations still light the lamp (no grading on the child screen) but are stored as
   `source='explain:unverified'`, confidence 0.4, and never become the tower's "original" sentence.
+  **v1.83 latency budget:** verification waits at most `TEACH_VERIFY_TIMEOUT_MS` (default 8000 ms, DeepSeek first via
+  `prefer:'fast'`). On timeout the explanation is stored **unverified** (never credited) and `upgradeTeachVerdict`
+  retries the LLM in the background; it upgrades only if the same explanation is still unverified and the LLM says ok.
+  Storage policy: `LR.teachStoragePlan` — an `explain:verified` memory is never overwritten by an unverified one.
 - `learning_plans.plan_json` = `{focus, steps:[{id,title,minutes,done}]}` for the day.
   Regeneration is capped at 2/day (`daily_counters kind='plan_refresh'`).
 - `/api/next-action` returns one step: mood-first → tower (if lamps) → weakest concept → review due.
@@ -455,7 +459,7 @@ node /tmp/week59_browser.mjs      # weekly panel (7)
 node /tmp/dorobot-online-verify.mjs     # -> ONLINE 442 PASS / 0 FAIL  (v1.80 run)
 
 # v1.82 — repo-local tests (no API calls; ROOMI_TEST_NO_LLM=1 forces the rule fallback)
-npm test                                # unit (19) + regression (22)
+npm test                                # unit (32) + regression (27)
 npm run test:unit                       # tests/unit.mjs — pure rules, mocked LLM, version consistency
 npm run test:regression                 # tests/regression.mjs — throwaway DB, black-box API
 # Manual browser checklist (PIN gate, dashboard, teach-back screen): tests/SMOKE.md
