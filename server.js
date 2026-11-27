@@ -6088,7 +6088,7 @@ app.post('/api/chat/explain', async (req,res)=>{
   if(text.length < 8) return res.status(400).json({error:'조금만 더 자세히 설명해 줄래?'});
   if(!isSafeText(text)) return res.status(400).json({error:'다른 이야기를 해볼까요?'});
   const day = today();
-  const used = db.prepare("SELECT COUNT(*) c FROM chat_messages WHERE user_id=? AND mode='explain' AND substr(ts,1,10)=?")
+  const used = db.prepare("SELECT COUNT(*) c FROM chat_messages WHERE user_id=? AND mode='explain' AND role='user' AND substr(ts,1,10)=?")
     .get(u.id, day).c;
   if(used >= EXPLAIN_DAILY) return res.status(429).json({error:'오늘은 설명을 충분히 했어! 내일 또 들려줘.'});
   const card = concept === EXPLAIN_DEFAULT_CONCEPT ? null : teachCardFor(concept);

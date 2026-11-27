@@ -327,6 +327,16 @@ async function extras() {
     assert(body.includes(`«${CONCEPT}»을 한 번 다시`), `조사 오류: ${body.split('\n')[2]}`);
     assert(!body.includes(`«${CONCEPT}» 를`) && !body.includes(`«${CONCEPT}»를`), '하드코딩 조사가 남아 있음');
   });
+  await test('설명 하루 한도: 설명 5번까지 허용, 6번째부터 429 (턴 행 2개씩 세던 버그)', async () => {
+    const u = await newUser('explim');
+    const codes = [];
+    for (let i = 0; i < 6; i++) {
+      const r = await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: `분모가 같으면 분자끼리 더하면 돼요 ${i}` } });
+      codes.push(r.status);
+    }
+    assert(codes.slice(0, 5).every(c => c === 200), `5번까지 200 이어야 함: ${codes}`);
+    assert(codes[5] === 429, `6번째는 429 이어야 함: ${codes}`);
+  });
   await test('PIN 로그인: 만든 PIN 으로 로그인할 수 있다(해시 비교 수정)', async () => {
     const u = await newUser('pin');
     const made = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '4321' } });
