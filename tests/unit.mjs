@@ -293,6 +293,22 @@ await test('게이트: 금지·부정 표현은 통과시킨다(「자석은 나
 await test('게이트: 규칙이 없는 카드(입출력 등)는 아무 설명도 거르지 않는다', async () => {
   assert.equal(R.contradictsCardOps('아무 말이나 해도 돼', '입출력'), null);
 });
+await test('보류 세트 회귀: 「변수에 새 값을 넣으면 예전 값은 사라져」 는 게이트에 걸리지 않고, 판정이 맞다고 하면 받아들인다', async () => {
+  const text = '변수에 새 값을 넣으면 예전 값은 사라져';
+  assert.equal(R.contradictsCardOps(text, '변수'), null, '게이트가 올바른 설명을 거절했다');
+  const deps = { aliases: ALIASES, callLLM: async () => ({ text: '{"checks":{"operation":true,"condition":true,"result":true},"ok":true,"reply":"좋아"}' }), parseChatJSON: (r) => JSON.parse(r) };
+  const v = await R.checkTeachBack(text, '변수', { topic: '변수', concept: '변수', analogy: '값을 담아 두는 이름 붙은 상자', hint_l2: '' }, deps);
+  assert.equal(v.ok, true, '모든 항목이 참인데 거절됐다');
+});
+
+await test('게이트(변수 자료형 오개념): 「숫자만 담을 수 있는 칸」·「글자는 넣을 수 없어」 는 거절된다', async () => {
+  assert.notEqual(R.contradictsCardOps('변수는 숫자만 담을 수 있는 칸이야', '변수'), null);
+  assert.notEqual(R.contradictsCardOps('변수는 숫자만 넣을 수 있고 글자는 넣을 수 없어', '변수'), null);
+});
+await test('게이트(변수): 정상 변수 설명(새 값을 넣으면 예전 값은 사라져)은 거절되지 않는다', async () => {
+  assert.equal(R.contradictsCardOps('변수에 새 값을 넣으면 예전 값은 사라져', '변수'), null);
+});
+
 // ---------- 5. 탑 층 설계 — 한 번의 탑(run) 안의 안개 분포 ----------
 // 한 탑 = 한 사용자 · 하루의 덱. 층마다 원래 말/안개 말이 섞여 있어야 하고, 층 번호나 고정 비트로 예측되면 안 된다.
 const ORIG_A = '분모가 같으면 분자끼리 더하면 돼요';
