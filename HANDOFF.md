@@ -521,6 +521,8 @@ Traps that cost hours:
 3. **Repeated verified explanations add mastery.** Each verified explanation adds +0.10 to `concept_mastery`, up to 5 explanations a day for one concept. This is a **product decision, not a bug**: options are (a) keep, (b) credit at most once per concept per day, (c) credit only the first verified explanation per concept.
 4. **Verifier is model-dependent.** The deterministic gate (`contradictsCardOps`) and the per-claim check reduce false accepts but do not replace judgement. Benchmark snapshot (v1.83 + gate, DeepSeek-first, two runs each): main set 15/15, hard set 6/6; misconceptions stored as `explain:verified`: 0 of 10 per run; correct sentences verified 5/5 per run; median latency about 1.0 s, max 1.6 s.
 5. **Commit message ccd4ece overstates one change.** Its subject says "긴 닉네임 허용", but the input-limit fix is in d9f9e76. The server already accepted 20 characters. Commit history is not rewritten; this note is the correction.
+6. **Known false reject (held-out set 2).** 「삼각형 넓이는 밑변 곱하기 높이를 2로 나눈 값이야」 is a correct explanation and is rejected in 2 of 2 runs (the operation check reads the triangle's ÷2 as differing from the card's rectangle formula). **This is a deliberate trade-off, not an oversight:** a false reject leaves a correct explanation unverified, while a false accept would mark a wrong concept as verified, and the latter is worse. Reverted experiment: scoping the operation check to the card definition fixed this sentence but let 「지층은 화산이 터질 때만 만들어져」 through as a false accept, so it was reverted (14.3b).
+7. **Held-out authorship.** Held-out set 2 was written by the same author as the rules and the tuning. Its results therefore still carry some author bias. The next benchmark should use sentences from a different author before any new rule or prompt change is judged.
 
 Direct commands (npm is not on PATH on the development Mac; `npm test` runs these in order):
 
@@ -629,6 +631,8 @@ Configuration: deterministic gate (per-card rules), per-claim checks (operation 
 Rejected experiments (each traded one error for another; kept out of the code):
 - **Result check relaxed to "outright reversal only":** fixed held-out 1 「변수에 새 값을 넣으면 예전 값은 사라져」 but let 「변수는 숫자만 넣을 수 있고 글자는 넣을 수 없어」 and 「변수는 숫자만 담을 수 있는 칸이야」 through. The variable phrase rule closes those.
 - **Operation check scoped to the card's definition:** fixed the triangle false reject but let 「지층은 화산이 터질 때만 만들어져」 through (false accept). Not shipped.
+
+- **Held-out set 2 authorship.** Written by the same author as the rules and the tuning, so it is not fully independent. The next benchmark should use sentences from a different author.
 
 Reading: this is a single-model judgement with run-to-run and wording sensitivity. Each relaxation added a false accept. The shipped trade-off prefers a false reject (an explanation stays unverified) over a false accept (an incorrect concept is marked verified).
 
