@@ -1892,10 +1892,13 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     m.position.set(sx, eyeBaseY, 0);
     return m;
   };
+  // 동공 판은 흰자보다 충분히 앞에 둔다. lookX 로 동공이 안쪽으로 밀리면 곡면이 올라와 흰자에 묻히므로
+  // 여유를 크게 잡았다(0.022 는 턴 각도에 따라 묻혔다 — 수치 확인: 최소 여유 +0.004~+0.014).
+  const PUPIL_OFF = 0.05;
   const eyeL = add(eyeSurface('eyeL', -EYE_X, 0.016), layerMat('eyeWhite_L',eyeWhiteTex('L')));
   const eyeR = add(eyeSurface('eyeR', EYE_X, 0.016), layerMat('eyeWhite_R',eyeWhiteTex('R')));
-  const pupilL = add(eyeSurface('pupilL', -EYE_X, 0.022), layerMat('pupilMat_L',pupilTex('L')));
-  const pupilR = add(eyeSurface('pupilR', EYE_X, 0.022), layerMat('pupilMat_R',pupilTex('R')));
+  const pupilL = add(eyeSurface('pupilL', -EYE_X, PUPIL_OFF), layerMat('pupilMat_L',pupilTex('L')));
+  const pupilR = add(eyeSurface('pupilR', EYE_X, PUPIL_OFF), layerMat('pupilMat_R',pupilTex('R')));
 
   // ── v1.31 볼터치: 화면 아래 양옆에 «아주 옅은 온기»만 ──
   //   점 찍힌 스티커가 아니라 화면 속 빛 번짐처럼 보이도록 방사형 알파 그라디언트.
