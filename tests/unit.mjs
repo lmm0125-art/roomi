@@ -211,6 +211,53 @@ await test('별칭: 카드마다 별칭이 하나 이상 있고, 같은 별칭�
   assert.deepEqual(problems, []);
 });
 
+await test('검증 게이트: 「분자끼리 빼도 되고 더해도 돼」 는 LLM 을 부르기 전에 거절된다(source=gate)', async () => {
+  let called = false;
+  const deps = { aliases: ALIASES, callLLM: async () => { called = true; return { text: '{"ok":true}' }; }, parseChatJSON: (r) => JSON.parse(r) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 빼도 되고 더해도 돼', '분수의 덧셈', CARD, deps);
+  assert.equal(v.ok, false); assert.equal(v.source, 'gate'); assert.equal(called, false, '게이트 뒤에 LLM 이 불렸다');
+});
+await test('검증 게이트: 「분모를 같게 만든 다음 분자를 곱하면 돼」 도 거절된다', async () => {
+  const v = await R.checkTeachBack('분모를 같게 만든 다음 분자를 곱하면 돼', '분수의 덧셈', CARD, noLLM);
+  assert.equal(v.source, 'gate'); assert.equal(v.ok, false);
+});
+await test('검증 게이트: 올바른 설명은 게이트에서 걸리지 않는다(통과 목록)', async () => {
+  const good = ['분모가 같으면 분자끼리 더하면 돼요', '분모가 같을 때는 위의 숫자끼리 더하고 아래 숫자는 그대로 둬',
+    '분모가 같으면 분자만 더해서 답을 써', '분모가 같으니까 분자를 더하면 되고 분모는 안 바뀌어',
+    '분모가 같으면 분자끼리 빼는 게 아니라 더하는 거야'];
+  for (const g of good) assert.equal(R.contradictsCardOps(g, '분수의 덧셈'), null, `올바른 설명이 게이트에 걸림: ${g}`);
+});
+await test('검증 게이트: 「분자를 곱하지 마」 처럼 금지하는 말은 모순이 아니다', async () => {
+  assert.equal(R.contradictsCardOps('분자를 곱하지 마, 더해야 해', '분수의 덧셈'), null);
+});
+await test('검증 게이트: 카드에 규칙이 없으면 게이트는 작동하지 않는다', async () => {
+  assert.equal(R.contradictsCardOps('분자를 빼면 돼', '소수'), null);
+});
+await test('검증 항목 확인: 모델이 ok=true 라도 항목(연산)에서 false 면 거절한다', async () => {
+  const deps = { aliases: ALIASES, callLLM: async () => ({ text: '{"checks":{"operation":false,"condition":true,"result":true},"ok":true,"reply":"좋아"}' }), parseChatJSON: (r) => JSON.parse(r) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  assert.equal(v.source, 'llm'); assert.equal(v.ok, false);
+});
+await test('검증 항목 확인: 세 항목이 모두 true 이고 ok 도 true 면 검증된다', async () => {
+  const deps = { aliases: ALIASES, callLLM: async () => ({ text: '{"checks":{"operation":true,"condition":true,"result":true},"ok":true,"reply":"좋아"}' }), parseChatJSON: (r) => JSON.parse(r) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  assert.equal(v.ok, true);
+});
+import { aliasHit } from '../lib/card-aliases.js';
+await test('별칭 경계: 영문 별칭 for 는 before·information·format 안에서 맞지 않는다', async () => {
+  assert.equal(aliasHit('before the bell', 'for'), false);
+  assert.equal(aliasHit('information', 'for'), false);
+  assert.equal(aliasHit('format the disk', 'for'), false);
+  assert.equal(aliasHit('for loop 을 써 볼까', 'for'), true);
+  assert.equal(aliasHit('for문을 배웠어', 'for'), true);
+});
+await test('별칭 경계: 영문 별칭은 단어로 맞을 때만, 한글 별칭은 조사가 붙어도 맞는다', async () => {
+  assert.equal(aliasHit('blueprint', 'print'), false);
+  assert.equal(aliasHit('print 해줘', 'print'), true);
+  assert.equal(aliasHit('분모가 커', '분모'), true);
+  assert.equal(aliasHit('', '분모'), false);
+  assert.equal(aliasHit('아무거나', ''), false);
+});
 // ---------- 5. 탑 층 설계 — 한 번의 탑(run) 안의 안개 분포 ----------
 // 한 탑 = 한 사용자 · 하루의 덱. 층마다 원래 말/안개 말이 섞여 있어야 하고, 층 번호나 고정 비트로 예측되면 안 된다.
 const ORIG_A = '분모가 같으면 분자끼리 더하면 돼요';

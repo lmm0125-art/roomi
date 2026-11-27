@@ -4505,7 +4505,7 @@ function weekStartKST(){
 // ★ v1.51 지식 카드 검색 — «글자 그대로» 가 아니라 «개념» 으로 찾는다.
 //   예전엔 msg.includes(topic) 만 봐서 «분모가 왜 달라» 가 «분수» 카드를 못 찾았다.
 // ★ 2026-11-27 (v1.83): 별칭 표는 lib/card-aliases.js 로 옮겼다(테스트가 검사할 수 있게).
-const { CARD_ALIASES } = require('./lib/card-aliases.js');
+const { CARD_ALIASES, aliasHit } = require('./lib/card-aliases.js');
 // ★ 2026-11-27 (v1.83): 일반 단어 별칭은 카드를 고르는 근거가 아니다(«계속», «몇 번» 등 — 수업 개념을 바꾸는 오탐).
 const GENERIC_ALIAS = new Set(['계속','몇 번','몇 번째','확인','하나씩','찍','돌리','보여주','계산','이상','이하','같다','크다','작다']);
 function matchCards(msg, chapter){
@@ -4517,7 +4517,7 @@ function matchCards(msg, chapter){
     const topic = String(c.topic || '').toLowerCase();
     if(topic && text.includes(topic)) score += 5;
     for(const a of (CARD_ALIASES[c.topic] || [])){
-      if(a && !GENERIC_ALIAS.has(String(a)) && text.includes(String(a).toLowerCase())) score += 3;
+      if(a && !GENERIC_ALIAS.has(String(a)) && aliasHit(text, String(a))) score += 3;
     }
     for(const t of String(c.tags || '').split(',')){
       const tag = t.trim().toLowerCase();
@@ -4596,7 +4596,7 @@ function routeLearnIntent(msg, sess){
   const m = String(msg || '');
   if(ASK_ANSWER_RE.test(m)) return 'direct';            // «그냥 알려줘» → 바로 답
   const cpt = (sess && sess.concept) ? String(sess.concept) : '';
-  const inConcept = cpt && (m.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => m.includes(String(a))));
+  const inConcept = cpt && (m.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => aliasHit(m, String(a))));
   if(inConcept) return 'guide';                          // 지금 배우는 개념 → 유도
   if(ASK_KNOW_RE.test(m)) return 'direct';               // 그 외 지식 질문 → 설명
   return 'guide';
@@ -4691,7 +4691,7 @@ function buildChatContext(u, mode, msg, day, style = 'auto'){
   const focusCard = mode === 'learn'
     ? (cards.find(c =>
         msg.includes(c.topic) ||
-        (CARD_ALIASES[c.topic] || []).some(a => a && msg.includes(a)) ||
+        (CARD_ALIASES[c.topic] || []).some(a => a && aliasHit(msg, a)) ||
         String(c.tags||'').split(',').some(t => t.trim() && msg.includes(t.trim()))
       ) || null)
     : null;
@@ -4720,7 +4720,7 @@ function buildChatContext(u, mode, msg, day, style = 'auto'){
   //   (키워드 미검출 시 matchCards 가 같은 챕터의 다른 카드를 골라, 반복문 대화에 변수 설명이 섞였다)
   if(mode === 'learn' && sess && sess.concept){
     const cpt = String(sess.concept);
-    const hit = msg.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => msg.includes(String(a)));
+    const hit = msg.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => aliasHit(msg, String(a)));
     if(!hit){ const fixed = teachCardFor(cpt); if(fixed) cards = [fixed]; }
   }
   // ★ v1.80: 이번 턴이 «설명» 인지 «유도» 인지 먼저 정한다.
@@ -5796,7 +5796,7 @@ app.post('/api/chat', async (req,res)=>{
   const focusCard = mode === 'learn'
     ? (cards.find(c =>
         msg.includes(c.topic) ||
-        (CARD_ALIASES[c.topic] || []).some(a => a && msg.includes(a)) ||
+        (CARD_ALIASES[c.topic] || []).some(a => a && aliasHit(msg, a)) ||
         String(c.tags||'').split(',').some(t => t.trim() && msg.includes(t.trim()))
       ) || null)
     : null;
@@ -5833,7 +5833,7 @@ app.post('/api/chat', async (req,res)=>{
   //   (키워드 미검출 시 matchCards 가 같은 챕터의 다른 카드를 골라, 반복문 대화에 변수 설명이 섞였다)
   if(mode === 'learn' && sess && sess.concept){
     const cpt = String(sess.concept);
-    const hit = msg.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => msg.includes(String(a)));
+    const hit = msg.includes(cpt) || (CARD_ALIASES[cpt] || []).some(a => aliasHit(msg, String(a)));
     if(!hit){ const fixed = teachCardFor(cpt); if(fixed) cards = [fixed]; }
   }
   const cardText = cards.map(c => {

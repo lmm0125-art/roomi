@@ -367,6 +367,15 @@ async function extras() {
     const r2 = await api('/api/user', { method: 'POST', body: { nickname: nick } });
     assert(r2.data.user.id === r1.data.user.id, '같은 닉네임인데 다른 계정이 생겼다');
   });
+  await test('검증 게이트(회귀): 「분자끼리 빼도 되고 더해도 돼」 는 설명으로 저장돼도 explain:verified 가 되지 않는다', async () => {
+    const u = await newUser('gate');
+    await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 같으면 분자끼리 빼도 되고 더해도 돼' } });
+    const d = db();
+    const m = d.prepare("SELECT source FROM user_memories WHERE user_id=? AND kind='taught'").get(u.id);
+    d.close();
+    assert(m && m.source !== 'explain:verified', `잘못된 설명이 검증됨: ${m && m.source}`);
+    assert(m && m.source === 'explain:unverified', `미검증이어야 함: ${m && m.source}`);
+  });
   await test('PIN 로그인: 만든 PIN 으로 로그인할 수 있다(해시 비교 수정)', async () => {
     const u = await newUser('pin');
     const made = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '4321' } });

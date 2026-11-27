@@ -78,7 +78,7 @@ function masteryOf(uid) {
 }
 
 async function waitServer() {
-  for (let i = 0; i < 80; i++) { try { await fetch(BASE + '/'); return; } catch {} await sleep(150); }
+  for (let i = 0; i < 200; i++) { try { await fetch(BASE + "/"); return; } catch {} await sleep(150); }
   throw new Error('서버가 뜨지 않았어요:\n' + serverLog);
 }
 
