@@ -461,7 +461,7 @@ node /tmp/week59_browser.mjs      # weekly panel (7)
 node /tmp/dorobot-online-verify.mjs     # -> ONLINE 442 PASS / 0 FAIL  (v1.80 run)
 
 # v1.82 — repo-local tests (no API calls; ROOMI_TEST_NO_LLM=1 forces the rule fallback)
-npm test                                # unit (35) + regression (27) + teach-upgrade (5)
+npm test                                # unit (44) + regression (28) + teach-upgrade (5)
 node --experimental-sqlite tests/teach-upgrade.mjs   # 뒤늦은 업그레이드 통합(테스트 LLM 스텁, 실제 모델 없음)
 npm run bench:verifier                  # 실제 키로 설명 판정 벤치마크(BENCH_SET=hard 는 어려운 오개념 세트)
 npm run test:unit                       # tests/unit.mjs — pure rules, mocked LLM, version consistency
@@ -513,6 +513,23 @@ Traps that cost hours:
 | **v1.81** letter email not sent | `nodemailer` not in package.json; SMTP env unset → dashboard shows a preview only | opt-in, documented in roadmap |
 
 ---
+
+### 14.1 Known issues — explicit (v1.83)
+
+1. **Synchronous explain writes are not atomic.** `/api/chat/explain` writes the memory, the memory lamp and the mastery in separate statements. A crash mid-request can leave them partly written. Only the background upgrade is transactional (`BEGIN IMMEDIATE`).
+2. **Background upgrade retries are in memory only.** Up to 3 attempts with backoff (`TEACH_UPGRADE_BACKOFF_MS`, default 5 s, then ×4). A server restart drops pending retries, and the explanation stays unverified until the next explanation of that concept.
+3. **Repeated verified explanations add mastery.** Each verified explanation adds +0.10 to `concept_mastery`, up to 5 explanations a day for one concept. This is a **product decision, not a bug**: options are (a) keep, (b) credit at most once per concept per day, (c) credit only the first verified explanation per concept.
+4. **Verifier is model-dependent.** The deterministic gate (`contradictsCardOps`) and the per-claim check reduce false accepts but do not replace judgement. Benchmark snapshot (v1.83 + gate, DeepSeek-first, two runs each): main set 15/15, hard set 6/6; misconceptions stored as `explain:verified`: 0 of 10 per run; correct sentences verified 5/5 per run; median latency about 1.0 s, max 1.6 s.
+5. **Commit message ccd4ece overstates one change.** Its subject says "긴 닉네임 허용", but the input-limit fix is in d9f9e76. The server already accepted 20 characters. Commit history is not rewritten; this note is the correction.
+
+Direct commands (npm is not on PATH on the development Mac; `npm test` runs these in order):
+
+```bash
+node tests/unit.mjs
+node --experimental-sqlite tests/regression.mjs
+node --experimental-sqlite tests/teach-upgrade.mjs
+BASE_URL=http://127.0.0.1:3931 node scripts/verifier-bench.mjs   # needs a running server with project keys
+```
 
 ## 15. Next tasks (in order)
 
