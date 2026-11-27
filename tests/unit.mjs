@@ -82,6 +82,13 @@ await test('teach-back(LLM 판정 ok=true): 모델이 맞다고 하면 ok, sourc
   assert.ok(sent, 'LLM 이 호출되어야 함');
   assert.ok(!sent.prompt.includes('정답 힌트(노출 금지)'), 'hint_l3 은 프롬프트에 들어가면 안 된다');
 });
+
+test('폴백 답변의 개념 조사는 받침에 맞는다(«분수의 덧셈를» 금지)', async () => {
+  // 카드 없음 → LLM 을 부르지 않는 결정적 경로. 개념 이름 뒤 조사가 받침(음)에 맞아야 한다.
+  const v = await R.checkTeachBack('분모가 클수록 더 큰 수야', '분수의 덧셈', null, {});
+  assert.ok(!v.reply.includes('덧셈를') && !v.reply.includes('덧셈가'), `잘못된 조사: ${v.reply}`);
+  assert.ok(v.reply.includes('분수의 덧셈이 다르게'), `조사가 받침에 맞지 않음: ${v.reply}`);
+});
 await test('teach-back(LLM 판정 ok=false): 모델이 틀렸다고 하면 ok=false 이고 모델의 질문을 그대로 쓴다', async () => {
   const deps = { aliases: ALIASES,
     callLLM: async () => ({ text: '{"ok":false,"reply":"분모가 클수록이라고 했구나. 만약 분모가 더 커지면 조각은 어떻게 될까?"}' }),

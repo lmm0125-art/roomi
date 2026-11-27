@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261127c">
+<link rel="stylesheet" href="style.css?v=20261127d">
 </head>
 <body>
 
@@ -190,6 +190,8 @@
             <input id="nickname" maxlength="20" placeholder="닉네임을 입력하세요" aria-label="닉네임">
             <button id="btn-start" class="btn primary big">시작하기</button>
             <button id="btn-demo" class="btn ghost big demo-btn">🎬 데모 계정으로 바로 보기</button>
+            <!-- ★ 발표용: scripts/demo.sh 와 같은 순서(계정 → 등불 → 설명 2번 → 보호자 대시보드 → PIN)를 화면에서 실행한다 -->
+            <button id="btn-demo-tour" class="btn primary big demo-btn">▶ 발표용 자동 시연 (전체 흐름)</button>
             <!-- ★ 2026-11-21 (v1.74) C6: 다른 기기에서 이어하기 — PIN 로그인 + 기기 이전 코드(계약 E2/E4) -->
             <button id="btn-continue" class="btn ghost big demo-btn">🔑 이어서 하기 (PIN · 기기 이전 코드)</button>
             <div id="continue-row" class="continue-row hidden">
@@ -1460,9 +1462,21 @@
 <script src="https://cdn.jsdelivr.net/npm/babylonjs@7.54.3/babylon.js" defer onerror="window.__bjsFailed=true"></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-loaders@7.54.3/babylonjs.loaders.min.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/babylonjs-materials@7.54.3/babylonjs.materials.min.js" defer></script>
-<script src="app.js?v=20261127c"></script>
+<!-- 자동 시연 결과 패널 (app.js 의 runDemoTour 가 채운다. 글자는 textContent 로만 넣는다) -->
+<div id="demo-tour" class="demo-tour hidden" role="dialog" aria-modal="true" aria-labelledby="demo-tour-title">
+  <div class="demo-tour-box">
+    <h2 id="demo-tour-title">발표용 자동 시연</h2>
+    <p class="demo-tour-sub">서버가 실제로 처리한 결과를 단계별로 보여 줍니다. 설명 단계는 모델 응답이 느리면 수십 초 걸릴 수 있어요.</p>
+    <ol id="demo-tour-steps" class="demo-tour-steps"></ol>
+    <div class="demo-tour-actions">
+      <button id="demo-tour-enter" class="btn primary hidden">앱 화면으로 들어가기</button>
+      <button id="demo-tour-close" class="btn ghost">닫기</button>
+    </div>
+  </div>
+</div>
+<script src="app.js?v=20261127d"></script>
 <!-- ★ 2026-11-21 (v1.74) C8: world.js 캐시도 함께 bump(index.html 담당) — world.js 본체는 월드 담당이 고친다 -->
-<script src="world.js?v=20261127c"></script>
+<script src="world.js?v=20261127d"></script>
 </body>
 </html>
 

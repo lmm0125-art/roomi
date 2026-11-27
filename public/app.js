@@ -4766,6 +4766,96 @@ $('#btn-demo').addEventListener('click', async ()=>{
   finally{ b.disabled = false; b.textContent = ' 데모 계정으로 바로 보기'; }
 });
 
+// ---------- 발표용 자동 시연 (v1.84) ----------
+//   scripts/demo.sh 와 같은 순서로 실제 API 를 부른다: 계정 → 등불 → 설명 2번 → 보호자 대시보드 → PIN.
+//   결과는 서버가 준 값만 보여 준다(화면 문구를 지어내지 않는다). 글자는 textContent 로만 넣는다.
+const DEMO_TOUR_NICK = '데모_루미';
+const DEMO_TOUR_PIN = '1357';
+$('#btn-demo-tour').addEventListener('click', runDemoTour);
+$('#demo-tour-close').addEventListener('click', ()=> $('#demo-tour').classList.add('hidden'));
+
+async function runDemoTour(){
+  const panel = $('#demo-tour'), list = $('#demo-tour-steps'), enterBtn = $('#demo-tour-enter'), btn = $('#btn-demo-tour');
+  list.textContent = ''; enterBtn.classList.add('hidden');
+  panel.classList.remove('hidden'); btn.disabled = true;
+
+  // 한 단계 = 목록 항목 하나. 실패하면 그 자리에 실패 문구를 남기고 뒤 단계는 멈춘다(앞 단계에 의존하므로).
+  const step = async (title, fn) => {
+    const li = document.createElement('li'); li.className = 'run';
+    const st = document.createElement('span'); st.className = 'st'; st.textContent = title + ' …';
+    const rs = document.createElement('span'); rs.className = 'res'; rs.textContent = '';
+    li.append(st, rs); list.append(li); li.scrollIntoView({ block: 'nearest' });
+    try{
+      const out = await fn();
+      li.className = 'ok'; st.textContent = title + ' ✓'; rs.textContent = out.text;
+      return out.data;
+    }catch(e){
+      li.className = 'fail'; st.textContent = title + ' ✕'; rs.textContent = e.message || String(e);
+      throw e;
+    }
+  };
+
+  try{
+    const seed = await step('1. 데모 계정 만들기 (7일치 기록, Lv.5, 스트릭 6)', async ()=>{
+      const j = await api('/api/user', { nickname: DEMO_TOUR_NICK });
+      if(j.user.token) localStorage.setItem(SK.token, j.user.token);
+      const s = await api('/api/demo/seed', {});
+      localStorage.setItem(SK.token, s.token);
+      localStorage.setItem(SK.uid, s.uid);
+      localStorage.setItem(SK.nick, s.nickname);
+      return { text: s.summary, data: s };
+    });
+
+    await step('2. 등불 3개 켜기 (분수 · 반복문 · 소수)', async ()=>{
+      const r = await api('/api/demo/lamps', {});
+      return { text: '켜진 등불: ' + r.topics.join(', '), data: r };
+    });
+
+    await step('3. 아이가 설명하기 — 맞는 설명', async ()=>{
+      const r = await api('/api/chat/explain', { concept: '분수의 덧셈', text: '분모가 같으면 분자끼리 더하면 돼요' }, 35000);
+      return { text: '루미: ' + r.reply, data: r };
+    });
+
+    await step('4. 아이가 설명하기 — 틀린 설명 (맞다/틀리다 표시 없이 질문)', async ()=>{
+      const r = await api('/api/chat/explain', { concept: '분수의 덧셈', text: '분모가 클수록 더 큰 수야' }, 35000);
+      return { text: '루미: ' + r.reply, data: r };
+    });
+
+    await step('5. 보호자 대시보드 (가르친 것 · 등불 · 주간 요약)', async ()=>{
+      const d = await api('/api/parent/dashboard');
+      const taught = (d.taughtThisWeek || []).map(t => t.topic).join(', ') || '(없음)';
+      return { text: `가르친 것: ${taught} · 등불 ${d.lamps.total}개 · 이번 주 ${d.weekly.studyDays}일 공부 · 추천: ${d.weekly.suggestion}`, data: d };
+    });
+
+    await step('6. 보호자 PIN 게이트 (틀린 PIN 거절 → 맞는 PIN 통과)', async ()=>{
+      await api('/api/account/pin', { pin: DEMO_TOUR_PIN });
+      let wrongMsg;
+      try{ await api('/api/parent/verify-pin', { pin: '0000' }); wrongMsg = '통과되어 버렸어요(확인 필요)'; }
+      catch(e){ wrongMsg = e.message; }
+      const ok = await api('/api/parent/verify-pin', { pin: DEMO_TOUR_PIN });
+      return { text: `0000 → ${wrongMsg} / ${DEMO_TOUR_PIN} → ${ok.ok ? '통과' : '실패'}`, data: ok };
+    });
+
+    // 시연 끝: 같은 데모 계정으로 앱 화면에 들어가는 버튼. 다시 시드하지 않아 방금 만든 기록이 남는다.
+    enterBtn.classList.remove('hidden');
+    enterBtn.onclick = async ()=>{
+      panel.classList.add('hidden');
+      try{
+        const u2 = await api('/api/user', { nickname: seed.nickname });
+        state.user = u2.user; state.quests = u2.quests || state.quests;
+        absorbUserMeta(u2);
+        if(u2.user.token) localStorage.setItem(SK.token, u2.user.token);
+        startPlayTimer();
+        await enter();
+      }catch(e){ alert(e.message); }
+    };
+  }catch(e){
+    // 실패 단계는 목록에 이미 표시되었다. 패널은 닫을 수 있게 남긴다.
+  }finally{
+    btn.disabled = false;
+  }
+}
+
 // ---------- 자랑하기 (3D 화면을 그림으로 저장) ----------
 // 자체 2-셀흐름도에 '전시·자랑' 단계가 있는데 구현이 없었다.
 // 아이가 자기 로봇을 부모님·친구에게 보여줄 수 있게 한다(서버 불필요).
