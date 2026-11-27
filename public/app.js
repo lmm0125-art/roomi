@@ -13,7 +13,16 @@ let state = { user:null, robot:null, template:'roundy', palette:{}, color:'#e74c
               goals:null, goalToastShown:false, prefs:null, friendsChatEnabled:true, memories:[],
               reviewDue:0, reviewCards:[], reviewIndex:0,
               growth:{ level:1, exp:0, expNeeded:100, stage:1, streak:0 },
-              room:null, chatMode:'chat', chatBusy:false, pz:null, shooter:null, explainMode:null };
+              room:null, chatMode:'chat', chatBusy:false, pz:null, shooter:null, explainMode:null,
+              // ★ 2026-11-21 (v1.71): 기억 등불(/api/lamps) 스냅샷 + 루미가 건넨 «오늘의 한 걸음».
+              //   두 값 모두 overplay(40분 종료) 잠금 화면에서 «내일 약속» 문장을 조립할 때 쓰인다.
+              //   lamps 는 성장 탭에서만 다시 불러오고, nextAction 은 넛지가 렌더될 때 기억한다.
+              lamps:null, nextAction:null,
+              // ★ 2026-11-21 (v1.74): 삼막 온보딩 · 자연 마무리 · 기억 보관함 보기 상태.
+              //   obStep/playLimitDelta 는 /api/user 최상위 계약 필드, windDown/pendingLock 은 C2
+              //   «40분에 바로 잠그지 않고 자연스러운 마무리 지점에서 잠근다» 의 상태다.
+              obStep:0, playLimitDelta:0, windDown:false, pendingLock:false,
+              lampView:'grid', lampSort:'recent', _lampBorn:false };
 
 const COLORABLE = ['antenna','head','body','arms','legs'];
 const PALETTE = ['#e74c3c','#ff8c42','#f1c40f','#ffd93d','#2ecc71','#8bc34a',
@@ -116,27 +125,40 @@ function robotSVG(template, pal){
 // ★ v1.48 «작은 크기 전용» 배지 로봇. 200×250 전체 로봇을 54px 원에 넣으면
 //   다리·팔·안테나가 뭉개져 «아이콘이 흐릿하다». 머리+몸통+큰 눈만 남긴 100×100 도형으로
 //   다시 그려 44px 에서도 표정이 읽히게 한다(대화 버튼 · 헤더 아바타는 전체 로봇 유지).
+let _badgeSeq = 0;
 function botBadgeSVG(template, pal){
   const c = Object.assign({}, DEFAULT_PAL, PAL_BASE[template]||{}, pal||{});
-  const eye='#25324a', cheek='#f7b2c1';
-  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="50" cy="90" rx="20" ry="4.6" fill="#1d3a63" opacity=".13"/>
-    <line x1="50" y1="15" x2="50" y2="26" stroke="${c.antenna}" stroke-width="3.6" stroke-linecap="round"/>
-    <circle cx="50" cy="13" r="5" fill="${c.antenna}"/>
-    <circle cx="48.3" cy="11.3" r="1.6" fill="#fff" opacity=".78"/>
-    <rect x="26" y="25" width="48" height="35" rx="15" fill="${c.head}"/>
-    <ellipse cx="37" cy="34" rx="8" ry="5.4" fill="#fff" opacity=".22"/>
-    <rect x="32" y="59" width="36" height="28" rx="12" fill="${c.body}"/>
-    <rect x="26.5" y="62" width="6.6" height="17" rx="3.3" fill="${c.arms}"/>
-    <rect x="66.9" y="62" width="6.6" height="17" rx="3.3" fill="${c.arms}"/>
-    <ellipse cx="41.4" cy="42.4" rx="4.7" ry="6" fill="${eye}"/>
-    <ellipse cx="58.6" cy="42.4" rx="4.7" ry="6" fill="${eye}"/>
-    <circle cx="42.9" cy="40.1" r="1.7" fill="#fff"/>
-    <circle cx="60.1" cy="40.1" r="1.7" fill="#fff"/>
-    <path d="M43.8 52 Q50 56.4 56.2 52" stroke="${eye}" stroke-width="2.8" fill="none" stroke-linecap="round"/>
-    <circle cx="33" cy="50" r="3.4" fill="${cheek}" opacity=".85"/>
-    <circle cx="67" cy="50" r="3.4" fill="${cheek}" opacity=".85"/>
-    <circle cx="50" cy="70" r="3.6" fill="#fff" opacity=".32"/>
+  const eye = '#26324a', cheek = '#f2a0b4';
+  const gid = 'bb' + (++_badgeSeq);
+  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffffff" stop-opacity=".38"/>
+        <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <ellipse cx="50" cy="92" rx="21" ry="4.2" fill="#1d3a63" opacity=".10"/>
+    <rect x="48.7" y="13" width="2.6" height="14" rx="1.3" fill="${c.antenna}"/>
+    <circle cx="50" cy="11.5" r="5.2" fill="${c.antenna}"/>
+    <circle cx="48.4" cy="9.9" r="1.6" fill="#fff" opacity=".85"/>
+    <rect x="22" y="24" width="56" height="38" rx="19" fill="${c.head}"/>
+    <rect x="27" y="29" width="20" height="9" rx="4.5" fill="#fff" opacity=".20"/>
+    <ellipse cx="39" cy="44" rx="5" ry="6.4" fill="${eye}"/>
+    <ellipse cx="61" cy="44" rx="5" ry="6.4" fill="${eye}"/>
+    <circle cx="40.9" cy="41.6" r="1.9" fill="#fff"/>
+    <circle cx="62.9" cy="41.6" r="1.9" fill="#fff"/>
+    <circle cx="37.4" cy="46.8" r="1" fill="#fff" opacity=".55"/>
+    <circle cx="59.4" cy="46.8" r="1" fill="#fff" opacity=".55"/>
+    <path d="M44.6 54 Q50 58 55.4 54" stroke="${eye}" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    <ellipse cx="30.5" cy="51" rx="4.2" ry="2.6" fill="${cheek}" opacity=".5"/>
+    <ellipse cx="69.5" cy="51" rx="4.2" ry="2.6" fill="${cheek}" opacity=".5"/>
+    <rect x="32" y="61" width="36" height="26" rx="13" fill="${c.body}"/>
+    <rect x="32" y="61" width="36" height="12" rx="12" fill="url(#${gid})"/>
+    <rect x="25.5" y="64" width="6.8" height="15" rx="3.4" fill="${c.arms}"/>
+    <rect x="67.7" y="64" width="6.8" height="15" rx="3.4" fill="${c.arms}"/>
+    <circle cx="50" cy="74" r="4" fill="#fff" opacity=".55"/>
+    <ellipse cx="43" cy="89" rx="6" ry="3.4" fill="${c.legs || c.arms}"/>
+    <ellipse cx="57" cy="89" rx="6" ry="3.4" fill="${c.legs || c.arms}"/>
   </svg>`;
 }
 
@@ -144,6 +166,257 @@ function botBadgeSVG(template, pal){
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// ============================================================
+// ★ 2026-11-20 (v1.72) «귀엽고 고급스럽게» — UI 아이콘 + 루미 포즈 시스템
+//   · uiIcon(): 스티커 풍 인라인 SVG 아이콘(24 viewBox · 2.2px 라운드 스트로크 · 아이콘별 미세 그라디언트)
+//   · rumiPose(): 브랜드 로봇(단일 바이저 + 큰 눈 + 둥근 몸)의 7가지 포즈 SVG
+//   · 두 함수 모두 «문자열 상수» 만 조립한다 — 사용자 입력이 섞일 길이 없다(XSS 안전).
+//   · 그라디언트 id 는 호출 때마다 새로 붙인다(같은 아이콘을 여러 번 꽂아도 id 충돌이 없게).
+// ============================================================
+let _uiSvgSeq = 0;
+
+const UI_ICONS = {
+  // 셀 — 육각 허니코인 + 별
+  cell: { g1:'#ffe066', g2:'#f5a623', draw: g=>`
+    <polygon points="20.4,12 16.2,19.4 7.8,19.4 3.6,12 7.8,4.6 16.2,4.6" fill="url(#${g})" stroke="#c77800" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M12 7 L13.3 10.4 L17 10.6 L14.1 12.9 L15.1 16.4 L12 14.4 L8.9 16.4 L9.9 12.9 L7 10.6 L10.7 10.4 Z" fill="#fff8e1" stroke="#c77800" stroke-width="1.4" stroke-linejoin="round"/>` },
+  // 등불 — 따뜻한 전구 + 광원
+  lamp: { g1:'#ffe27a', g2:'#ffb020', draw: g=>`
+    <circle cx="12" cy="12" r="10" fill="#ffd43b" opacity="0.22"/>
+    <circle cx="12" cy="10.6" r="6.1" fill="url(#${g})" stroke="#d97706" stroke-width="2.2"/>
+    <path d="M9.9 9.9 a2.5 2.5 0 0 1 2 -1.7" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" opacity="0.8"/>
+    <path d="M9.6 17.5 h4.8 M10.4 20 h3.2" fill="none" stroke="#d97706" stroke-width="2.2" stroke-linecap="round"/>` },
+  // 안개 — 잿빛 구름
+  fog: { g1:'#c3d2e2', g2:'#8fa7c0', draw: g=>`
+    <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" fill="url(#${g})" stroke="#5f7490" stroke-width="2.2" stroke-linejoin="round"/>` },
+  // 수정 — 얼음빛 프리즘
+  crystal: { g1:'#c9ecff', g2:'#7cc4f5', draw: g=>`
+    <path d="M12 2.8 L19.2 9.8 L12 21.2 L4.8 9.8 Z" fill="url(#${g})" stroke="#3b82a0" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M4.8 9.8 h14.4 M12 2.8 L8.9 9.8 L12 21.2 M12 2.8 L15.1 9.8 L12 21.2" fill="none" stroke="#eaf7ff" stroke-width="1.3" stroke-linejoin="round" opacity="0.9"/>` },
+  // 탑 — 돌탑 + 깃발
+  tower: { g1:'#e3eaf2', g2:'#a9bccd', draw: g=>`
+    <path d="M12 6.6 V3.2" fill="none" stroke="#55677e" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M12 3.2 h4.6 l-1.5 1.7 1.5 1.7 H12 Z" fill="#ff8787" stroke="#c92a2a" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M8 20.6 V9.6 L10.4 6.8 h3.2 L16 9.6 V20.6 Z" fill="url(#${g})" stroke="#55677e" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M10.8 20.6 v-2.4 a1.2 1.2 0 0 1 2.4 0 v2.4" fill="none" stroke="#55677e" stroke-width="1.6" stroke-linecap="round"/>` },
+  // 별
+  star: { g1:'#ffe27a', g2:'#ffb020', draw: g=>`
+    <path d="M12 4 L14.1 9.8 L20.2 9.9 L15.3 13.7 L17.1 19.6 L12 16.1 L6.9 19.6 L8.7 13.7 L3.8 9.9 L9.9 9.8 Z" fill="url(#${g})" stroke="#c77800" stroke-width="2.2" stroke-linejoin="round"/>` },
+  // 하트
+  heart: { g1:'#ffb3c1', g2:'#f06595', draw: g=>`
+    <path d="M12 20.2 C7.2 16.4 4 13.2 4 9.8 C4 7.4 5.9 5.6 8.2 5.6 C9.7 5.6 11.1 6.4 12 7.7 C12.9 6.4 14.3 5.6 15.8 5.6 C18.1 5.6 20 7.4 20 9.8 C20 13.2 16.8 16.4 12 20.2 Z" fill="url(#${g})" stroke="#c2255c" stroke-width="2.2" stroke-linejoin="round"/>` },
+  // 선물 상자
+  gift: { g1:'#ffc9d4', g2:'#f783ac', draw: g=>`
+    <rect x="4.6" y="10.6" width="14.8" height="9.2" rx="1.6" fill="url(#${g})" stroke="#c2255c" stroke-width="2.2"/>
+    <rect x="3.4" y="7.2" width="17.2" height="3.6" rx="1.4" fill="url(#${g})" stroke="#c2255c" stroke-width="2.2"/>
+    <path d="M12 7.2 V19.8" fill="none" stroke="#c2255c" stroke-width="2.2"/>
+    <path d="M12 7 C10.2 3.2 6.2 4.4 7.3 6.5 C7.9 7.6 10 7.3 12 7 Z" fill="url(#${g})" stroke="#c2255c" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M12 7 C13.8 3.2 17.8 4.4 16.7 6.5 C16.1 7.6 14 7.3 12 7 Z" fill="url(#${g})" stroke="#c2255c" stroke-width="1.5" stroke-linejoin="round"/>` },
+  // 책
+  book: { g1:'#a5d8ff', g2:'#4dabf7', draw: g=>`
+    <path d="M6.8 3.6 H18.4 a1.9 1.9 0 0 1 1.9 1.9 V20.4 H6.8 A2.6 2.6 0 0 1 4.2 17.8 V6.2 A2.6 2.6 0 0 1 6.8 3.6 Z" fill="url(#${g})" stroke="#1971c2" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M4.2 17.8 A2.6 2.6 0 0 1 6.8 15.2 H20.3" fill="none" stroke="#1971c2" stroke-width="2.2" stroke-linecap="round"/>` },
+  // 체크 배지
+  check: { g1:'#b2f2bb', g2:'#69db7c', draw: g=>`
+    <circle cx="12" cy="12" r="9" fill="url(#${g})" stroke="#2f9e44" stroke-width="2.2"/>
+    <path d="M8 12.4 l2.7 2.8 L16.4 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>` },
+  // 반짝 — 네갈래 별
+  spark: { g1:'#ffe066', g2:'#fcc419', draw: g=>`
+    <path d="M12 3 C12.9 8.1 15.9 11.1 21 12 C15.9 12.9 12.9 15.9 12 21 C11.1 15.9 8.1 12.9 3 12 C8.1 11.1 11.1 8.1 12 3 Z" fill="url(#${g})" stroke="#e67700" stroke-width="2.2" stroke-linejoin="round"/>` },
+  // 방패
+  shield: { g1:'#d0ebff', g2:'#74c0fc', draw: g=>`
+    <path d="M12 2.9 L19.1 5.4 V11.1 C19.1 15.9 16.2 19.4 12 21.1 C7.8 19.4 4.9 15.9 4.9 11.1 V5.4 Z" fill="url(#${g})" stroke="#1864ab" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M9.3 11.6 l1.9 2 3.6 -3.8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` },
+  // 달
+  moon: { g1:'#d0bfff', g2:'#9775fa', draw: g=>`
+    <path d="M21 12.8 A9 9 0 1 1 11.2 3 A7 7 0 0 0 21 12.8 Z" fill="url(#${g})" stroke="#6741d9" stroke-width="2.2" stroke-linejoin="round"/>` },
+  // 친구 — 두 사람
+  friend: { g1:'#ffd8a8', g2:'#ff922b', draw: g=>`
+    <circle cx="16.4" cy="8.8" r="2.9" fill="url(#${g})" stroke="#e8590c" stroke-width="2"/>
+    <path d="M15.4 15.3 c2.9 0.4 5.3 2.3 5.6 4.5" fill="none" stroke="#e8590c" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="8.6" cy="8.6" r="3.4" fill="url(#${g})" stroke="#e8590c" stroke-width="2.2"/>
+    <path d="M2.9 19.8 c0-3.3 2.6-5.3 5.7-5.3 s5.7 2 5.7 5.3 Z" fill="url(#${g})" stroke="#e8590c" stroke-width="2.2" stroke-linejoin="round"/>` },
+};
+
+// 스티커 아이콘 한 개를 문자열로 만든다. name 은 UI_ICONS 의 키만 허용한다.
+function uiIcon(name, size=18){
+  const spec = UI_ICONS[name];
+  if(!spec) return '';
+  const g = `ui-grad-${++_uiSvgSeq}`;
+  const s = Number(size) || 18;
+  return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">` +
+    `<defs><linearGradient id="${g}" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="${spec.g1}"/><stop offset="1" stop-color="${spec.g2}"/>` +
+    `</linearGradient></defs>${spec.draw(g)}</svg>`;
+}
+
+// ---------- 루미 포즈 (7가지) — 빈 화면·타이핑·모달 머리·잠금 화면 공용 ----------
+function rumiPose(kind, size=64){
+  const s = Number(size) || 64;
+  const g = `rumi-grad-${++_uiSvgSeq}`;
+  // 브랜드 팔레트: 바이저는 진청(#2e4b43 계열), 몸은 민트 콩나물 톤
+  const B1='#d9f3e6', B2='#a9dfc3', ARM='#57a37f', EDGE='#3f8a6b', VIS='#2e4b43', VIS_EDGE='#1f332c', GLOW='#a7f3d0';
+  const shadow = `<ellipse cx="32" cy="57.5" rx="15" ry="3" fill="#0b3d2c" opacity="0.10"/>`;
+  const legs = `<rect x="22" y="49" width="8.5" height="7" rx="3.4" fill="${ARM}"/><rect x="33.5" y="49" width="8.5" height="7" rx="3.4" fill="${ARM}"/>`;
+  const antenna = `<path d="M32 18.5 V13.5" fill="none" stroke="#e8590c" stroke-width="2.2" stroke-linecap="round"/><circle cx="32" cy="11" r="3.2" fill="#ffb020" stroke="#e8590c" stroke-width="1.8"/>`;
+  const body = `<ellipse cx="32" cy="35" rx="19" ry="17.5" fill="url(#${g})" stroke="${EDGE}" stroke-width="2.2"/>`;
+  const visor = `<rect x="16.5" y="25.5" width="31" height="15.5" rx="7.75" fill="${VIS}" stroke="${VIS_EDGE}" stroke-width="2"/>`;
+  const armL = `<rect x="10.5" y="33.5" width="6" height="11.5" rx="3" fill="${ARM}"/>`;
+  const armR = `<rect x="47.5" y="33.5" width="6" height="11.5" rx="3" fill="${ARM}"/>`;
+  const eyes = (cy=33.2, r=2.7)=>`<circle cx="25.5" cy="${cy}" r="${r}" fill="${GLOW}"/><circle cx="26.3" cy="${cy-0.9}" r="0.9" fill="#fff"/><circle cx="38.5" cy="${cy}" r="${r}" fill="${GLOW}"/><circle cx="39.3" cy="${cy-0.9}" r="0.9" fill="#fff"/>`;
+  const smile = `<path d="M29 44.5 Q32 46.8 35 44.5" fill="none" stroke="${EDGE}" stroke-width="1.9" stroke-linecap="round"/>`;
+  const FACES = {
+    // idle — 큰 눈 + 온화한 미소(기본 자세)
+    idle: eyes() + smile,
+    // sleep — 감은 눈 + zZ
+    sleep: `<path d="M22.8 33.4 q2.7 2.6 5.4 0 M35.8 33.4 q2.7 2.6 5.4 0" fill="none" stroke="${GLOW}" stroke-width="2" stroke-linecap="round"/>` +
+      `<path d="M45 12.5 h6 l-6 6 h6" fill="none" stroke="#8fb8d8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `<path d="M53.5 22.5 h4 l-4 4 h4" fill="none" stroke="#b6cfe4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+    // think — 눈을 올리고 «?» 말풍선
+    think: eyes(31.6) + smile +
+      `<circle cx="51.5" cy="11.5" r="6.8" fill="#fff" stroke="#9fb7d8" stroke-width="2"/>` +
+      `<path d="M49.8 9.9 a1.9 1.9 0 1 1 3 1.6 c-0.8 0.5 -1.1 1 -1.1 1.8" fill="none" stroke="#6f9fd8" stroke-width="1.8" stroke-linecap="round"/>` +
+      `<circle cx="51.7" cy="15.7" r="1" fill="#6f9fd8"/>`,
+    // happy — 초승달 눈 + 볼터치
+    happy: `<path d="M22.7 34.3 q2.8 -3.6 5.6 0 M35.7 34.3 q2.8 -3.6 5.6 0" fill="none" stroke="${GLOW}" stroke-width="2.2" stroke-linecap="round"/>` +
+      `<circle cx="18.8" cy="41.5" r="3" fill="#ffb3c1" opacity="0.85"/><circle cx="45.2" cy="41.5" r="3" fill="#ffb3c1" opacity="0.85"/>` +
+      `<path d="M28 44 Q32 48 36 44" fill="none" stroke="${EDGE}" stroke-width="2.2" stroke-linecap="round"/>`,
+    // sad — 눈물 + 시무근 입
+    sad: `<path d="M22.8 32.8 q2.7 2.9 5.4 0 M35.8 32.8 q2.7 2.9 5.4 0" fill="none" stroke="${GLOW}" stroke-width="2" stroke-linecap="round"/>` +
+      `<ellipse cx="41.6" cy="38.6" rx="1.7" ry="2.4" fill="#74c0fc"/>` +
+      `<path d="M29.5 46 Q32 43.8 34.5 46" fill="none" stroke="${EDGE}" stroke-width="1.9" stroke-linecap="round"/>`,
+    // wave — 오른팔을 위로 흔든다
+    wave: eyes() + `<ellipse cx="32" cy="45" rx="2.5" ry="1.9" fill="#35614d"/>`,
+    // oops — 놀란 큰 눈 + 삐뚤진 입 + 식은땀
+    oops: eyes(33, 3.1) +
+      `<ellipse cx="32.5" cy="45.2" rx="2.1" ry="2.7" fill="#35614d" transform="rotate(12 32.5 45.2)"/>` +
+      `<ellipse cx="48.5" cy="19.5" rx="1.9" ry="2.7" fill="#74c0fc"/>`,
+  };
+  const face = FACES[kind] || FACES.idle;
+  // wave 포즈는 오른팔을 «위로 든 팔 + 흔적 선» 으로 교체한다
+  const arms = kind === 'wave'
+    ? armL +
+      `<path d="M50.5 43 L53.5 31.5" fill="none" stroke="${ARM}" stroke-width="5" stroke-linecap="round"/>` +
+      `<circle cx="54.2" cy="28.6" r="3.4" fill="${B1}" stroke="${EDGE}" stroke-width="2"/>` +
+      `<path d="M58.6 24.6 l2.4 -1.6 M59.4 29.9 l2.9 0.3" fill="none" stroke="#f5a623" stroke-width="1.8" stroke-linecap="round"/>`
+    : armL + armR;
+  return `<svg viewBox="0 0 64 64" width="${s}" height="${s}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">` +
+    `<defs><linearGradient id="${g}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${B1}"/><stop offset="1" stop-color="${B2}"/></linearGradient></defs>` +
+    shadow + legs + arms + antenna + body + visor + face + `</svg>`;
+}
+
+// ---------- 빈 상태 카드 (루미 포즈 + 안내 문구) ----------
+// msg 는 고정 문구/서버 에러 문구만 들어가므로 esc 로 한 번 더 막는다.
+// ★ 2026-11-21 (v1.74) C4 «전역 다시 시도»: 세 번째 인자에 함수를 넘기면 «다시 시도» 버튼을
+//   얹는다. HTML 문자열만 돌려받는 구조라 재시도 함수는 ES_RETRIES 토큰 표에 넣어 두고,
+//   문서 하나에 단 하나의 위임 리스너가 토큰을 찾아 실행한다(중복 바인딩 0).
+const ES_RETRIES = {};
+let _esRetrySeq = 0;
+function emptyState(kind, msg, retryFn){
+  const poseSize = 64;
+  let retryBtn = '';
+  if(typeof retryFn === 'function'){
+    const token = 'esr' + (++_esRetrySeq);
+    ES_RETRIES[token] = retryFn;
+    retryBtn = `<button type="button" class="btn ghost small" data-es-retry="${token}">다시 시도</button>`;
+  }
+  return `<div class="empty-state"><div class="empty-art">${rumiPose(kind, poseSize)}</div><p>${esc(msg)}</p>${retryBtn}</div>`;
+}
+// «다시 시도» 위임 — emptyState 로 그려진 모든 버튼이 이 한 줄로 동작한다
+document.addEventListener('click', (e)=>{
+  const b = e.target.closest ? e.target.closest('[data-es-retry]') : null;
+  if(!b) return;
+  const fn = ES_RETRIES[b.dataset.esRetry];
+  if(typeof fn === 'function'){ delete ES_RETRIES[b.dataset.esRetry]; fn(); }
+});
+
+// ---------- 로딩 스켈레톤 (3~5개 선, 데이터 도착 시 통째로 교체된다) ----------
+// ★ 스켈레톤에는 루미 포즈를 넣지 않는다(가짜 루미가 깜빡이면 오히려 수상해 보인다).
+function fillSkeleton(el, n=4){
+  if(!el) return;
+  const w = ['w60','w80','w40','w60'];
+  el.innerHTML = Array.from({ length: Math.max(3, Math.min(6, n|0)) },
+    (_,i)=>`<div class="sk sk-line ${w[i % 4]}"></div>`).join('');
+}
+
+// ---------- [data-icon] 정적 아이콘 교체 ----------
+// index.html 에 표시만 해 둔 자리를 uiIcon SVG 로 바꾼다.
+//  · 요소가 «아이콘 이모지만» 담고 있으면 innerHTML 로 통째로 교체
+//  · 다른 요소(숫자·문자)와 섞여 있으면 «첫 번째 비어있지 않은 텍스트 노드만» SVG 로 바꿔
+//    뒤쪽 텍스트 구조를 그대로 보존한다(예: 셀 잔액 pill 의 «🪙 [숫자] 셀»).
+function replaceStaticIcons(){
+  $$('[data-icon]').forEach(el=>{
+    if(el.dataset.iconDone) return;
+    const name = String(el.dataset.icon || '').trim();
+    if(!name || !UI_ICONS[name]){ return; }
+    const size = Number(el.dataset.iconSize) || 18;
+    if(el.children.length){
+      const t = document.createElement('template');
+      t.innerHTML = uiIcon(name, size);
+      const svg = t.content.firstElementChild;
+      const node = Array.from(el.childNodes).find(n=>n.nodeType===3 && n.textContent.trim());
+      if(svg && node){ node.replaceWith(svg); el.dataset.iconDone = '1'; }
+      return;
+    }
+    el.innerHTML = uiIcon(name, size);
+    el.dataset.iconDone = '1';
+  });
+}
+
+// ---------- 자주 쓰는 모달 제목 앞에 루미 얼굴 달기 ----------
+// 잠금 화면(overplay)은 «단정한 화면» 으로 남겨 둔다 — 여기엔 절대 얼굴을 붙이지 않는다.
+function injectModalFaces(){
+  ['game-puzzle','game-tower','game-mole','game-sort','game-shooter','game-memory'].forEach(id=>{
+    const m = document.getElementById(id);
+    if(!m) return;
+    const h = m.querySelector('.modal-card > h3');
+    if(!h || h.querySelector('.modal-head-face')) return;
+    const face = document.createElement('span');
+    face.className = 'modal-head-face';
+    face.innerHTML = rumiPose('idle', 26);
+    h.insertBefore(face, h.firstChild);
+  });
+}
+
+// ---------- «루미 모먼트» 1회 주입 (init 에서 한 번만) ----------
+function injectRumiMoments(){
+  // 기억 등불 «빈 상태»: p.hint 를 empty-state 로 승급시킨다.
+  // id 를 그대로 유지하므로 renderLamps 의 hidden 토글은 그대로 동작한다.
+  const le = document.getElementById('lamp-empty');
+  if(le && !le.querySelector('.empty-state')){
+    const div = document.createElement('div');
+    div.id = 'lamp-empty';
+    div.className = 'lamp-empty';
+    div.innerHTML = emptyState('wave', '루미에게 가르친 게 아직 없어요. 대화에서 새로운 걸 가르쳐 주면 등불이 켜져요!');
+    le.replaceWith(div);
+  }
+  injectModalFaces();
+}
+
+// ---------- 심야 잠금 화면 «밤 모드» ----------
+// 20시~새벽 6시 사이에만 night 클래스 + 자는 루미를 얹는다.
+// ★ 잠금·해제·제외 로직은 그대로 — «보여줄 때 꾸며 주는» 일만 한다.
+function applyOverplayNight(){
+  const ov = document.getElementById('overplay');
+  if(!ov) return;
+  const h = new Date().getHours();
+  const night = (h >= 20 || h < 6);
+  const card = ov.querySelector('.modal-card') || ov;
+  const pose = card.querySelector(':scope > .rumi-pose');
+  if(night){
+    ov.classList.add('night');
+    if(!pose){
+      const p = document.createElement('div');
+      p.className = 'rumi-pose';
+      p.innerHTML = rumiPose('sleep', 72);
+      card.appendChild(p);
+    }
+  } else {
+    ov.classList.remove('night');
+    if(pose) pose.remove();
+  }
+}
 
 // ============================================================
 // ★ V11 신규: 효과음 · 자랑하기 · 랭킹 · 온보딩 · 저사양 자동조정
@@ -224,7 +497,8 @@ const SCREEN_META = {
   shop:['상점','부품과 스킨을 구경해요'],
   mail:['우편함','선생님과 루미의 편지'],
   friends:['친구','코드로 연결하고 서로 응원해요'],
-  board:['리포트','성장과 셀 기록']
+  board:['리포트','성장과 셀 기록'],
+  settings:['설정','나 · 소리와 글자 · 가족']
 };
 function show(id){
   $$('.screen').forEach(e=>e.classList.add('hidden'));
@@ -248,12 +522,33 @@ function show(id){
   }
   if(!guest) syncSidebar();
 }
+let _balAnim = null;   // ★ 2026-11-20 (v1.72): 진행 중 count-up 애니메이션(중복 호출 시 취소용)
 function setBalance(v){
   // ★ V11: 셀이 '늘어난' 순간에만 보상음을 낸다(단일 지점이라 모든 보상 경로를 잡는다).
   //   로딩·화면 전환처럼 값이 그대로일 때는 울리지 않는다.
+  // ★ 2026-11-20 (v1.72): 숫자가 500ms 동안 굴러가는 count-up(ease-out) + .bump 맥박.
+  //   «.bump» 는 스타일 담당이 그리는 클래스 — JS 는 붙였다 뗐다만 한다.
+  //   첫 로딩(prev 없음)·같은 값일 때는 애니메이션 없이 바로 그린다.
   const prev = state._lastBalance;
   state._lastBalance = v;
-  $('#cell-balance').textContent = v;
+  const el = $('#cell-balance');
+  if(_balAnim){ cancelAnimationFrame(_balAnim); _balAnim = null; }
+  const changed = prev != null && Number(prev) !== Number(v);
+  if(el && changed){
+    const from = Number(prev) || 0, to = Number(v) || 0;
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    const t0 = performance.now(), DUR = 500;
+    const easeOut = t => 1 - Math.pow(1 - t, 3);
+    const step = now=>{
+      const p = Math.min(1, (now - t0) / DUR);
+      el.textContent = Math.round(from + (to - from) * easeOut(p));
+      if(p < 1){ _balAnim = requestAnimationFrame(step); }
+      else { _balAnim = null; el.classList.remove('bump'); }
+    };
+    _balAnim = requestAnimationFrame(step);
+  } else {
+    if(el) el.textContent = v;
+  }
   if(prev != null && v > prev){
     SFX.coin();
     cellGain(v - prev);
@@ -287,7 +582,10 @@ function cellGain(delta){
   if(navigator.vibrate){ try{ navigator.vibrate(15); }catch(e){} }
 }
 // ai=true 이면 DeepSeek 생성 문장임을 작게 표기
-function bubble(text, ai){
+// ★ 2026-11-21 (v1.74) A2: 세 번째 인자 act({label,fn}) — 말풍선 «아래에» 작은 버튼을 얹는다.
+//   robot/hello 의 안개 분기(fog)에서 «루미 다시 가르쳐 주기» 로 바로 연결하는 용도.
+//   버튼이 있으면 노출 시간을 9초로 늘린다(누를 시간을 준다). 텍스트는 textContent 경로 그대로.
+function bubble(text, ai, act){
   const b=$('#bubble'); b.textContent=text;
   if(ai){
     const c=document.createElement('span');
@@ -295,14 +593,30 @@ function bubble(text, ai){
     c.innerHTML='Powered by <b>DeepSeek</b>';
     b.appendChild(c);
   }
+  if(act && typeof act.fn === 'function'){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'bubble-act';
+    btn.textContent = String(act.label || '가기');
+    btn.onclick = (e)=>{ e.stopPropagation(); b.classList.add('hidden'); act.fn(); };
+    b.appendChild(btn);
+  }
   b.classList.remove('hidden');
-  clearTimeout(b._t); b._t=setTimeout(()=>b.classList.add('hidden'), 4500); }
+  clearTimeout(b._t); b._t=setTimeout(()=>b.classList.add('hidden'), act && act.fn ? 9000 : 4500); }
 // ★ v1.58 «같이 공부하는 로봇» — 기능 안내가 아니라 «기억하는 것» 으로 먼저 말을 건다.
+// ★ 2026-11-21 (v1.74) A2/계약: hello 응답의 fog(안개에 잊힌 개념) 분기에는 말풍선 아래
+//   «루미 다시 가르쳐 주기» 버튼을 붙여 goTeach 로 바로 연결하고,
+//   parentCheer(가족의 한 마디)가 오면 인사가 닫힌 뒤 💌 로 한 번 더 말한다.
 async function loadRobotHello(){
   try{
     const h = await api('/api/robot/hello', undefined, 8000, 'GET');
     // 규칙으로 만든 «기억» 문장이라 AI 생성 표기를 붙이지 않는다(로봇이 직접 말하는 느낌).
-    if(h && h.line){ bubble(h.line); return; }
+    if(h && h.line){
+      const fogTopic = h.fog ? String(h.fog) : '';
+      bubble(h.line, false, fogTopic ? { label:'루미 다시 가르쳐 주기', fn:()=>goTeach(fogTopic) } : null);
+      if(h.parentCheer) setTimeout(()=>bubble('💌 ' + String(h.parentCheer)), 4800);
+      return;
+    }
   }catch(e){}
   if(state.robot && state.robot.greeting) bubble(state.robot.greeting);
 }
@@ -357,7 +671,9 @@ function checkStudy(){
   _studyNudges++;
   if(_studyNudges <= 2){
     bubble('조금 쉬었다 하자. 물 한 모금 마시고 와!');
-    toast('15분 넘게 앉아 있었어요', 4000);
+    // ★ 몇 번째 권유인지에 따라 실제 «need» 분(15/30) 을 그대로 보여준다.
+    //   예전엔 두 번째 권유(30분)인데도 «15분 넘게» 로 고정돼 있었다.
+    toast(`${need}분 넘게 앉아 있었어요`, 4000);
   }else{
     bubble('오늘은 여기까지 하자. 내일 또 같이 하자!');
     toast('오늘 학습은 여기까지', 4000);
@@ -451,10 +767,13 @@ function speak(text, onend){
   if(!('speechSynthesis' in window)) return toast('이 브라우저는 읽어주기를 지원하지 않아요.');
   const seq = ++_speakSeq;
   try{ window.speechSynthesis.cancel(); }catch(e){}
-  stopBargeIn();
-  if(state.voiceChat) startBargeIn();
+  // ★ 빈 텍스트 검사를 반드시 startBargeIn() «앞» 에서 끝낸다.
+  //   예전엔 마이크(바지인 감시)를 먼저 열어 놓고 빈 텍스트라 return 해서
+  //   읽어줄 것도 없는데 마이크만 열린 채 남았다.
   const chunks = splitSpeech(text);
   if(!chunks.length) return;
+  stopBargeIn();
+  if(state.voiceChat) startBargeIn();
   const voice = pickVoice();
   if(!voice && !state.voiceWarned){
     state.voiceWarned = true;
@@ -585,16 +904,25 @@ function exitRecolor(){
   $('#btn-done').textContent = '완성! ';
 }
 async function submitRecolor(){
+  // ★ 이중 클릭 방지: 서버는 «1일 1회» 제한이라 연타로 두 번째 요청이
+  //   거절 alert 를 띄운다. 제출 동안 버튼을 잠그고 finally 에서 푼다.
+  const btn = $('#btn-done');
+  if(btn && btn.disabled) return;
+  if(btn){ btn.disabled = true; btn.textContent = '저장 중…'; }
   try{
     await api('/api/workshop/recolor', { palette: state.palette });
     const jr = await api('/api/robots/me');
     absorbRobotMe(jr);
     if(bjs.ready && state.robot) rebuildRobot(state.robot);
     updateChatFab();          // 색칠한 로봇을 대화 버튼에도 즉시 반영
-    exitRecolor();
+    exitRecolor();            // 이 안에서 버튼 문구가 «완성!» 으로 돌아간다
     bubble(' 색칠을 바꿨어요!');
     goNav('workshop');
-  }catch(e){ alert(e.message); }
+    maybeAct1();              // ★ 2026-11-21 (v1.74) B1 삼막 1막: «색칠 완료» 직후 인도
+  }catch(e){
+    if(btn) btn.textContent = '저장! ';   // 실패 시에만 문구 복구
+    alert(e.message);
+  }finally{ if(btn) btn.disabled = false; }
 }
 // 탭 전환을 코드에서도 쓸 수 있게 한 곳에 모은다(버튼 클릭과 동일 동작)
 function goNav(name){
@@ -609,6 +937,8 @@ function goNav(name){
   if(name==='workshop') loadWorkshop();
   if(name==='mail') loadMailbox();
   if(name==='friends') loadFriends();
+  // ★ 2026-11-21 (v1.74) C6: 설정 화면 — 들어올 때마다 스위치 상태·한국어 음성 목록을 다시 맞춘다.
+  if(name==='settings'){ applySettings(); }
   if(name==='myroom'){ if(state.robot) renderMyroom(); }
 }
 async function regeneratePersonality(){
@@ -633,8 +963,11 @@ async function askRobot(){
   ans.textContent = ' ...';
   try{
     const r = await api('/api/workshop/ask', { question:q }, 30000);
+    // ★ 서버가 ai:true(실제 LLM 생성)/ai:false(규칙 폴백 문장) 로 알려준다.
+    //   규칙으로 만든 문장까지 «AI 생성» 으로 표기하면 오해를 부르므로,
+    //   ai 플래그가 참일 때만 크레딧을 보여준다.
     ans.innerHTML = `<b> 로봇의 대답</b><br>${esc(r.answer)}` +
-      `<div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>`;
+      (r.ai ? `<div class="ai-credit-row"><span class="ai-credit">Powered by <b>DeepSeek</b></span></div>` : '');
     $('#ws-q').value = '';
     $('#ws-ask-left').textContent = `오늘 ${r.left}번 더 물어볼 수 있어요 (하루 5번)`;
     if(r.left <= 0) b.disabled = true;
@@ -660,24 +993,39 @@ $('#mail-claim-all').addEventListener('click', async ()=>{
 
 // ----- 우편함 (P0-4) -----
 async function loadMailbox(){
+  // ★ 2026-11-20 (v1.72): await 동안 스켈레톤 → 도착하면 정상 렌더가 통째로 교체한다.
+  fillSkeleton($('#mail-list'), 3);
   let j;
   try{ j = await api('/api/mailbox'); }
-  catch(e){ $('#mail-list').innerHTML = `<span class="hint">${esc(e.message)}</span>`; return; }
+  catch(e){
+    // ★ 2026-11-21 (v1.74) C4: 실패해도 «다시 시도» 버튼으로 다시 부를 수 있다.
+    $('#mail-list').innerHTML = emptyState('oops', e.message || '편지를 불러오지 못했어요. 잠시 후 다시 시도해 줄래?', ()=>loadMailbox());
+    return;
+  }
   setMailBadge(j.unread);
   const claimable = j.mails.filter(m=>!m.claimed && (m.cell>0 || m.item));
   $('#mail-summary').textContent = claimable.length ? `받을 선물 ${claimable.length}개` : '받을 선물이 없어요';
   $('#mail-claim-all').disabled = claimable.length === 0;
+  // ★ 2026-11-20 (v1.72): 빈 우편함은 글자 한 줄 대신 «자고 있는 루미» 빈 화면으로
   $('#mail-list').innerHTML = j.mails.length ? j.mails.map(m=>{
     const gift = [m.cell?` ${m.cell}셀`:'', m.item?` ${esc(m.item)}`:''].filter(Boolean).join(' · ');
     const state_ = m.claimed ? '<span class="done"> 받음</span>'
       : (gift ? `<button class="btn primary sm" data-claim="${m.id}"> 받기</button>` : '<span class="read">읽음</span>');
+    // ★ 2026-11-21 (v1.74) A2: tag 가 'fog:' 로 시작하는 «안개 SOS» 편지에는
+    //   «루미 다시 가르쳐 주기» 버튼을 붙여 goTeach(topic) 로 바로 연결한다.
+    //   (서버가 tag 를 주지 않는 낡은 응답이면 버튼이 그냥 안 보인다 — 우아한 하락.)
+    const fogTopic = String(m.tag || '').startsWith('fog:') ? String(m.tag).slice(4) : '';
+    const fogBtn = fogTopic ? `<button class="btn ghost sm" data-fogteach="${esc(fogTopic)}">루미 다시 가르쳐 주기</button>` : '';
     return `<div class="mail ${m.claimed?'is-done':''}">
       <div class="mail-head"><b>${esc(m.title)}</b><span class="ts">${esc(String(m.ts||'').slice(0,16))}</span></div>
       ${m.body?`<div class="mail-body">${esc(m.body)}</div>`:''}
       ${gift?`<div class="mail-gift">${gift}</div>`:''}
+      ${fogBtn?`<div class="mail-act">${fogBtn}</div>`:''}
       <div class="mail-act">${state_}</div>
     </div>`;
-  }).join('') : '<p class="hint">아직 편지가 없어요. 과제를 하면 선물이 도착해요!</p>';
+  }).join('') : emptyState('sleep', '아직 편지가 없어요. 과제를 하면 선물 편지가 도착해요!');
+  // ★ 2026-11-21 (v1.74) A2: 안개 편지 → goTeach 딥링크
+  $$('#mail-list [data-fogteach]').forEach(b=>b.addEventListener('click', ()=>goTeach(b.dataset.fogteach)));
   $$('#mail-list [data-claim]').forEach(b=>b.addEventListener('click', async ()=>{
     b.disabled = true;
     try{
@@ -764,6 +1112,7 @@ $('#btn-start').addEventListener('click', async ()=>{
   try{
     const j = await api('/api/user',{nickname:nick});
     state.user = j.user; state.quests = j.quests;
+    absorbUserMeta(j);   // ★ v1.74: ob_step · play_limit_delta 스냅샷
     if(j.revive && j.revive.available) setTimeout(()=>showRevive(j.revive), 900);
     localStorage.setItem(SK.uid, j.user.id);
     localStorage.setItem(SK.nick, nick);
@@ -855,6 +1204,8 @@ async function verifyParent(){
     if($('#overplay').classList.contains('hidden') === false) $('#overplay').classList.add('hidden');
     state.overLimit = false;
     state.overplayDismissed = false;
+    clearPendingLock();      // ★ v1.74 C2: 유예 상태도 함께 초기화
+    state.windDown = false;
     startPlayTimer();
   }catch(e){
     msg.textContent = e.message || '정답이 아니에요.';
@@ -873,7 +1224,50 @@ function showOverplay(info){
   if(st) st.textContent = `오늘 ${info.minutes}분 플레이`;
   const m = $('#overplay-msg');
   if(m) m.innerHTML = '오늘 플레이 시간이 끝났어요.<br>눈이 피곤하니 쉬어가요!';
+  fillOverplayRumi();
+  // ★ 2026-11-20 (v1.72): 밤(20시~새벽 6시)이면 .night + 자는 루미 — 잠금 로직 자체는 그대로
+  applyOverplayNight();
   $('#overplay').classList.remove('hidden');
+}
+// ★ 2026-11-21 (v1.71) 잠들기 전 루미의 «내일 약속» — 잠금 화면에 루미의 목소리를 한 줄 얹는다.
+//   ★ 새 요청을 보내지 않는다. 잠금 시점엔 이미 네트워크가 끊겼을 수 있으므로
+//     state 에 기억된 것만 조립한다.
+// ★ 2026-11-21 (v1.74) C2: 문장을 «오늘 «X» 배웠어! 내일 «Y» 도전하자!» 로 격상한다.
+//     X = 오늘 가장 최근에 켜진 등불(litDay 내림차순 1위 — C3 «최신» 정렬과 같은 규칙)
+//     Y = next-action 제목/개념. 둘 다 없으면 예전 체인(계획 다음 단계 → 등불)으로,
+//     그래도 없으면 «내일도 같이 놀자» 로 힘내주듯 마무리한다.
+//   textContent 로만 넣는다(esc 불필요 — 사용자 문자열이 HTML 로 새는 길이 아예 없다).
+function fillOverplayRumi(){
+  const el = $('#overplay-rumi'); if(!el) return;
+  // X — 오늘 배운 것: 최신 등불 우선
+  let learned = '';
+  const lamps = (state.lamps && Array.isArray(state.lamps.lamps)) ? state.lamps.lamps.filter(l=>l && l.topic) : [];
+  if(lamps.length){
+    const latest = lamps.slice().sort((a,b)=>String(b.litDay||'').localeCompare(String(a.litDay||'')))[0];
+    if(latest) learned = String(latest.topic);
+  }
+  if(!learned){
+    // 옛 체인: 계획의 다음 단계 → 흐림 없는 등불
+    const steps = (state.plan && state.plan.plan && state.plan.plan.steps) || [];
+    const nx = steps.find(s => s && !s.done && s.title);
+    if(nx) learned = String(nx.title);
+    else if(lamps.length){
+      const lit = lamps.find(l => !l.crystal && (Number(l.decay)||0) < 30);
+      if(lit) learned = String(lit.topic);
+    }
+  }
+  // Y — 내일 도전: next-action(타탑 카드면 «안개 속의 탑» 으로 읽는다)
+  const na = state.nextAction;
+  let next = '';
+  if(na){
+    if(na.kind === 'tower') next = '안개 속의 탑';
+    else if(na.title) next = String(na.title);
+    else if(na.concept) next = String(na.concept);
+  }
+  if(learned && next) el.textContent = `오늘 «${learned}» 배웠어! 내일 «${next}» 도전하자!`;
+  else if(learned) el.textContent = `오늘 «${learned}» 배웠어! 내일도 같이 놀자!`;
+  else if(next) el.textContent = `내일은 «${next}» 에 도전해 보고 싶어! 그때 또 만나 줄래?`;
+  else el.textContent = '내일도 같이 놀자! 나 기다릴게.';
 }
 // 실제 플레이 시간을 주기적으로 서버에 보고한다(시간 초과 판단 근거)
 function startPlayTimer(){
@@ -889,9 +1283,45 @@ function startPlayTimer(){
         state.warned30 = true;
         toast('⏰ 30분 넘었어요! 10분 뒤엔 쉬어가요.');
       }
-      if(r && r.over && !state.overLimit) showOverplay({ minutes: r.playMinutes });
+      if(r && r.playMinutes != null) state.playMinutes = r.playMinutes;
+      // ★ 2026-11-21 (v1.74) C2 «자연스러운 마무리»: 30분 예고(state.windDown) 후에는
+      //   한도(서버 판정 — 40분 + play_limit_delta)에 닿아도 «바로» 잠그지 않고
+      //   pendingLock(4분 유예) 을 세운다. 유예 중에도 플레이타임 보고는 «그대로» 계속된다
+      //   (위의 보고 코드를 건드리지 않았다 — 시간 조작 방지 로직 불변).
+      if(r && !r.over && r.playMinutes >= 30) state.windDown = true;
+      if(r && r.over && !state.overLimit && !state.pendingLock) armPendingLock();
     }catch(e){ /* 네트워크 실패는 무시 — 다음 주기에 다시 보낸다 */ }
   }, 60000);
+}
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) C2 «자연스러운 마무리» — 40분(서버 한도) 도달 직후의 4분 유예.
+//   · 40분 도달 → armPendingLock(): 토스트로 미리 알리고 4분 타이머 시작(잠그지 않음)
+//   · 자연스러운 마무리 지점(게임/퀴즈 창 닫기 · 대화 창 닫기 · 집중 끝)에서 그때 잠근다
+//   · 4분 동안 마무리 지점이 없으면 강제로 잠근다
+//   · 잠금 자체는 기존 showOverplay() 를 그대로 쓴다(제외 목록·부모 연장 로직 불변)
+// ============================================================
+let _pendingLockTimer = null;
+function armPendingLock(){
+  if(state.pendingLock || state.overLimit || state.overplayDismissed) return;
+  state.pendingLock = true;
+  bubble('슬슬 마무리하자! 하던 것만 끝내고 쉬어가자.');
+  toast('오늘 시간이 거의 다 됐어요. 4분 안에 마무리해요! 🌙', 6000);
+  clearTimeout(_pendingLockTimer);
+  _pendingLockTimer = setTimeout(()=>forcePendingLock(), 4*60*1000);
+}
+function clearPendingLock(){
+  state.pendingLock = false;
+  if(_pendingLockTimer){ clearTimeout(_pendingLockTimer); _pendingLockTimer = null; }
+}
+function forcePendingLock(){
+  clearPendingLock();
+  if(state.overLimit || state.overplayDismissed) return;
+  showOverplay({ minutes: state.playMinutes || 40 });
+}
+// 자연스러운 마무리 지점에서 부른다 — pendingLock 중일 때만 실제로 잠근다
+function notifyNaturalBreak(){
+  if(state.pendingLock && !state.overLimit) forcePendingLock();
 }
 function stopPlayTimer(){
   if(_playTick){ clearInterval(_playTick); _playTick = null; }
@@ -936,10 +1366,20 @@ function reportDuration(){
 // pagehide 만 사용한다. beforeunload 를 함께 걸면 두 이벤트가 연달아 발화한다.
 addEventListener('pagehide', reportDuration);
 
+// ★ 2026-11-21 (v1.74) 계약: /api/user 최상위 += ob_step · teach_count · play_limit_delta.
+//   삼막 인도(B)의 1막 판정(ob_step===0) 과 C2 의 잠금 한도(40+delta) 계산에 쓴다.
+//   낡은 응답(필드 없음)이면 user 행의 값으로라도 채운다 — 없으면 0 유지.
+function absorbUserMeta(j){
+  if(!j) return;
+  if(j.ob_step != null) state.obStep = Number(j.ob_step) || 0;
+  else if(j.user && j.user.ob_step != null) state.obStep = Number(j.user.ob_step) || 0;
+  if(j.play_limit_delta != null) state.playLimitDelta = Number(j.play_limit_delta) || 0;
+  else if(j.user && j.user.play_limit_delta != null) state.playLimitDelta = Number(j.user.play_limit_delta) || 0;
+}
+
 // ---------- P1-5 상태 구조 보강 ----------
 // robots/me 응답을 상태에 반영할 때 사용(parts + decors + 성장)
-function absorbRobotMe(j){
-  state.robot = j.robot; state.quests = j.quests || { list:[], done:[] };
+function absorbRobotMe(j){  state.robot = j.robot; state.quests = j.quests || { list:[], done:[] };
   state.parts = j.parts||[]; state.decors = j.decors||[];
   state.skins = j.skins||[]; state.shards = j.shards||[];
   // ★ 보유 수량 + 조각 교환 진행도(V2-1 / V2-10)
@@ -992,6 +1432,7 @@ $('#btn-done').addEventListener('click', async ()=>{
       <div class="reward"> +${esc(j.reward.cell)} 셀 ·  부품 [${esc(j.reward.part)}] 획득!${up?` ·  Lv.${esc(j.growth.level)} 달성!`:''}</div>`;
     $('#modal').classList.remove('hidden');
     state.robot = { name, template:state.template, palette:state.palette, personality:j.personality, greeting:j.greeting };
+    maybeAct1();   // ★ 2026-11-21 (v1.74) B1 삼막 1막: 첫 로봇 «완성!» 직후 — 대화로 부드럽게 인도
     // ★ P1-2 잔액은 서버가 준 실제 값을 사용(예전엔 +50 하드코딩이라 어긋났음)
     if(typeof j.balance === 'number'){ state.user.cell_balance = j.balance; setBalance(j.balance); }
     // ★ 성장 정보 병합: /api/robots 응답의 growth 에는 level/exp/stage 만 있으므로
@@ -1060,7 +1501,7 @@ function renderTopic(){
 }
 
 function renderMyroom(){
-  if(!state.presenceReady){ state.presenceReady = true; setupPresence(); }
+  if(!state.presenceReady){ state.presenceReady = true; setupPresence(); setupLayoutV167(); setupGuideV172(); }
   loadNudge();                    // ★ 2026-11-04: 루미가 먼저 말 걸기 (없으면 계획 다음 단계로 폴백)
   loadMood(); loadSeason(); loadFocusSummary();
   loadClassCard();          // ★ V15 수업 출석 카드(회사 기대효과 ②)
@@ -1106,6 +1547,7 @@ function renderMyroom(){
   const _dayKey = `${_d.getFullYear()}-${_d.getMonth()+1}-${_d.getDate()}`;
   let _saidDay = '';
   try{ _saidDay = localStorage.getItem('roomi_room_greet_day') || ''; }catch(e){}
+  try{ renderToday3(); }catch(e){}
   if(_saidDay !== _dayKey){
     // ★ v1.58: 첫 방문 팁(«드래그로 돌려 보세요»)이 먼저 뜨고, 그 뒤에 로봇이 «기억» 으로 말을 건다.
     setTimeout(loadRobotHello, 1300);
@@ -1376,9 +1818,12 @@ function buildRobotModel(scene, parent, c, template, extraParts, matFactory, sta
     const m=new BABYLON.StandardMaterial(name,scene);
     m.diffuseTexture=tex; m.diffuseTexture.hasAlpha=true;
     m.useAlphaFromDiffuseTexture=true;
-    m.diffuseColor=new BABYLON.Color3(0.30,0.30,0.30);
+    // ★ v1.77: 0.30 회색 diffuse + 0.94 emissive 가 겹쳐 «흰자» 가 회색으로 죽었다.
+    //   눈은 화면(visor) 위의 «빛» 이므로 diffuse/emissive 둘 다 1 로 올린다.
+    m.diffuseColor=new BABYLON.Color3(1,1,1);
     m.emissiveTexture=tex;
-    m.emissiveColor=new BABYLON.Color3(0.94,0.92,0.88);
+    m.emissiveColor=new BABYLON.Color3(1,1,1);
+    m.ambientColor=new BABYLON.Color3(1,1,1);
     m.specularColor=new BABYLON.Color3(0,0,0);
     m.backFaceCulling=false;
     return m;
@@ -1946,7 +2391,22 @@ function robotGesture(name){
 function rebuildRobot(robot){
   if(!bjs.model || !bjs.scene) return;
   boosterFlames = null;   // 아래에서 dispose 되므로 참조를 먼저 끊는다(잔여 참조 방지)
-  bjs.model.getChildMeshes(false).forEach(m=>{ if(m.material) m.material.dispose(); m.dispose(); });
+  bjs.model.getChildMeshes(false).forEach(m=>{
+    if(m.material){
+      // ★ 얼굴 레이어 재질(눈 흰자/동공/볼터치)은 buildRobotModel 이 매번 새
+      //   DynamicTexture 를 6장 만든다. material.dispose() 는 기본으로 텍스처를
+      //   끌어내리지 않아 재구색(스킨 교체) 때마다 GPU 메모리가 새었다.
+      //   재질 이름으로 골라서만 forceDisposeTextures — 몸통 재질이 공유하는
+      //   노멀맵(scene.__grainTex, getGrainNormalMap 캐시)을 지우지 않도록 주의.
+      const mn = m.material.name || '';
+      if(mn.indexOf('eyeWhite')===0 || mn.indexOf('pupilMat')===0 || mn.indexOf('blushMat')===0){
+        m.material.dispose(false, true);
+      }else{
+        m.material.dispose();
+      }
+    }
+    m.dispose();
+  });
   bjs.refs = buildRobotModel(bjs.scene, bjs.model, effectiveColors(robot.template, robot.palette), robot.template, null, bjs.matFactory, curStage());
   if(bjs.scene.__shadow){
     const list = bjs.model.getChildMeshes(false);
@@ -3256,7 +3716,8 @@ async function submitAiMission(){
     const r = await api('/api/quest/answer',{answer});
     state.user.cell_balance = r.balance; setBalance(r.balance);
     state.quests.done.push(String(btn.dataset.qid)); renderQuests();
-    bubble(r.reaction, true);
+    // ★ 서버 ai 플래그가 참일 때만 «AI 생성» 크레딧을 붙인다(규칙 폴백 문장 제외).
+    bubble(r.reaction, !!r.ai);
     setTimeout(()=>bubble(r.bonus? ` +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : ` +${r.reward}셀 획득!`), 4500);
   }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='답하기  +30'; }
 }
@@ -3269,7 +3730,9 @@ $$('.interact-row .btn, .room-dock [data-act]').forEach(b=>b.addEventListener('c
     const j = await api('/api/interact',{situation:act});
     // ★ 반응하기 전에 로봇이 카메라 쪽으로 걸어와야 '같이 놀는' 느낌이 난다
     walkTo([0, -0.2], 0);
-    bubble(j.line, true); jumpRobot();
+    // ★ 서버가 LLM 성공 시에만 ai:true 를 준다(프리셋 대사는 ai 플래그 없음).
+    //   규칙/프리셋 문장을 «AI 생성» 으로 표기하지 않게 ai 플래그를 따른다.
+    bubble(j.line, !!j.ai); jumpRobot();
     // ★ P1-1 일일 한도 초과 안내
     if(j.limited) setTimeout(()=>bubble('오늘은 정말 많이 했어! 내일 또 놀자 '), 1200);
     const q = state.quests.list.find(x=>x.type===act);
@@ -3296,6 +3759,11 @@ $$('.interact-row .btn, .room-dock [data-act]').forEach(b=>b.addEventListener('c
 // 12색(9단계 11칸까지 커버). 8색이었을 때 6단계에서 상한에 걸려
 // 7~9단계가 같은 난이도로 반복되고, 수열 길이만 커져 클리어가 불가능해졌다.
 const MEM_COLORS = ['#ff6b6b','#ffa94d','#ffe066','#63e6be','#74c0fc','#b197fc','#ffa8d5','#8ce99a','#ffc078','#a5d8ff','#d0bfff','#99e9f2'];
+// ★ v5-b: 모양 12개(최대 칸 수) — 예전엔 memShow 함수 «안쪽» 에 선언돼 있었다.
+//   memShow 위쪽의 팔레트 크기 계산이 MEM_SHAPES 를 이 선언 «앞» 에서 참조했기 때문에
+//   TDZ(Temporal Dead Zone) 로 ReferenceError 가 나, «시작하기» 를 누르는 순간
+//   게임이 통째로 죽었다. 어떤 참조 지점보다 먼저 초기화되도록 모듈 최상위로 옮긴다.
+const MEM_SHAPES = ['●','▲','■','◆','★','','▶','◀','◉','△','▽',''];
 const MEM_MAX_LEVEL = 9;   // 클리어 가능한 최종 단계(서버 보상 상한과 동일)
 let _rxTimer = null, _rxNext = null, _mmTimer = null;
 function closeGame(id){
@@ -3315,12 +3783,20 @@ function closeGame(id){
   // ★ v1.46: 꾹 누르기 interval 이 창을 닫아도 살아 있으면 «유령 충전» 이 돈다.
   // ★ v1.48: 도전 모드 시계까지 함께 멈춘다(닫았는데 시간이 흐르면 기록이 망가진다).
   if(id==='game-sort') sortHalt();
+  // ★ 2026-11-21 (v1.71): 안개 속의 탑 — «다음 층» 예약 타이머를 정리한다.
+  //   답을 고른 뒤 0.8s/1.5s 뒤에 화면을 넘기는 setTimeout 이 창 닫힘 뒤에도 살아 있으면
+  //   감춰진 모달 안에서 혼자 다음 층을 그리는 «유령 탑» 이 된다.
+  //   세션(_tw)도 함께 지운다 — 진행 중 요청이 늦게 도착해도 아무것도 그리지 않게.
+  if(id==='game-tower'){ twClearTimers(); _tw = null; }
   // ★ 2026-10-29: 친구 채팅 폴링 정리 + 읽음 배지 갱신
   if(id==='friend-chat'){ stopFriendChat(); loadFriends(); }
   // 버튼 복구(다음 실행에서 '계속하기' 등으로 굳지 않도록)
   const rg = $('#reflex-go'); if(rg){ rg.disabled = false; }
   const mg = $('#memory-go'); if(mg){ mg.disabled = false; }
   $('#'+id).classList.add('hidden');
+  // ★ 2026-11-21 (v1.74) C2: «자연스러운 마무리 지점» — 게임/퀴즈/타탑 창을 닫는 행위.
+  //   pendingLock(4분 유예) 중이면 바로 여기서 잠근다. 아니면 아무 일도 없다.
+  notifyNaturalBreak();
 }
 // 공통: 게임 결과 제출 + 보상 안내
 // ★ 어떤 경우에도 버튼이 '제출 중' 으로 굳지 않도록 finally 에서 반드시 복구한다.
@@ -3548,7 +4024,7 @@ function memShow(){
 //   색각 보조의 목적이 '색 못 보는 아이가 구분하는 것' 인데,
 //   같은 모양이 겹치면 그 아이에게 오히려 더 혼란 → 접근성 기능이 무의미해진다.
 //   그래서 12개(최대 칸 수)를 확보하고, 그래도 부족하면 칸 수 자체를 줄인다.
-const MEM_SHAPES = ['●','▲','■','◆','★','','▶','◀','◉','△','▽',''];
+//   (MEM_SHAPES 는 모듈 최상위에서 선언 — 이 함수 안에 두면 위쪽 참조가 TDZ 에 걸린다)
   // 칸마다 서로 다른 모양 배정(색과 같은 방식으로 섞는다)
   mm.shapeOf = mm.colorOf.map((_, i)=>MEM_SHAPES[i % MEM_SHAPES.length]);
   // 각 칸 안에 모양 span 을 넣는다. 'showing' 동안만 보이며, 입력 단계에서는 숨겨진다
@@ -3681,18 +4157,30 @@ $("#overplay-ok").addEventListener("click", ()=>{
 $$("[data-close]").forEach(b=>b.addEventListener("click", ()=>closeGame(b.dataset.close)));
 // 안전망: 모달 배경(바깥 영역)을 클릭해도 닫히도록 — ✕ 를 못 찾거나 못 눌러도 탈출 가능
 $$('.modal').forEach(m=>{
-  if(m.id === 'preview-modal' || m.id === 'modal') return;   // 기존 모달은 별도 처리
+  // ★ #overplay(하루 40분 사용 종료 잠금) 는 배경 클릭으로 닫히면 안 된다.
+  //   아이가 바깥을 한 번 눌러 잠금을 우회하면, 그 뒤로 사용 시간 보고도 멈춘다.
+  if(m.id === 'preview-modal' || m.id === 'modal' || m.id === 'overplay') return;   // 기존 모달은 별도 처리
   m.addEventListener('click', e=>{ if(e.target === m) closeGame(m.id); });
 });
-document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); closeGame("game-shooter"); closeGame("game-puzzle"); closeGame("game-mole"); closeGame("game-repair"); closeGame("game-sort"); } });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); closeGame("game-shooter"); closeGame("game-puzzle"); closeGame("game-tower"); closeGame("game-mole"); closeGame("game-repair"); closeGame("game-sort"); } });
 // ---------- 상점 ----------
 const ITEM_KIND = { part:'로봇 부품', decor:'방 장식', skin:'색칠 스킨', shard:'부품 조각' };
 async function loadShop(){
-  const allItems = await api('/api/items');
+  // ★ 네트워크 실패 시 조용한 빈 화면 + unhandled rejection 이 남지 않게 한다.
+  // ★ 2026-11-20 (v1.72): await 동안 스켈레톤 → 실패하면 «놀란 루미» 빈 화면으로 바꿔 준다.
+  fillSkeleton($('#shop-list'), 4);
+  let allItems;
+  try{ allItems = await api('/api/items'); }
+  catch(e){
+    // ★ 2026-11-21 (v1.74) C4: «다시 시도» 버튼이 붙은 빈 화면 — 자기 자신을 재호출한다.
+    $('#shop-list').innerHTML = emptyState('oops', e.message || '상점을 불러오지 못했어요. 잠시 후 다시 시도해 줄래?', ()=>loadShop());
+    return;
+  }
   const items = state.shopFilter === 'all' ? allItems : allItems.filter(it=>it.type === state.shopFilter);
   // 등급: 가격대별 표시(아이에게 "레벨"처럼 보이게) + 보유 여부 배지
   const tier = p => p>=100 ? { label:'EPIC', cls:'t-epic' } : p>=70 ? { label:'RARE', cls:'t-rare' } : { label:'NORMAL', cls:'t-normal' };
-  $('#shop-list').innerHTML = items.map(it=>{
+  // ★ 2026-11-20 (v1.72): 필터 결과가 비면 «생각 중인 루미» 빈 화면 — 글자만 있는 빈 칸 대신
+  $('#shop-list').innerHTML = items.length ? items.map(it=>{
     const t = tier(it.price);
     // ★ P1-4 소비 가능 아이템(skin/shard)은 반복 구매 가능 → '보유 중' 으로 잠그지 않는다
     const repeatable = !!it.consumable;
@@ -3724,7 +4212,7 @@ async function loadShop(){
         ${(it.type==='skin'||it.type==='shard'||locked)?'':`<button class="btn ghost" data-preview="${it.id}">미리보기</button>`}
         <button class="btn primary" data-buy="${it.id}" ${(owned||locked)?'disabled':''}>${ended?'판매 종료':(locked?'주말 한정':(owned?'보유 중':'구매'))}</button>
       </div></div>`;
-  }).join('');
+  }).join('') : emptyState('think', '이 칸에는 아직 상품이 없어요. 다른 칸도 구경해 볼래?');
   $$('#shop-list [data-buy]').forEach(b=>b.addEventListener('click', async ()=>{
     // ★ 진행 중 방어(V2-10): 소지품은 서버가 409 로 막지만
     //   소비품(skin/shard)은 연속 클릭이 그대로 두 번 결제된다.
@@ -3788,7 +4276,12 @@ function openPreview(item){
   $('#preview-modal').classList.remove('hidden');
   // 장식은 로봇 없이 상품만 크게 전시(무엇을 사는지 명확히)
   const solo = item.type==='decor';
-  setTimeout(()=>{ try{ buildPreviewScene($('#preview-canvas'), robot, [item.name], solo); }catch(e){ console.error('[preview]', e); } }, 60);
+  setTimeout(()=>{
+    // ★ 60ms 안에 모달을 닫았다면 그리기를 중단한다. 예전엔 닫힌 뒤에도
+    //   Engine 을 새로 만들어 렌더 루프가 계속 도는(누수) 경합이 있었다.
+    if($('#preview-modal').classList.contains('hidden')) return;
+    try{ buildPreviewScene($('#preview-canvas'), robot, [item.name], solo); }catch(e){ console.error('[preview]', e); }
+  }, 60);
 }
 function buildPreviewScene(canvas, robot, parts, solo){
   if(previewEngine){ previewEngine.dispose(); previewEngine=null; }
@@ -3874,13 +4367,15 @@ function buildPreviewScene(canvas, robot, parts, solo){
       updateIdle(refs, t, 0);
     });
   });
-  canvas.addEventListener('contextmenu', e=>e.preventDefault());
   engine.runRenderLoop(()=>scene.render());
   setTimeout(()=>engine.resize(), 60);
 }
 // 미리보기 모달 바인딩 (1회)
 $('#preview-close').addEventListener('click', closePreview);
 $('#preview-modal').addEventListener('click', e=>{ if(e.target.id==='preview-modal') closePreview(); });
+// ★ contextmenu 차단은 «1회» 만 붙인다. 예전엔 buildPreviewScene 이 열릴 때마다
+//   같은 canvas 에 리스너를 계속 쌓았다(중복 바인딩).
+$('#preview-canvas').addEventListener('contextmenu', e=>e.preventDefault());
 $('#preview-buy').addEventListener('click', async ()=>{
   if($('#preview-buy').disabled) return;
   try{ await buyItem($('#preview-buy').dataset.buy);
@@ -3995,8 +4490,24 @@ async function toggleChatSchema(){
 })();
 
 async function loadBoard(){
-  const j = await api('/api/board/me');
+  // ★ 네트워크 실패 시 조용한 빈 화면 + unhandled rejection 이 남지 않게 한다.
+  // ★ 2026-11-20 (v1.72): await 동안 스켈레톤 → 실패/빈 데이터는 «루미 포즈» 빈 화면으로
+  fillSkeleton($('#board-stats'), 4);
+  let j;
+  try{ j = await api('/api/board/me'); }
+  catch(e){
+    const box = $('#board-stats');
+    // ★ 2026-11-21 (v1.74) C4: «다시 시도» 버튼으로 재호출(loadBoard 자신)
+    if(box) box.innerHTML = emptyState('oops', e.message || '리포트를 불러오지 못했어요. 잠시 후 다시 시도해 줄래?', ()=>loadBoard());
+    return;
+  }
   const s = j.stats;
+  // ★ 2026-11-20 (v1.72): stats 자체가 없으면(비정상 응답) 빈 리포트 취급 — 기본 루미로 안내
+  if(!s){
+    const box = $('#board-stats');
+    if(box) box.innerHTML = emptyState('idle', '아직 만들어진 리포트가 없어요. 며칠 더 함께 하면 채워질 거야!');
+    return;
+  }
   const srcMap = {welcome:'가입 보너스', robot_create:'로봇 제작 보상', daily_quest:'오늘의 과제',
                   shop:'부품 구매', streak:'연속 방문 보상', game:'미니게임 보상'};
   // ★ 각 지표에 '실시간/누적/평균' 라벨을 붙인다.
@@ -4178,7 +4689,19 @@ function disposeRoom3D(){
   bjs = { engine:null, scene:null, root:null, bob:null, model:null, ready:false, _t:0, wanderTimer:null, _starting:false };
 }
 // 페이지를 벗어날 때(새로고침/탭 종료 전) 남은 자원을 정리
-addEventListener('pagehide', ()=>{ try{ disposeRoom3D(); }catch(e){} });
+// ★ bfcache 대응: pagehide 에서 장면을 통째로 파괴하지 않는다.
+//   모바일 브라우저는 페이지를 bfcache 에 넣고 «뒤로» 하면 그대로 복원하는데,
+//   이전엔 복원 시점에 Engine/장면이 이미 dispose 돼 3D 방이 검게 남았다.
+//   렌더 루프만 멈춰 장면을 보존하고, 돌아오면(pageshow) 루프를 재개한다.
+addEventListener('pagehide', ()=>{ try{ if(bjs.engine) bjs.engine.stopRenderLoop(); }catch(e){} });
+addEventListener('pageshow', ()=>{
+  try{
+    if(bjs.engine && bjs.scene && bjs.ready){
+      bjs.engine.runRenderLoop(()=>bjs.scene.render());
+      setTimeout(()=>{ try{ bjs.engine.resize(); }catch(e){} }, 60);
+    }
+  }catch(e){}
+});
 addEventListener('beforeunload', ()=>{ try{ if(bjs.wanderTimer) clearInterval(bjs.wanderTimer); }catch(e){} });
 
 $('#btn-reset').addEventListener('click', async ()=>{
@@ -4211,6 +4734,7 @@ $('#btn-demo').addEventListener('click', async ()=>{
     // 시드가 만든 계정 정보를 다시 읽어 화면에 반영
     const u2 = await api('/api/user', { nickname: r.nickname });
     state.user = u2.user; state.quests = u2.quests || state.quests;
+    absorbUserMeta(u2);   // ★ v1.74: ob_step · play_limit_delta 스냅샷
     if(u2.user.token) localStorage.setItem(SK.token, u2.user.token);
     if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 800);
     startPlayTimer();
@@ -4309,11 +4833,17 @@ $('#ob-skip').addEventListener('click', closeOnboard);
 
 // ---------- 자동 로그인 ----------
 (async function init(){
+  // ★ 2026-11-20 (v1.72): «귀엽고 고급스럽게» 정적 장식 1회 주입 — 스크립트가 body 끝에서
+  //   실행되므로 DOM 이 이미 준비돼 있고, 인증 흐름(early return)과 무관하게 반드시 한 번 돈다.
+  //   실패해도 로그인 흐름을 막지 않는다(장식은 장식일 뿐).
+  try{ replaceStaticIcons(); injectRumiMoments(); }
+  catch(e){ console.error('[v1.72 ui]', e); }
   const uid = localStorage.getItem(SK.uid), nick = localStorage.getItem(SK.nick);
   if(uid && nick){
     try{
       const j = await api('/api/user',{nickname:nick});
       state.user=j.user; state.quests=j.quests||{list:[],done:[]};
+      absorbUserMeta(j);   // ★ v1.74: ob_step · play_limit_delta 스냅샷
       if(j.revive && j.revive.available) setTimeout(()=>showRevive(j.revive), 900);
       if(j.user.token) localStorage.setItem(SK.token, j.user.token);
       if(j.streakBonus) setTimeout(()=> bubble(` ${j.streakBonus}일 연속 방문 보상 +${j.streakBonus}셀!`), 1200);
@@ -4353,6 +4883,9 @@ async function loadRoomState(){
       if(hemi) hemi.intensity = 0.34 + (r.lit||0) * 0.36;
     }
   }catch(e){ /* 조용히 무시 — 방 렌더를 막지 않는다 */ }
+  // ★ 2026-11-21 (v1.71): 성장 탭 데이터 로딩의 일부로 «기억 등불» 을 함께 읽는다.
+  //   실패하면 판넬이 감춰진 채로 남는다(조용히 — 방 렌더를 막지 않는다).
+  try{ loadLamps(); }catch(e){ console.error('[loadLamps]', e); }
 }
 
 // ---- 친구 시스템 (2026-10-29) ----
@@ -4437,6 +4970,13 @@ async function addFriendByCode(){
 
 // ---- 친구 채팅 (2026-10-29) ----
 let _fcTimer = null, _fcFriend = null;
+// ★ 이미 그린 메시지 수 — 폴링 때 «새 것만» 덧붙이기 위한 기준(아래 loadFriendChat)
+let _fcRendered = { fid:null, count:0 };
+function fcMsgHTML(m){
+  const mine = m.from_user === state.user.id;
+  const t = (m.created_at||'').slice(11,16);
+  return `<div class="fc-msg ${mine?'me':''}"><span>${esc(m.body)}</span><small>${t}</small></div>`;
+}
 async function openFriendChat(fid){
   if(state.friendsChatEnabled === false) return toast('보호자가 친구 채팅을 꺼 두었어요');
   const f = (state.friends||[]).find(x=>x.id === fid);
@@ -4458,13 +4998,27 @@ async function loadFriendChat(fid, quiet){
   try{
     const r = await api(`/api/friends/chat?friendId=${fid}`);
     if(!quiet && r.friend) $('#fc-name').textContent = displayName(r.friend.nickname);
-    const log = $('#fc-log');
-    log.innerHTML = (r.messages||[]).map(m=>{
-      const mine = m.from_user === state.user.id;
-      const t = (m.created_at||'').slice(11,16);
-      return `<div class="fc-msg ${mine?'me':''}"><span>${esc(m.body)}</span><small>${t}</small></div>`;
-    }).join('') || '<div class="hint" style="text-align:center;padding:20px">첫 메시지를 보내 보세요!</div>';
-    log.scrollTop = log.scrollHeight;
+    const log = $('#fc-log'); if(!log) return;
+    const msgs = r.messages||[];
+    // ★ 5초 폴링마다 log.innerHTML 을 통째로 다시 그리면, 위로 스크롤해 과거
+    //   대화를 읽는 아이가 5초마다 맨 아래로 끌려 내려갔다.
+    //   → 처음 열 때(또는 친구가 바뀌었을 때)만 전체를 그리고, 이후엔
+    //     새로 도착한 메시지 «만» 덧붙인다. 자동 스크롤은 바닥 근처일 때만.
+    if(_fcRendered.fid !== fid || _fcRendered.count > msgs.length){
+      log.innerHTML = msgs.map(fcMsgHTML).join('') || '<div class="hint" style="text-align:center;padding:20px">첫 메시지를 보내 보세요!</div>';
+      _fcRendered = { fid, count: msgs.length };
+      if(!quiet) log.scrollTop = log.scrollHeight;
+      return;
+    }
+    if(msgs.length === _fcRendered.count){
+      // 새 메시지가 없어도 «같은 친구 채팅을 다시 열었을 때» 는 바닥으로 보내준다.
+      if(!quiet) log.scrollTop = log.scrollHeight;
+      return;
+    }
+    for(let i=_fcRendered.count; i<msgs.length; i++) log.insertAdjacentHTML('beforeend', fcMsgHTML(msgs[i]));
+    _fcRendered.count = msgs.length;
+    const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    if(nearBottom) log.scrollTop = log.scrollHeight;
   }catch(e){ if(!quiet) toast(e.message); }
 }
 function stopFriendChat(){
@@ -4475,11 +5029,16 @@ async function sendFriendChat(){
   const input = $('#fc-text');
   const msg = ((input && input.value) || '').trim();
   if(!msg || !_fcFriend) return;
+  // ★ Enter 연타로 같은 메시지가 여러 번 전송되지 않게 잠근다.
+  const send = $('#fc-send');
+  if(send && send.disabled) return;
+  if(send) send.disabled = true;
   try{
     await api('/api/friends/chat', { friendId:_fcFriend, message:msg });
     if(input) input.value = '';
     loadFriendChat(_fcFriend, true);
   }catch(e){ toast(e.message); }
+  finally{ if(send) send.disabled = false; }
 }
 async function reportFriend(){
   if(!_fcFriend) return;
@@ -4540,6 +5099,7 @@ function renderPlan(){
   $$('#plan-list [data-plan-done]').forEach(cb=>cb.addEventListener('change', ()=>togglePlanStep(cb.dataset.planDone, cb.checked)));
   $$('#plan-list [data-plan-start]').forEach(b=>b.addEventListener('click', ()=>startPlanStep(b.dataset.planStart)));
   try{ showPlanNudge(); }catch(e){}
+  try{ renderToday3(); }catch(e){}
 }
 async function togglePlanStep(id, done){
   try{
@@ -4599,6 +5159,7 @@ function renderGoals(){
   if(wr) wr.textContent = r.claimed ? '🎉 주간 목표 달성! 보상 받았어요'
     : (r.allDone ? '🎉 모두 달성했어! 보상을 받아 줘' : '3개 모두 달성하면 +30셀');
   $('#goal-claim')?.addEventListener('click', claimGoals);
+  try{ renderToday3(); }catch(e){}
 }
 async function claimGoals(){
   try{
@@ -4617,6 +5178,87 @@ async function openPrefs(){
     renderPrefs();
   }catch(e){ toast(e.message); }
 }
+// ★ v1.67 «오늘의 3가지» — 흩어져 있던 «오늘 뭘 하지» 를 한 카드로 모은다.
+function renderToday3(){
+  const box = $('#today3'); if(!box) return;
+  const steps = (state.plan && state.plan.plan && state.plan.plan.steps) || [];
+  const nextStep = steps.find(s => !s.done);
+  const goals = (state.goals && state.goals.goals) || [];
+  const nextGoal = goals.find(g => !g.done);
+  const rows = [];
+  // ★ v1.71.2: «기억 등불 / 안개 탑» 을 첫 화면으로 — 1.71 의 새 주 루프를 아이가 바로 본다.
+  // ★ 2026-11-21 (v1.74) A3 계약: /api/next-action 이 { kind:'tower', fogCount } 를 내주면
+  //   «오늘 할 일» 첫 칸을 탑 타일(uiIcon('tower') + 안개 속의 탑 + 흐린 등불 N개)로 대체한다.
+  //   탑을 다 깬 뒤에는 서버 next-action 이 다른 걸 내주므로 자연히 원래 로직으로 돌아온다.
+  const na = state.nextAction;
+  const lamps = (state.lamps && state.lamps.lamps) || [];
+  if(na && na.kind === 'tower'){
+    const fogN = (na.fogCount != null) ? Number(na.fogCount)
+      : lamps.filter(l=>(Number(l.decay)||0) >= 30).length;
+    rows.push({ n:'1', title:'안개 속의 탑', meta:`흐린 등불 ${fogN}개`, icon: uiIcon('tower', 18),
+      act: ()=>openTower() });
+  }else if(!lamps.length){
+    rows.push({ n:'1', title:'루미에게 오늘 배운 걸 가르쳐 주기', meta:'가르치면 «기억 등불» 이 켜져요',
+      act: ()=>{ chatOpen(); chatModeSet('learn'); } });
+  }else{
+    const worst = lamps.reduce((a,b)=>Number(b.decay) > Number(a.decay) ? b : a, lamps[0]);
+    rows.push({ n:'1', title:'안개 속의 탑 도전', meta:`기억 등불 ${lamps.length}개 · «${worst.topic}» ${Number(worst.decay)||0}% 흐림`,
+      act: ()=>openTower() });
+  }
+  if(nextStep) rows.push({ n:'2', title: nextStep.title, meta: `${nextStep.minutes}분 · 계획`, act: ()=>startPlanStep(nextStep.id) });
+  if(state.reviewDue > 0) rows.push({ n:'3', title: `복습 카드 ${state.reviewDue}장`, meta: '3일 전 틀린 문제', act: ()=>openReview() });
+  if(nextGoal) rows.push({ n:'4', title: nextGoal.title, meta: `이번 주 ${nextGoal.progress}/${nextGoal.target}`, act: ()=>{
+    const tab = document.querySelector('[data-room-tab="today"]'); if(tab) tab.click();
+    setTimeout(()=>{ const w=$('.week-panel'); if(w) w.scrollIntoView({behavior:'smooth', block:'center'}); }, 140);
+  }});
+  if(!rows.length){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="t3-head"><h3>오늘 할 일</h3><span class="t3-count">${Math.min(4, rows.length)}개</span></div>
+    <div class="t3-list">${rows.slice(0,4).map((r,i)=>`
+      <button class="t3-row" data-t3="${i}">
+        ${r.icon ? `<span class="t3-num t3-ico">${r.icon}</span>` : `<span class="t3-num">${i+1}</span>`}
+        <span class="t3-text"><b>${esc(r.title)}</b><span>${esc(r.meta||'')}</span></span>
+        <span class="t3-go">→</span>
+      </button>`).join('')}</div>`;
+  $$('#today3 [data-t3]').forEach(b=>b.addEventListener('click', ()=>rows[Number(b.dataset.t3)].act()));
+}
+
+/* v1.67: 상단 기능 6개를 «⋯» 로 접고, 좁은 화면에서는 오늘 패널을 드로어로 */
+// ★ v1.72 «사용법 + 바로 체험» — 발표 때 5분 걸리던 흐름을 10초로.
+function setupGuideV172(){
+  const close = ()=>{ const m = $('#guide-modal'); if(m) m.classList.add('hidden'); };
+  $('#btn-guide')?.addEventListener('click', ()=>{ const m = $('#guide-modal'); if(m) m.classList.remove('hidden'); });
+  $('#guide-close')?.addEventListener('click', close);
+  $('#guide-demo')?.addEventListener('click', async ()=>{
+    try{
+      await api('/api/demo/lamps', {});
+      close();
+      await loadLamps(true);
+      await openTower();
+    }catch(e){ toast(e.message || '체험을 시작하지 못했어요'); }
+  });
+}
+
+function setupLayoutV167(){
+  const more = $('#btn-more'), menu = $('#actions-menu');
+  if(more && menu){
+    more.addEventListener('click', e=>{
+      e.stopPropagation();
+      const open = menu.classList.toggle('hidden') === false;
+      more.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', e=>{
+      if(!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== more){
+        menu.classList.add('hidden'); more.setAttribute('aria-expanded','false');
+      }
+    });
+  }
+  const start = $('#btn-today-start');
+  if(start) start.addEventListener('click', async ()=>{ await chatOpen(); chatModeSet('learn'); });
+  const handle = $('#side-handle');
+  if(handle) handle.addEventListener('click', ()=>document.body.classList.toggle('side-open'));
+}
+
 // ★ v1.66: «얼마나 아꼈나» 를 설정 화면에 숫자로 보여준다.
 async function loadLLMUsage(){
   const box = $('#llm-usage'); if(!box) return;
@@ -4647,8 +5289,10 @@ async function savePrefs(){
     state.prefs = r;
     $('#prefs-modal').classList.add('hidden');
     state.plan = null; state.goals = null;
-    toast('학습 설정을 저장했어요. 계획을 다시 짤게요!');
-    loadPlan(); loadGoals();
+    toast('학습 설정을 저장했어요. 계획을 다시 질게요!');
+    // ★ 2026-11-21 (v1.74) C7 «루미 생각 중»: 계획을 새로 짜는 동안(서버 LLM 시간) 상단에
+    //   생각 중 바를 띄운다 — 모달·입력을 막지 않는 상단横条 방식(채팅 스트리밍에는 미적용).
+    withThinking(Promise.all([loadPlan(), loadGoals()]), { label:'루미가 새 계획을 짜고 있어…' });
   }catch(e){ toast(e.message); }
 }
 
@@ -4791,11 +5435,13 @@ function updateChatFab(){
   if(!r) return;
   const pal = effectiveColors(r.template, robotPalette());
   const full = robotSVG(r.template, pal);
+  // ★ v1.73: 38px 상자에는 전신 SVG 가 아니라 전용 «배지» 를 넣는다(찌그러짐·흰 여백 버그).
+  const badge = botBadgeSVG(r.template, pal);
   ['#chat-head-avatar','#side-avatar'].forEach(sel=>{
-    const el = $(sel); if(el) el.innerHTML = full;
+    const el = $(sel); if(el) el.innerHTML = badge;
   });
   // 대화 버튼만 «작은 크기 전용 배지» 를 쓴다(54px 원에서도 표정이 읽히게).
-  const fabBot = $('#chat-fab-bot'); if(fabBot) fabBot.innerHTML = botBadgeSVG(r.template, pal);
+  const fabBot = $('#chat-fab-bot'); if(fabBot) fabBot.innerHTML = badge;
   const sl = $('#side-level');
   if(sl) sl.textContent = `Lv.${(state.growth && state.growth.level) || 1}`;
 }
@@ -4872,6 +5518,8 @@ function chatClose(){
   if (window.__worldState) window.__worldState.chatOpen = false;
   setRobotMode('idle');    // ★ v1.58: 대화가 닫히면 다시 자유롭게
   stopStudyTimer();        // ★ v1.61: 학습 시간도 멈춘다
+  // ★ 2026-11-21 (v1.74) C2: 대화 창을 «스스로 닫는» 것도 자연스러운 마무리 지점이다.
+  notifyNaturalBreak();
 }
 function chatModeSet(mode){
   state.chatMode = mode;
@@ -4880,6 +5528,8 @@ function chatModeSet(mode){
   const open = panel && !panel.classList.contains('hidden');
   if(open && mode === 'learn') startStudyTimer(); else stopStudyTimer();
   $$('.chat-modes .chip').forEach(b=>b.classList.toggle('on', b.dataset.mode===mode));
+  // ★ v1.80: «답하는 방식» 은 같이 공부 모드에서만 의미가 있다.
+  $('#chat-style')?.classList.toggle('hidden', mode !== 'learn');
   $('#chat-solved').classList.toggle('hidden', mode!=='learn');
   const hint = $('#chat-mode-hint');
   if(hint) hint.textContent = mode==='learn' ? '정답 대신 한 단계씩 같이 생각해요'
@@ -4946,35 +5596,50 @@ async function chatStreamRequest(body, onDelta){
   const headers = { 'Content-Type':'application/json' };
   const tk = localStorage.getItem(SK.token);
   if(tk) headers['X-Token'] = tk;
-  const res = await fetch(API + '/api/chat/stream', { method:'POST', headers, body: JSON.stringify(body) });
-  if(!res.ok || !res.body) throw new Error('stream ' + res.status);
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '', donePayload = null;
-  while(true){
-    const { done, value } = await reader.read();
-    if(done) break;
-    buf += dec.decode(value, { stream:true });
-    const parts = buf.split('\n\n');
-    buf = parts.pop() || '';
-    for(const part of parts){
-      const line = part.trim();
-      if(!line.startsWith('data:')) continue;
-      let j = null;
-      try{ j = JSON.parse(line.slice(5).trim()); }catch(e){ continue; }
-      if(j.type === 'delta' && j.text) onDelta(j.text);
-      else if(j.type === 'done') donePayload = j;
+  // ★ 60초 타임아웃 — SSE 가 멈추면 fetch/reader.read() 가 영원히 돌아오지 않아
+  //   chatBusy 가 true 인 채로 남아 채팅 전체가 잠기는(말고 누르지도 못하는) 사고가 있었다.
+  //   데이터가 도착할 때마다 타이머를 되돌려 «정상적으로 흐르는 중» 이면 끊지 않는다.
+  const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  let timer = null;
+  const arm = ()=>{
+    if(timer) clearTimeout(timer);
+    if(ac) timer = setTimeout(()=>{ try{ ac.abort(); }catch(e){} }, 60000);
+  };
+  arm();
+  try{
+    const res = await fetch(API + '/api/chat/stream', { method:'POST', headers, body: JSON.stringify(body), signal: ac ? ac.signal : undefined });
+    if(!res.ok || !res.body) throw new Error('stream ' + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', donePayload = null;
+    while(true){
+      const { done, value } = await reader.read();
+      if(done) break;
+      arm();
+      buf += dec.decode(value, { stream:true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop() || '';
+      for(const part of parts){
+        const line = part.trim();
+        if(!line.startsWith('data:')) continue;
+        let j = null;
+        try{ j = JSON.parse(line.slice(5).trim()); }catch(e){ continue; }
+        if(j.type === 'delta' && j.text) onDelta(j.text);
+        else if(j.type === 'done') donePayload = j;
+      }
     }
+    if(!donePayload) throw new Error('stream no done');
+    return donePayload;
+  }finally{
+    if(timer) clearTimeout(timer);
   }
-  if(!donePayload) throw new Error('stream no done');
-  return donePayload;
 }
-// 반환: 'ok' | 'partial' | 'fail' — fail 일 때만 기존 비스트리밍 경로로 되돌린다.
+// 반환: 'ok' | 'partial' | 'fail' — fail 은 «재전송 없이» 안내 문구만 보여준다(sendChat 참조).
 async function chatStreamOnce(text, solved){
   let live = null, partial = '';
   let r = null;
   try{
-    r = await chatStreamRequest({ mode: state.chatMode, message: text, solved: !!solved }, (d)=>{
+    r = await chatStreamRequest({ mode: state.chatMode, message: text, solved: !!solved, style: state.answerStyle || 'auto' }, (d)=>{
       if(!live){ chatTyping(false); live = chatAddLive('assistant', false); }
       partial += d; live.push(d);
     });
@@ -4986,14 +5651,25 @@ async function chatStreamOnce(text, solved){
   const lvl = Number(r.hintLevel) || 0;
   if(!live) chatAdd('assistant', r.reply, lvl > 1);
   else live.end(r.reply || partial);
-  if(state.voiceAuto || state.voiceChat) speak(r.reply);
+  // ★ 비스트리밍 경로와 같이 onend 를 넘긴다. 없으면 TTS 를 다 읽어도
+  //   마이크가 다시 열리지 않아 «음성 대화가 한 번 하고 끊긴다».
+  if(state.voiceAuto || state.voiceChat){
+    speak(r.reply, ()=>{ if(state.voiceChat && !state.chatBusy) startMic(true); });
+  }
   if(state.chatMode === 'learn' && lvl){
     const meta = document.createElement('div'); meta.className = 'msg-meta';
     const badge = document.createElement('span'); badge.className = 'hint-badge';
-    badge.textContent = lvl === 1 ? 'L1 · 되묻기' : lvl === 2 ? 'L2 · 비유' : 'L3 · 다음 단계';
+    // ★ 2026-11-20 (v1.72): 단계 표시를 «텍스트 + 3칸 등» 으로 — L1 은 1칸, L2 는 2칸, L3 은 모두 on.
+    //   라벨 문구는 그대로 유지한다(서버·UI 어디서도 문구를 파싱하지 않지만, 아이에겐 익숙한 말).
+    const lvlLabel = lvl === 1 ? 'L1 · 되묻기' : lvl === 2 ? 'L2 · 비유' : 'L3 · 다음 단계';
+    badge.innerHTML = esc(lvlLabel) +
+      `<i class="hb-dot${lvl >= 1 ? ' on' : ''}"></i><i class="hb-dot${lvl >= 2 ? ' on' : ''}"></i><i class="hb-dot${lvl >= 3 ? ' on' : ''}"></i>`;
     meta.appendChild(badge);
     if(lvl < 3){
       const more = document.createElement('button'); more.className = 'msg-more'; more.textContent = '힌트 한 단계 더';
+      // ★ 서버 화이트리스트 의존: 이 고정 문구의 «한 단계 더» 를 보면 서버가
+      //   힌트 단계를 바로 올려준다(모르겠/몰라 키워드만으로는 한 번에 안 올라감).
+      //   → 버튼 문구를 바꿀 때 «한 단계 더» 를 반드시 포함시킬 것!
       more.onclick = ()=>{ const i=$('#chat-text'); if(i) i.value='힌트 한 단계 더 주세요'; sendChat(false); };
       meta.appendChild(more);
     }
@@ -5002,6 +5678,12 @@ async function chatStreamOnce(text, solved){
       const ex = document.createElement('button'); ex.className = 'msg-more explain'; ex.textContent = '내 말로 설명하기';
       ex.onclick = ()=>startExplain(r.explain);
       meta.appendChild(ex);
+      // ★ 2026-11-20 (v1.70): «루미가 틀려볼게» — 루미가 일부러 틀린 말을 하고 아이가 찾아내는 도전 놀이.
+      //   «내 말로 설명하기» 옆에 나란히 놓는다. 설명할 개념(r.explain)이 있을 때만 —
+      //   도전 카드의 재료가 될 «방금 배운 개념» 이 필요하기 때문.
+      const tc = document.createElement('button'); tc.className = 'msg-more'; tc.textContent = '루미가 틀려볼게';
+      tc.onclick = ()=>openTeachChallenge();
+      meta.appendChild(tc);
     }
     const quiz = document.createElement('button'); quiz.className = 'msg-more'; quiz.textContent = '문제로 확인';
     quiz.onclick = ()=>openPuzzle();
@@ -5010,6 +5692,14 @@ async function chatStreamOnce(text, solved){
   }
   if(r.solved) setRobotMode('cheer');   // ★ v1.58: 스스로 해결한 순간 로봇이 같이 기뻐한다
   if(r.wrapUp) chatAdd('assistant', '⏳ ' + r.wrapUp, true);
+  // ★ 2026-11-20 (v1.70): 좌절 감지 — 서버가 learn 모드에서만 보내는 신호.
+  //   모드를 한 번 더 확인해 chat/reflect 모드에서는 절대 반응하지 않게 이중으로 막는다.
+  //   로봇은 부드럽게 끄덕이고(존재하는 제스처: wave/nod/tilt/look/bounce/stretch 중 nod),
+  //   쉬어가라는 다정한 알림을 띄운다. 판단 문구는 절대 붙이지 않는다.
+  if(state.chatMode === 'learn' && r.frustration){
+    robotGesture('nod');
+    toast('루미: 잠깐 쉬어가자! 물 한 모금 마시고 올래?');
+  }
   const und = $('#chat-und'); if(und) und.textContent = `이해도 ${r.understanding||0}`;
   const left = $('#chat-left');
   if(left) left.textContent = r.left > 0 ? `오늘 ${r.left}번 더 이야기할 수 있어요` : '오늘은 여기까지!';
@@ -5020,7 +5710,9 @@ function chatTyping(on){
   let t = $('#chat-typing');
   if(on && !t){
     t = document.createElement('div'); t.id='chat-typing'; t.className='typing';
-    t.innerHTML = '루미가 생각 중 <span class="dots"><i></i><i></i><i></i></span>';
+    // ★ 2026-11-20 (v1.72): 점 세개 옆에 미니 루미(idle) — «누가 생각 중인지» 얼굴로 보여 준다.
+    //   크기는 인라인으로 고정(CSS 는 .rumi-pose 클래스만 손봐도 된다).
+    t.innerHTML = `<span class="rumi-pose" style="width:22px;height:22px;flex:0 0 auto">${rumiPose('idle',22)}</span>루미가 생각 중 <span class="dots"><i></i><i></i><i></i></span>`;
     $('#chat-log').appendChild(t); $('#chat-log').scrollTop = $('#chat-log').scrollHeight;
   } else if(!on && t){ t.remove(); }
 }
@@ -5100,71 +5792,32 @@ async function sendChat(solved){
   chatAdd('user', text);
   chatTyping(true);
   $('#chat-send').disabled = true;
-  // ★ v1.54: 진짜 스트리밍을 먼저 시도한다. 첫 글자도 못 받았을 때만 아래 비스트리밍 경로로 폴백.
+  // ★ v1.54: 진짜 스트리밍을 먼저 시도한다.
+  // ★ 2026-11-20: 스트리밍 실패 시 /api/chat 으로 «같은 메시지를 재전송» 하지 않는다.
+  //   첫 delta 도 못 받고 실패했을 때 예전 폴백은 같은 메시지를 비스트리밍 경로로
+  //   다시 보내 서버가 한 말을 두 번 처리했고(중복 과금), «오늘 대화 횟수» 도
+  //   이중으로 깎였다. 이제 친절한 안내를 보여 주고 busy 를 풀어
+  //   아이가 직접 다시 누르게 한다. 일부라도 받았으면(partial) 기존 처리를 유지한다.
   let streamState = 'fail';
   try{ streamState = await chatStreamOnce(text, solved); }catch(e){ streamState = 'fail'; }
-  if(streamState !== 'fail'){
-    state.chatBusy = false; $('#chat-send').disabled = false; input.focus();
-    return;
+  chatTyping(false);
+  if(streamState === 'fail'){
+    chatAdd('assistant', '잠깐 문제가 생겼어요. 다시 눌러줄래?');
+    // ★ 2026-11-21 (v1.74) A1 «흘려보내기 실패 시 원문 복귀»: 첫 delta 도 못 받고 실패하면
+    //   아이가 방금 쓴 메시지를 입력창에 «그대로 돌려놓는다» — 지워진 글자를 다시 치게 하지 않는다.
+    //   «내가 해봤어요» 같은 자동 문장(solved) 은 아이가 친 게 아니므로 돌려놓지 않는다.
+    //   일부라도 받았으면(partial) 화면에 나온 말이 있으므로 역시 건드리지 않는다.
+    if(!solved){
+      input.value = text;
+      const end = input.value.length;
+      try{ input.setSelectionRange(end, end); }catch(e){}
+    }
   }
-  try{
-    const r = await api('/api/chat', { mode: state.chatMode, message: text, solved: !!solved }, 40000);
-    chatTyping(false);
-    // ★ v1.51: 문장 단위로 흘려보낸다.
-    const msgEl = chatAddStream('assistant', r.reply, Number(r.hintLevel)>1);
-    if(state.voiceAuto || state.voiceChat){
-      speak(r.reply, ()=>{ if(state.voiceChat && !state.chatBusy) startMic(true); });
-    }
-    const lvl = Number(r.hintLevel) || 0;
-    if(state.chatMode === 'learn' && lvl){
-      const meta = document.createElement('div'); meta.className = 'msg-meta';
-      const badge = document.createElement('span'); badge.className = 'hint-badge';
-      badge.textContent = lvl === 1 ? 'L1 · 되묻기' : lvl === 2 ? 'L2 · 비유' : 'L3 · 다음 단계';
-      meta.appendChild(badge);
-      if(lvl < 3){
-        const more = document.createElement('button');
-        more.className = 'msg-more'; more.textContent = '힌트 한 단계 더';
-        more.onclick = ()=>{ const input=$('#chat-text'); if(input) input.value='힌트 한 단계 더 주세요'; sendChat(false); };
-        meta.appendChild(more);
-      }
-      // ★ v1.50: 힌트를 다 받은 뒤 «설명» 으로 넘어간다. 옮겨 적기로 끝나지 않게.
-      // 개념명이 비어도(카드 미매칭) 버튼은 보여 준다 — 화면이 «방금 배운 것» 으로 부른다.
-      if(lvl >= 3 && r.explain){
-        const ex = document.createElement('button');
-        ex.className = 'msg-more explain';
-        ex.textContent = '내 말로 설명하기';
-        ex.onclick = ()=>startExplain(r.explain);
-        meta.appendChild(ex);
-      }
-      const quiz = document.createElement('button');
-      quiz.className = 'msg-more'; quiz.textContent = '문제로 확인';
-      quiz.onclick = ()=>openPuzzle();
-      meta.appendChild(quiz);
-      msgEl.appendChild(meta);
-    }
-    if(r.wrapUp) chatAdd('assistant', '⏳ ' + r.wrapUp, true);
-    if(r.followUp) chatAdd('assistant', '💡 다음 질문: ' + r.followUp, true);
-    if(r.remembered && r.remembered.length){
-      toast('🧠 루미가 기억했어: ' + r.remembered.join(', '));
-    }
-    if(r.solved){
-      setRobotMode('cheer');   // ★ v1.58: 스스로 해결 → 로봇이 같이 기뻐한다
-      chatAdd('assistant', '🌱 이해도 +3! 방이 조금 더 밝아졌어요.', true);
-      if(r.summary) chatAdd('assistant', '📘 오늘의 한 줄\n' + r.summary, true);
-      loadRoomState();
-      if(r.balance != null){ state.user.cell_balance = r.balance; setBalance(r.balance); }
-      if(state.lastPlanStep){
-        const id = state.lastPlanStep; state.lastPlanStep = null;
-        togglePlanStep(id, true);
-      }
-    }
-    $('#chat-und').textContent = `이해도 ${r.understanding||0}`;
-    $('#chat-left').textContent = r.left>0 ? `오늘 ${r.left}번 더 이야기할 수 있어요` : '오늘은 여기까지!';
-  }catch(e){
-    chatTyping(false);
-    chatAdd('assistant', e.message || '잠시 후 다시 이야기하자.');
-  }finally{
-    state.chatBusy = false; $('#chat-send').disabled = false; $('#chat-text').focus();
+  state.chatBusy = false; $('#chat-send').disabled = false; input.focus();
+  // ★ v1.74 A1: 커서를 문장 «끝» 으로 — focus 직후 타이핑이 뒤에 붙게 한다.
+  if(streamState === 'fail' && !solved){
+    const end = input.value.length;
+    try{ input.setSelectionRange(end, end); }catch(e){}
   }
 }
 function chatSolved(){
@@ -5197,6 +5850,14 @@ async function sendExplain(){
     const r = await api('/api/chat/explain', { concept: ex.concept, text }, 35000);
     chatTyping(false);
     chatAdd('assistant', r.reply, true);
+    // ★ 2026-11-21 (v1.71) «함께 가르친 친구» — explain 응답에 coTaught 가 오면 루미가 축하 한 줄을 덧붙인다.
+    //   chatAdd 는 내부에서 textContent 로 넣으므로 닉네임이 HTML 로 새지 않는다.
+    if(r && r.coTaught){
+      chatAdd('assistant', `«${r.coTaught}» 도 이 개념을 가르쳐 줬어! 너희 둘 다 «${ex.concept || '이 개념'}» 선생님이네 👯`, true);
+    }
+    // ★ 2026-11-21 (v1.74) B1 삼막 1막: 계약 필드 firstLamp:true — 첫 기억 등불의 탄생 순간.
+    //   전체 화면 축하 + 등불 판넬 자동 열기 + 첫 등불 탄생 애니메이션.
+    if(r && r.firstLamp) celebrateFirstLamp();
     if(state.voiceAuto || state.voiceChat) speak(r.reply);
     state.explainMode = null;
     input.placeholder = '루미에게 말을 걸어 보세요';
@@ -5210,6 +5871,446 @@ async function sendExplain(){
     input.focus();
   }
 }
+
+// ★ 2026-11-20 (v1.70) «루미가 틀려볼게» — 루미가 방금 배운 개념으로 두 말을 하고,
+//   한 개는 일부러 틀렸다. 아이가 틀린 말을 골라내면 «가르친 사람» 이 된 기분을 맛본다.
+//   정답이면 서버가 mastery 를 올려 준다(bumpMastery 는 서버 몫 — 화면은 결과만 보여 준다).
+async function openTeachChallenge(){
+  let c = null;
+  try{
+    // 404(아직 배운 개념이 없음) / 429(오늘 도전 3번 소진) → 서버 error 문구를 그대로 채팅에 보여 준다.
+    // ★ 2026-11-21 (v1.74) C7 «루미 생각 중»: GET 이 도는 동안 상단에 생각 중 바가 떠 있다
+    //   (입력은 막지 않는다 — 채팅 스트리밍에는 절대 쓰지 않는다).
+    c = await withThinking(api('/api/teach/challenge', null, 15000), { label:'루미가 도전을 준비 중…' });
+  }catch(e){
+    chatAdd('assistant', e.message || '도전을 시작하지 못했어. 잠시 후 다시 해 볼래?', true);
+    return;
+  }
+  // ★ 낡은 서버 응답(필드가 비어 있음)에서도 조용히 넘어간다 — 화면이 깨지면 안 된다.
+  const st = (c && Array.isArray(c.statements)) ? c.statements.filter(s=>s && s.text) : [];
+  if(!c || !c.concept || st.length < 2){
+    chatAdd('assistant', '지금은 도전 준비 중이에요. 조금 뒤에 다시 눌러 줄래?', true);
+    return;
+  }
+  // 채팅 말풍선 스타일 그대로(assistant) + 안에 보기 블록을 얹는다. 읽어주기(🔊) 버튼도 같이 생긴다.
+  const card = chatAdd('assistant', `루미가 «${c.concept}» 에 대해 두 말을 할게. 한 개는 틀렸어 — 어떤 게 틀렸을까?`);
+  // ★ 2026-11-21 (v1.71): 정답 카드가 «함께 가르친 친구» 를 보여 주려면 개념명이 필요하다.
+  //   answerTeachChallenge 는 이 카드 DOM 만 받으므로 dataset 에 슬쩍 붙여 둔다.
+  card.dataset.concept = c.concept;
+  const opts = document.createElement('div');
+  opts.className = 'pz-options';   // ★ 오늘의 퍼즐 보기 스타일 재사용 — correct/wrong 색까지 그대로
+  const btns = {};
+  st.forEach(s=>{
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = s.text;
+    b.onclick = ()=>answerTeachChallenge(card, btns, s.id);
+    btns[s.id] = b;
+    opts.appendChild(b);
+  });
+  card.appendChild(opts);
+  const log = $('#chat-log'); if(log) log.scrollTop = log.scrollHeight;
+}
+async function answerTeachChallenge(card, btns, choice){
+  // 카드는 한 번만 쓴다 — 답한 뒤에는 버튼이 눌리지 않게 잠근다.
+  if(!card || card.dataset.done === '1') return;
+  card.dataset.done = '1';
+  Object.keys(btns).forEach(k=>{ if(btns[k]) btns[k].disabled = true; });
+  let r = null;
+  try{
+    r = await api('/api/teach/challenge/answer', { choice });
+  }catch(e){
+    // 서버 사정(429 등)이면 버튼을 다시 열어 곧바로 재시도하게 한다.
+    delete card.dataset.done;
+    Object.keys(btns).forEach(k=>{ if(btns[k]) btns[k].disabled = false; });
+    chatAdd('assistant', e.message || '도전을 확인하지 못했어. 다시 눌러 볼래?', true);
+    return;
+  }
+  const pick = btns[choice];
+  const isOk  = !!(r && r.correct === true);   // ★ 필드가 없는(낡은) 응답이면 색을 칠하지 않는다
+  const isNo  = !!(r && r.correct === false);
+  if(isOk){
+    if(pick) pick.classList.add('correct');
+    // robotGesture('cheer') 는 없는 제스처다(wave/nod/tilt/look/bounce/stretch 만 있음).
+    // → 통통 뛰는 bounce 를 제스처로 쓰고, «정답 순간» 관례인 setRobotMode('cheer')(점프)를 함께 부른다.
+    robotGesture('bounce');
+    setRobotMode('cheer');
+  }else if(isNo){
+    if(pick) pick.classList.add('wrong');
+    const ok = (r && r.correctChoice) ? btns[r.correctChoice] : null;
+    if(ok) ok.classList.add('correct');
+    robotGesture('nod');   // 혼내는 게 아니라 «괜찮아» 하고 끄덕여 준다
+  }
+  const fb = document.createElement('div');
+  fb.className = 'pz-hint';   // ★ 퍼즐 힌트 상자 스타일 재사용
+  const why = (r && r.why) ? String(r.why) : '';
+  fb.textContent = isOk ? `정답! 👏 ${why}`
+    : isNo ? `${why} 틀린 걸 찾은 것도 공부야! 다음엔 더 빨리 볼 수 있을 거야.`
+    : (why || '루미가 다시 생각해 볼게!');
+  card.appendChild(fb);
+  // ★ 2026-11-21 (v1.71) «함께 가르친 친구» — 서버가 coTaught(친구 닉네임)를 보내주면
+  //   한 줄을 더 얹는다. 필드가 없는(낡은) 응답이면 아무것도 추가하지 않는다(우아한 하락).
+  //   칭찬은 정답·오답 무관하게 — «가르친 사람» 이 둘이라는 사실 자체가 선물이니까.
+  const coTaught = (r && r.coTaught) ? String(r.coTaught) : '';
+  if(coTaught){
+    const co = document.createElement('div');
+    co.className = 'co-taught';
+    co.textContent = `«${coTaught}» 도 이 개념을 가르쳐 줬어! 너희 둘 다 «${card.dataset.concept || ''}» 선생님이네 👯`;
+    card.appendChild(co);
+  }
+  // ★ 2026-11-21 (v1.74) B1 삼막: 계약 필드 firstLamp(첫 등불) / crystalNow(첫 수정화).
+  //   3막은 ««X» 가 수정 구슬이 됐어!» 축하 + «마을에서 구슬 보기» 제안까지 이어진다.
+  const conceptName = String(card.dataset.concept || '');
+  if(r && r.firstLamp) celebrateFirstLamp();
+  if(r && r.crystalNow){
+    showCelebrate(`«${conceptName || '이 개념'}» 가 수정 구슬이 됐어! 이제 안개도 못 잊게 해.`,
+      null, { label:'마을에서 구슬 보기', go:()=>{ const b = $('#btn-world'); if(b) b.click(); } });
+    obMark('act3');
+  }
+  const log = $('#chat-log'); if(log) log.scrollTop = log.scrollHeight;
+}
+
+// ============================================================
+// ★ 2026-11-21 (v1.71) «기억의 수호자» — 기억 등불 · 안개 속의 탑 · 루미 NPC 루틴
+//   루미는 아이가 «가르쳐 준 것» 을 등불로 밤새 켜 둔다. 그러나 매일 밤 안개가 등불을 흐리게 하고,
+//   아이는 «안개 속의 탑» 에 올라 안개가 왜곡한 말을 골라내며 등불을 지킨다.
+//   3번 다지기가 끝난 개념은 «수정 구슬» 이 되어 안개에 영원히 면역이다(서버가 판정).
+// ============================================================
+
+// ---------- ① 기억 등불 판넬 (성장 탭) ----------
+let _lampsAt = 0;   // 마지막 /api/lamps 호출 시각 — loadRoomState 와 setRoomTab 이 겹쳐 부르는 것을 막는다
+
+async function loadLamps(force){
+  // 2초 안에 다시 불리면 건너뛴다(마이룸 진입 + 탭 전환이 같은 순간에 겹칠 때)
+  if(!force && Date.now() - _lampsAt < 2000) return;
+  _lampsAt = Date.now();
+  const panel = $('#lamp-panel'); if(!panel) return;
+  // ★ 2026-11-20 (v1.72): await 동안 스켈레톤 — 판넬이 열리기 전에 미리 자리를 잡아 둔다.
+  //   실패 시에는 v1.71 의 «조용히 물러남» 을 그대로 존중한다(빈 화면을 억지로 얹지 않는다).
+  //   ★ v1.74 C4: loadLamps 는 조용한 실패를 «의도» 로 유지한다 — retryFn 을 넘기지 않는다.
+  fillSkeleton($('#lamp-list'), 3);
+  let r = null;
+  try{ r = await api('/api/lamps', undefined, 9000, 'GET'); }
+  catch(e){ return; }   // 실패는 조용히 — 판넬은 감춰진 채, 성장 탭의 나머지가 막히지 않는다
+  if(!r || !Array.isArray(r.lamps)) return;
+  // overplay «내일 약속» 문장도 이 스냅샷을 쓴다 — 잠금 시점엔 다시 요청할 수 없으므로
+  state.lamps = r;
+  renderLamps(r);
+  // ★ 2026-11-21 (v1.74) B1 삼막 2막: 계약 필드 sosFirst(«안개를 처음 겪음» 1회 전달).
+  //   안개와 탑을 소개하는 액트 바를 세운 뒤 탑을 «자동으로» 열어 준다.
+  if(r.sosFirst && obMark('act2')){
+    showAct(2, ['루미의 기억이 안개에 잊혀져 가…', '안개 속의 탑으로 되찾아 줘!'],
+      { label:'탑으로 가기', go:()=>openTower() });
+    setTimeout(()=>{ try{ openTower(); }catch(e){} }, 1500);
+  }
+}
+
+// ── ①-1 보관함 통계 바 (계약: teachCount · nextBadge) ──
+function renderLampStats(r, lamps){
+  const box = $('#lamp-stats'); if(!box) return;
+  const teach = Number(r.teachCount) || 0;
+  const crystals = lamps.filter(l=>Number(l.crystal)).length;
+  const nb = r.nextBadge || null;
+  const have = nb ? Math.min(Number(nb.have)||0, Number(nb.at)||10) : 0;
+  const at = nb ? Number(nb.at)||10 : 0;
+  const pct = nb ? Math.min(100, Math.round((have/at)*100)) : 100;
+  box.classList.remove('hidden');
+  box.innerHTML =
+    `<span class="ls-item">총 <b>${teach}</b>개 가르침</span>` +
+    `<span class="ls-item">${uiIcon('crystal',13)} <b>${crystals}</b>개</span>` +
+    `<span class="ls-badge">${nb ? `다음 배지 ${have}/${at}` : '배지 모두 완료 🏆'}</span>` +
+    `<span class="ls-bar"><i style="width:${pct}%"></i></span>`;
+}
+
+// ── ①-2 격자(기존 등불 행) — blockedBy 표시 + «다시 가르쳐 주기» 클릭(A2 ②) ──
+function lampFlameClass(l){
+  const d = (Number(l.decay) != null && isFinite(Number(l.decay))) ? Number(l.decay) : 0;
+  return l.crystal ? 'is-crystal' : (d >= 70 ? 'is-dim' : (d >= 30 ? 'is-fog' : 'is-bright'));
+}
+function lampDecayOf(l){
+  return (Number(l.decay) != null && isFinite(Number(l.decay))) ? Number(l.decay) : 0;
+}
+function renderLampGrid(lamps){
+  const list = $('#lamp-list'); if(!list) return;
+  list.innerHTML = lamps.map((l, i)=>{
+    // ★ 2026-11-20 (v1.72): 이모지 아이콘(💎💡🌫️😢) → «불꽃 DOM» 으로 교체.
+    //   스타일 담당이 그리는 클래스: is-crystal(수정) · is-bright(0~29) · is-fog(30~69) · is-dim(70+)
+    const d = lampDecayOf(l);
+    const flameCls = lampFlameClass(l);
+    // «수정 구슬» 배지 — 3번 다지기를 마쳐 안개에 면역이 된 등불
+    const badge = l.crystal ? '<span class="lamp-badge">수정 구슬</span>' : '';
+    // 🛡️ — 오늘 탑에서 이미 안개를 견뎠다(immune) 는 표시
+    const shield = l.immune ? '<span class="lamp-shield" title="오늘 안개를 견뎠어요">🛡️</span>' : '';
+    // ★ 2026-11-21 (v1.74) A2 ②: blockedBy(선수개념이 안개에 잠김) 가 있으면 «먼저 «X» 부터!»
+    //   작은 글자를 보여 주고 «누를 수 없다». 흐릿한(is-fog 30~69 · is-dim 70+) 등불 행은
+    //   행 전체가 goTeach 버튼이 된다(밝은 등불·수정 구슬은 다시 가르칠 필요가 적어 제외).
+    const blocked = l.blockedBy ? String(l.blockedBy) : '';
+    const teachable = !l.crystal && !blocked && d >= 30;
+    // B1 첫 등불 탄생 애니메이션 — celebrateFirstLamp 이 남긴 플래그를 첫 행의 불꽃이 소비한다
+    const born = (state._lampBorn && i === 0) ? ' is-born' : '';
+    return `<div class="lamp-row${l.crystal ? ' crystal' : ''}${teachable ? ' teachable' : ''}"` +
+        `${teachable ? ` data-topic="${esc(l.topic)}" title="눌러서 루미에게 다시 가르쳐 주기"` : ''}>` +
+      `<span class="lamp-flame ${flameCls}${born}"></span>` +
+      `<span class="lamp-topic">${esc(l.topic)}</span>${badge}${shield}` +
+      `${blocked ? `<span class="lamp-blocked">먼저 «${esc(blocked)}» 부터!</span>` : ''}</div>`;
+  }).join('');
+}
+
+// ── ①-3 목록 보기 (C3) — 아이콘 + 주제 + 재교 n/3 + 상태 칩 + blockedBy + 클릭 goTeach ──
+function renderLampList(lamps){
+  const box = $('#lamp-listview'); if(!box) return;
+  box.innerHTML = lamps.map(l=>{
+    const d = lampDecayOf(l);
+    const flameCls = lampFlameClass(l);
+    const blocked = l.blockedBy ? String(l.blockedBy) : '';
+    const teachable = !blocked;   // 목록에선 수정 구슬도 «다지기» 로 다시 가르칠 수 있다
+    const chip = l.crystal ? '<span class="lamp-state st-crystal">수정</span>'
+      : d >= 70 ? '<span class="lamp-state st-dim">위험</span>'
+      : d >= 30 ? '<span class="lamp-state st-fog">흐림</span>'
+      : '<span class="lamp-state st-bright">밝음</span>';
+    return `<div class="lamp-li${teachable ? ' teachable' : ''}"` +
+        `${teachable ? ` data-topic="${esc(l.topic)}" title="눌러서 루미에게 다시 가르쳐 주기"` : ''}>` +
+      `<span class="lamp-flame ${flameCls}"></span>` +
+      `<span class="lamp-li-topic">${esc(l.topic)}</span>` +
+      `<span class="lamp-li-meta">재교 ${Math.min(3, Number(l.reinforce)||0)}/3</span>${chip}` +
+      `${blocked ? `<span class="lamp-blocked">먼저 «${esc(blocked)}» 부터!</span>` : ''}</div>`;
+  }).join('');
+}
+
+function renderLamps(r){
+  const panel = $('#lamp-panel'); if(!panel) return;
+  panel.classList.remove('hidden');
+  const lampsAll = (r.lamps || []).filter(l => l && l.topic);
+  const cnt = $('#lamp-count'); if(cnt) cnt.textContent = `${lampsAll.length}개`;
+  // ★ 2026-11-21 (v1.74) C3 «기억 보관함»: 정렬 칩 — 최신(litDay 내림) / 위험(decay 내림) / 수정 먼저.
+  //   서버가 주는 decay 내림 기본 정렬은 «최신» 선택 시 litDay 로 다시 정렬한다.
+  const sort = state.lampSort || 'recent';
+  const lamps = lampsAll.slice().sort((a,b)=>{
+    if(sort === 'risk') return lampDecayOf(b) - lampDecayOf(a);
+    if(sort === 'crystal') return (Number(b.crystal)||0) - (Number(a.crystal)||0) || lampDecayOf(b) - lampDecayOf(a);
+    return String(b.litDay||'').localeCompare(String(a.litDay||''));
+  });
+  // 보기 전환 — 격자/목록 중 한쪽만 보인다
+  const view = state.lampView || 'grid';
+  const grid = $('#lamp-list'), listbox = $('#lamp-listview');
+  if(grid) grid.classList.toggle('hidden', view !== 'grid');
+  if(listbox) listbox.classList.toggle('hidden', view !== 'list');
+  renderLampStats(r, lampsAll);
+  renderLampGrid(lamps);
+  renderLampList(lamps);
+  state._lampBorn = false;   // 탄생 애니메이션은 1회만
+  const sos = $('#lamp-sos');
+  if(sos){
+    const s = (r.sos && r.sos.topic) ? String(r.sos.topic) : '';
+    if(s){ sos.textContent = `🌫️ 안개가 «${s}» 등불을 가장 많이 흐리고 있어요!`; sos.classList.remove('hidden'); }
+    else { sos.textContent = ''; sos.classList.add('hidden'); }
+  }
+  const has = lampsAll.length > 0;
+  const empty = $('#lamp-empty'); if(empty) empty.classList.toggle('hidden', has);
+  const btn = $('#btn-tower');
+  if(btn){
+    btn.disabled = !has;
+    btn.title = has ? '하루 한 번, 오늘의 안개를 물리쳐 보자!' : '루미에게 가르친 게 아직 없어요';
+  }
+  try{ renderToday3(); }catch(e){}
+}
+
+// ---------- ② 안개 속의 탑 (하루 한 번) ----------
+let _tw = null;               // 열려 있는 탑 세션 { data, idx, busy }
+let _twTimers = [];           // «다음 층» 예약 setTimeout 들 — 창을 닫으면 반드시 비운다
+let _twIntroShown = false;    // «구별해 줘!» 안내는 처음 들어올 때 한 줄만
+
+function twClearTimers(){
+  _twTimers.forEach(t => clearTimeout(t));
+  _twTimers = [];
+}
+// clearedMask 비트 세기 — «n층 클리어» 표시용
+function twCleared(n){
+  let m = Number(n) || 0, c = 0;
+  while(m > 0){ c += (m & 1); m >>= 1; }
+  return c;
+}
+// 모든 층을 다 통과했는지 — ended 만 믿지 않고 마스크로도 확인한다(낡은 응답 대비)
+function twAllDone(t){
+  if(!t || !Array.isArray(t.floors) || !t.floors.length) return false;
+  const all = (1 << t.floors.length) - 1;
+  return ((Number(t.clearedMask) || 0) & all) === all;
+}
+
+async function openTower(){
+  const modal = $('#game-tower'); if(!modal) return;
+  twClearTimers();
+  _tw = null;
+  modal.classList.remove('hidden');
+  // «구별해 줘!» 안내 — 처음 들어올 때 한 번만 보인다
+  if(!_twIntroShown){ _twIntroShown = true; const hw = $('#tw-howto'); if(hw) hw.hidden = false; }
+  const fl = $('#tw-floor'), body = $('#tw-question'), fb = $('#tw-feedback');
+  if(fb) fb.classList.add('hidden');
+  if(fl) fl.innerHTML = '';
+  if(body) body.innerHTML = '<div class="tw-loading">🗼 탑을 불러오는 중…</div>';
+  let t = null;
+  try{ t = await api('/api/tower/today', undefined, 12000, 'GET'); }
+  catch(e){
+    // 기다리는 사이 창이 닫혔으면 조용히 물러난다(감춰진 모달에 그리지 않는다)
+    if(modal.classList.contains('hidden')) return;
+    // 404(아직 등불이 없다) · 429(오늘 도전 소진) — 서버 error 문구를 그대로 보여 준다
+    twShowError(e.message);
+    return;
+  }
+  if(modal.classList.contains('hidden')) return;   // 닫힌 뒤 도착한 응답은 무시한다
+  if(!t || !Array.isArray(t.floors) || !t.floors.length){
+    twShowError('지금은 탑이 준비되지 않았어요. 조금 뒤에 다시 올래?');
+    return;
+  }
+  _tw = { data:t, idx:0, busy:false };
+  // 이미 끝난 탑 — 전부 통과면 축하 화면, 중간에 끝났으면 «여기까지» 화면부터 시작한다
+  if(twAllDone(t)) twShowVictory();
+  else if(t.ended) twShowResult();
+  else twRenderFloor();
+}
+
+function twShowError(msg){
+  const body = $('#tw-question'); if(!body) return;
+  body.innerHTML = `<div class="tw-error">🌫️ ${esc(msg || '탑을 불러오지 못했어요')}</div>`;
+}
+
+function twRenderFloor(){
+  const t = _tw && _tw.data; if(!t) return;
+  const fl = $('#tw-floor'), body = $('#tw-question'), fb = $('#tw-feedback');
+  const total = t.floors.length;
+  const cur = t.floors[Math.min(_tw.idx, total - 1)] || t.floors[total - 1];
+  const mask = Number(t.clearedMask) || 0;
+  // 층 표시 — 통과한 층 ✅, 지금 층은 번호로 강조, 주말이면 «안개 BOSS» 배지
+  const dots = t.floors.map((f, i)=>{
+    const done = (mask & (1 << i)) !== 0;
+    const now = i === _tw.idx;
+    return `<span class="tw-dot${done ? ' done' : ''}${now ? ' now' : ''}">${done ? '✅' : (now ? (i + 1) : '·')}</span>`;
+  }).join('');
+  if(fl) fl.innerHTML = `<span class="tw-count">${t.boss ? '<span class="tw-boss-badge">🌊 안개 BOSS</span>' : ''}<b>${(cur.floor || 0) + 1}층</b> / 총 ${total}층 · 하루 한 번</span><span class="tw-dots">${dots}</span>`;
+  if(fb) fb.classList.add('hidden');
+  if(!body) return;
+  // 한 층 = «루미가 배운 말» 인지 «안개가 왜곡한 말» 인지 맞히기.
+  // 보기 버튼은 퍼즐의 .pz-options 스타일을 그대로 재사용(correct/wrong 색까지).
+  body.innerHTML = `
+    <p class="tw-concept">«${esc(cur.concept || '')}» 에 대해 루미가 말하는 문장이야</p>
+    <div class="tw-bubble">💬 ${esc(cur.statement || '')}</div>
+    <div class="pz-options">
+      <button type="button" class="tw-choose" data-choice="original">루미가 배운 말이다</button>
+      <button type="button" class="tw-choose" data-choice="fogged">안개가 왜곡했어</button>
+    </div>`;
+  body.querySelectorAll('.tw-choose').forEach(b => b.addEventListener('click', () => twAnswer(b.dataset.choice)));
+}
+
+function twFeedbackShow(html){
+  const fb = $('#tw-feedback'); if(!fb) return;
+  fb.innerHTML = html;
+  fb.classList.remove('hidden');
+}
+
+async function twAnswer(choice){
+  const t = _tw && _tw.data;
+  if(!t || !_tw || _tw.busy) return;
+  const cur = t.floors[_tw.idx];
+  if(!cur) return;
+  _tw.busy = true;
+  const body = $('#tw-question');
+  const btns = body ? [...body.querySelectorAll('.tw-choose')] : [];
+  btns.forEach(b => { b.disabled = true; });
+  let r = null;
+  try{ r = await api('/api/tower/answer', { floor: cur.floor, choice }, 12000); }
+  catch(e){
+    // 창이 닫혔으면 조용히 — 아니면 통신 실패는 «오답» 이 아니므로 버튼을 되살려 재시도하게 한다
+    if(!_tw) return;
+    _tw.busy = false;
+    btns.forEach(b => { b.disabled = false; });
+    twFeedbackShow(`🌫️ ${esc(e.message)}`);
+    return;
+  }
+  if(!_tw) return;   // 기다리는 사이 창이 닫혔다면 아무것도 그리지 않는다
+  if(r && r.clearedMask != null) t.clearedMask = r.clearedMask;
+  const concept = (r && r.concept) || cur.concept || '';
+  const pick = btns.find(b => b.dataset.choice === choice);
+  if(r && r.correct === true){
+    // 정답 — 이 층의 등불이 오늘의 안개를 견뎠다. 0.8초 뒤 다음 층.
+    if(pick) pick.classList.add('correct');
+    // ★ v1.72: 정답이면 탑의 안개가 걷힌다.
+    { const card = document.querySelector('.tower-card');
+      if(card){ card.classList.add('fog-clear'); _twTimers.push(setTimeout(()=>card.classList.remove('fog-clear'), 1600)); } }
+    try{ robotGesture('bounce'); }catch(e){}
+    twFeedbackShow(`루미의 «${esc(concept)}» 등불이 오늘 안개를 견뎠어! 🛡️`);
+    _twTimers.push(setTimeout(()=>{
+      if(!_tw) return;              // 창이 닫혀 있으면 아무것도 하지 않는다(유령 탑 방지)
+      _tw.busy = false;
+      if(r.done) twShowVictory();
+      else { _tw.idx += 1; twRenderFloor(); }
+    }, 800));
+    return;
+  }
+  // 오답 — 고른 쪽 빨강, 진짜 배운 말 초록. 1.5초 뒤 «여기까지» 결과 화면.
+  if(pick) pick.classList.add('wrong');
+  // ★ v1.72: 오답이면 안개가 짙어진다(실패가 «보이게»).
+  { const card = document.querySelector('.tower-card');
+    if(card){ card.classList.add('fog-heavy'); _twTimers.push(setTimeout(()=>card.classList.remove('fog-heavy'), 2100)); } }
+  const okBtn = (r && r.expected) ? btns.find(b => b.dataset.choice === r.expected) : null;
+  if(okBtn) okBtn.classList.add('correct');
+  try{ robotGesture('nod'); }catch(e){}
+  const why = (r && r.why) ? `<span class="tw-why">${esc(r.why)}</span>` : '';
+  twFeedbackShow(`앗, 안개가 «${esc(concept)}» 을 더 흐리게 했어…${why}`);
+  if(r && r.ended) t.ended = true;
+  _twTimers.push(setTimeout(()=>{
+    if(!_tw) return;
+    _tw.busy = false;
+    twShowResult();
+  }, 1500));
+}
+
+function twShowVictory(){
+  const t = _tw && _tw.data; if(!t) return;
+  const body = $('#tw-question'), fb = $('#tw-feedback');
+  if(fb) fb.classList.add('hidden');
+  if(body) body.innerHTML = `
+    <div class="tw-result">
+      <div class="tw-result-emoji">✨🗼</div>
+      <p class="tw-result-main">안개를 다 물리쳤어! 루미의 기억이 빛나요 ✨</p>
+      ${t.boss ? '<p class="tw-result-boss">안개 BOSS 를 물리쳤어! 🌊→✨</p>' : ''}
+      <p class="hint">${twCleared(t.clearedMask)}층 클리어</p>
+    </div>`;
+  try{ setRobotMode('cheer'); }catch(e){}
+}
+function twShowResult(){
+  const t = _tw && _tw.data; if(!t) return;
+  const body = $('#tw-question'), fb = $('#tw-feedback');
+  if(fb) fb.classList.add('hidden');
+  if(body) body.innerHTML = `
+    <div class="tw-result">
+      <div class="tw-result-emoji">🌫️🗼</div>
+      <p class="tw-result-main">오늘의 탑은 여기까지… 내일 또 와!</p>
+      <p class="hint">${twCleared(t.clearedMask)}층 클리어</p>
+    </div>`;
+}
+
+// ---------- ③ 마을의 루미 NPC 루틴 (world.js ↔ app.js 창구) ----------
+// world.js 가 «루미 NPC 에 다가가 상호작용» 하면 window.__rmiRoutine(spot) 을 부른다.
+// spot: 'well'(지혜의 샘) · 'mill'(풍차) · 'bell'(종) — 마을 시설마다 루미의 인사가 다르다.
+// 이 창구는 «정의만» 해 두고, world.js 가 부르기 전까지는 어떤 부작용도 일으키지 않는다.
+window.__rmiRoutine = async (spot)=>{
+  if(spot !== 'well' && spot !== 'mill' && spot !== 'bell') return;
+  let r = null;
+  try{ r = await api('/api/robot/routine', { spot }, 15000); }
+  catch(e){ toast('루미가 지금은 말할 수 없어요'); return; }
+  if(!r || !r.opener){ toast('루미가 지금은 말할 수 없어요'); return; }
+  // v1.34 in-world 채팅 — world.js 의 openWorldChat() 은 IIFE 안에 있어 window 로 노출되지 않는다.
+  //   chatOpen() 은 world-screen 이 열려 있으면 «같은 in-world 레이어» 를 그대로 켠다
+  //   (W.chatOpen 도 window.__worldState 로 같은 객체를 공유해 함께 맞춰진다).
+  if(window.__worldState && window.__worldState.keys) window.__worldState.keys = {};   // 걷기 입력 해제
+  await chatOpen();
+  // chatOpen 이 대화 기록을 다시 그린 «뒤에» 인사를 얹는다 — 앞에 넣으면 loadChatHistory 에 지워진다
+  chatAdd('assistant', String(r.opener), true);
+  const input = $('#chat-text'); if(input) input.focus();
+};
+
+// «안개 속의 탑» 열기 버튼 — 기억 등불 판넬 아래
+$('#btn-tower')?.addEventListener('click', openTower);
 
 // ★ 2026-10-28: 음성 입력(Web Speech API). 지원 브라우저에서만 동작.
 let _rec = null;
@@ -5231,7 +6332,14 @@ function startMic(auto){
         toast('🎤 ' + text);
       }
     };
-    _rec.onerror = () => { _rec = null; toast('음성을 듣지 못했어요. 다시 시도해 주세요.'); };
+    // ★ 오류 종류별로 안내를 다르게 한다. 예전엔 모든 오류가 «못 들었어요» 였다.
+    _rec.onerror = (e) => {
+      const err = e && e.error;
+      _rec = null;
+      if(err === 'no-speech') toast('조용하네요. 말해줄래?');
+      else if(err === 'aborted'){ /* 사용자/코드가 중단한 것 — 조용히 넘어간다 */ }
+      else toast('음성을 듣지 못했어요. 다시 시도해 주세요.');
+    };
     _rec.onend = () => { _rec = null; };
     _rec.start();
     toast('🎤 듣고 있어요… 말해 보세요.');
@@ -5888,7 +6996,7 @@ async function askPuzzle(){
   if(input) input.value = q ? `${q.topic}이 헷갈려. 같이 볼까?` : '같이 공부하고 싶어';
   sendChat(false);
 }
-function showPzHint(){
+async function showPzHint(){
   const pz = state.pz;
   if(!pz || pz.done) return;
   if(pz.hintsLeft<=0){
@@ -5897,6 +7005,21 @@ function showPzHint(){
     return;
   }
   const q = pz.questions[pz.index];
+  // ★ L1/L2 힌트는 today 응답에 들어 있어 즉시 보여 주고, L3 힌트는
+  //   네트워크 탭에서 미리 훔쳐보지 못하도록 서버에서 필요할 때만 내려받는다.
+  if(q && pz.hintIdx >= (q.hints||[]).length){
+    pz.hintIdx++; pz.hintsLeft--;
+    $('#pz-hint').classList.remove('hidden');
+    $('#pz-hint').textContent='💡 루미가 힌트를 준비하는 중…';
+    $('#pz-hints').textContent=`힌트 ${pz.hintsLeft}개`;
+    try{
+      const r = await api('/api/puzzle/hint', { cardId:q.cardId, level:3 });
+      $('#pz-hint').textContent=`💡 ${r.text || '한 번 더 생각해 보자.'}`;
+    }catch(e){
+      $('#pz-hint').textContent='💡 한 번 더 생각해 보자.';
+    }
+    return;
+  }
   const h = (q && (q.hints||[])[pz.hintIdx]) || '한 번 더 생각해 보자.';
   pz.hintIdx++; pz.hintsLeft--;
   $('#pz-hint').classList.remove('hidden'); $('#pz-hint').textContent=`💡 ${h}`;
@@ -5966,13 +7089,78 @@ async function openParentDashboard(){
         <b>오늘 아이와 나눌 말</b>
         <ul>${r.conversationStarters.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
       </div>` : ''}
-      <div class="pd-stat pd-wide"><span>최근 7일 접속</span><div class="pd-bars">${bars}</div></div>`;
+      ${(r.errorPatterns && r.errorPatterns.length) ? `
+      <div class="pd-stat pd-wide pd-talk pd-errors">
+        <b>이번 주 막힘 패턴</b>
+        <ul>${r.errorPatterns.map(p=>{
+          // ★ 2026-11-20 (v1.70): 추세 표시 — 잃어버리면 up, 회복되면 down, 그대로면 same.
+          //    tip 은 «정답 대신 어떻게 도울까» 힌트라서 아이 눈에 안 보이는 부모 화면에만 나온다.
+          const ico = p.trend === 'up' ? '🔺' : p.trend === 'down' ? '🔻' : '〰️';
+          return `<li><b>${esc(p.topic)} — 이번 주 ${esc(p.count)}번 ${ico}</b><span class="hint">${esc(p.tip)}</span></li>`;
+        }).join('')}</ul>
+      </div>` : ''}
+      <div class="pd-stat pd-wide"><span>최근 7일 접속</span><div class="pd-bars">${bars}</div></div>
+      <!-- ★ 2026-11-21 (v1.74) 계약: playLimit · cheerSentToday · parentEmail · optin 표시 +
+           POST /api/parent/cheer · playtime · optin 세 행동을 부모 화면에 놓는다. -->
+      <div class="pd-stat pd-wide pd-family">
+        <b>가족과 함께</b>
+        <div class="pd-cheer-row">
+          <input id="pd-cheer-text" maxlength="80" placeholder="아이 우편함에 한 마디 (예: 오늘도 멋졌어!)">
+          <button id="pd-cheer-send" class="btn primary small" ${r.cheerSentToday ? 'disabled' : ''}>보내기</button>
+        </div>
+        <span class="hint">하루 한 번 응원을 보낼 수 있어요.${r.cheerSentToday ? ' 오늘은 이미 보냈어요.' : ''}</span>
+        <div class="pd-limit-row">
+          <span>하루 플레이 한도 <b id="pd-limit-val">${Number(r.playLimit)||40}분</b></span>
+          <button id="pd-limit-minus" class="btn ghost small">-10분</button>
+          <button id="pd-limit-plus" class="btn ghost small">+10분</button>
+        </div>
+        <div class="pd-optin-row">
+          <span>루미 편지 받기${r.parentEmail ? ` <i class="hint">(${esc(r.parentEmail)})</i>` : ''}</span>
+          <label class="switch"><input type="checkbox" id="pd-optin" ${Number(r.optin)?'checked':''}><i></i></label>
+          <input id="pd-optin-email" maxlength="120" placeholder="이메일 주소" class="${Number(r.optin)?'hidden':''}">
+        </div>
+        <span class="hint">이메일은 마스킹해서만 보여요(예: ab***@naver.com).</span>
+      </div>`;
     const fc = $('#pd-fchat');
     if(fc) fc.addEventListener('change', async ()=>{
       try{
         const s = await api('/api/parent/friend-chat', { enabled: fc.checked });
         toast(s.enabled ? '친구 채팅을 허용했어요' : '친구 채팅을 막았어요');
       }catch(e){ fc.checked = !fc.checked; toast(e.message); }
+    });
+    // ── ★ v1.74 가족 행동 ① 응원 편지 ──
+    $('#pd-cheer-send')?.addEventListener('click', async ()=>{
+      const inp = $('#pd-cheer-text');
+      const text = ((inp && inp.value) || '').trim();
+      if(!text) return toast('한 마디를 적어 볼래요?');
+      const btn = $('#pd-cheer-send');
+      if(btn) btn.disabled = true;
+      try{
+        await api('/api/parent/cheer', { text });
+        if(inp) inp.value = '';
+        toast('💌 아이 우편함에 응원을 넣었어요');
+        try{ loadMailbox(); }catch(e){}   // 아이가 열려 있으면 배지·목록을 바로 갱신
+      }catch(e){ toast(e.message); if(btn && !r.cheerSentToday) btn.disabled = false; }
+    });
+    // ── ★ v1.74 가족 행동 ② 플레이 한도 조절(delta -10/0/+10) ──
+    const changeLimit = async (delta)=>{
+      try{
+        const s = await api('/api/parent/playtime', { delta });
+        const v = $('#pd-limit-val'); if(v) v.textContent = `${s.playLimit}분`;
+        toast(`하루 한도가 ${s.playLimit}분이 됐어요`);
+      }catch(e){ toast(e.message); }
+    };
+    $('#pd-limit-minus')?.addEventListener('click', ()=>changeLimit(-10));
+    $('#pd-limit-plus')?.addEventListener('click', ()=>changeLimit(10));
+    // ── ★ v1.74 가족 행동 ③ 루미 편지 수신 동의(opt-in) ──
+    $('#pd-optin')?.addEventListener('change', async (e)=>{
+      const email = (($('#pd-optin-email') && $('#pd-optin-email').value) || '').trim();
+      try{
+        const s = await api('/api/parent/optin', { email, optin: e.target.checked ? 1 : 0 });
+        const em = $('#pd-optin-email');
+        if(em) em.classList.toggle('hidden', !!s.optin);
+        toast(s.optin ? '루미의 편지를 받기로 했어요' : '루미의 편지를 잠시 쉬어요');
+      }catch(err){ e.target.checked = !e.target.checked; toast(err.message); }
     });
     $('#pd-memory')?.addEventListener('click', loadMemories);
     loadWeeklyLetter();
@@ -6991,6 +8179,11 @@ function sortPourInfo(from,to){
     if(t.length && t[t.length-1]!==c) return {ok:false,msg:'위쪽 색이 달라요. 같은 빛끼리 모아요.'};
     return {ok:true,n:1,c};
   }
+  // ★ 완성된 병은 옮기는 «원» 이 될 수 없다 — 힌트 풀이(sortMovesAll)도 완성 병은
+  //   건드리지 않는다. 예전엔 화면쪽에서만 완성 병을 흐트러뜨릴 수 있어
+  //   힌트와 실제 플레이 규칙이 어긋났다.
+  //   보관 병(vault) 은 2층이라 완성될 수 없으므로 위 분기에서 이미 처리된다.
+  if(sortComplete(s)) return {ok:false,msg:'완성된 병은 그대로 둘래요. 다른 병을 골라요.'};
   if(t.length>=SORT_CAP) return {ok:false,msg:'이 병은 가득 찼어요.'};
   if(t.length && t[t.length-1]!==c) return {ok:false,msg:'위쪽 색이 달라요. 같은 빛끼리 모아요.'};
   let run=1; for(let k=s.length-2;k>=0&&s[k]===c;k--) run++;
@@ -7331,11 +8524,16 @@ window.addEventListener('pointercancel', sortHoldEnd);
 window.addEventListener('blur', sortHoldEnd);
 $('#pz-practice')?.addEventListener('click', ()=>openPuzzle(true));
 $('#pz-ask')?.addEventListener('click', askPuzzle);
-$('#chat-mic')?.addEventListener('click', startMic);
+// ★ click 이벤트 객체가 startMic 의 auto 로 들어가 «항상 250ms 후 자동 전송» 이 됐었다.
+//   마이크 버튼은 수동 입력이므로 auto=false — 결과를 입력창에만 채운다.
+$('#chat-mic')?.addEventListener('click', ()=>startMic(false));
 $('#btn-parent')?.addEventListener('click', openParentDashboard);
 $('#side-user')?.addEventListener('click', ()=>goNav('board'));
 $('#btn-report')?.addEventListener('click', ()=>goNav('board'));
-$('#btn-settings')?.addEventListener('click', ()=>$('#settings-modal').classList.remove('hidden'));
+// ★ 2026-11-21 (v1.74) C6: 설정은 모달이 아니라 «설정 화면» 으로 — 상단 ⚙ · 사이드바 ⚙️ 두 진입점 모두 goNav.
+$('#btn-settings')?.addEventListener('click', ()=>goNav('settings'));
+$('#btn-settings-side')?.addEventListener('click', ()=>goNav('settings'));
+$('#btn-parent-nav')?.addEventListener('click', openParentDashboard);
 $('#set-font')?.addEventListener('change', e=>{ localStorage.setItem('roomi_font_lg', e.target.checked?'1':'0'); applySettings(); });
 $('#set-cb')?.addEventListener('change', e=>{ localStorage.setItem('roomi_cb', e.target.checked?'1':'0'); applySettings(); });
 $('#set-voice')?.addEventListener('change', e=>{ localStorage.setItem('roomi_voice_auto', e.target.checked?'1':'0'); applySettings(); });
@@ -7379,6 +8577,9 @@ $('#fc-block')?.addEventListener('click', blockFriend);
 function setRoomTab(name){
   $$('#room-tabs .room-tab').forEach(x=>x.classList.toggle('on', x.dataset.roomTab===name));
   $$('.room-pane').forEach(p=>p.classList.toggle('on', p.dataset.roomPane===name));
+  // ★ 2026-11-21 (v1.71): «성장» 탭에 들어올 때마다 기억 등불을 새로 읽는다.
+  //   로그인 전(state.user 없음)에는 부르지 않는다 — 탭 복원이 시작 시점에 실행될 수 있어서다.
+  if(name === 'growth' && state.user) try{ loadLamps(); }catch(e){ console.error('[loadLamps]', e); }
   try{ localStorage.setItem('roomi_room_tab', name); }catch(e){}
 }
 $$('#room-tabs .room-tab').forEach(b=>b.addEventListener('click', ()=>setRoomTab(b.dataset.roomTab)));
@@ -7683,6 +8884,30 @@ async function loadNudge(){
 function renderNextAction(act){
   const box = $('#nudge-bubble'); if(!box) return;
   state.nudgeActive = true;
+  // ★ 2026-11-21 (v1.71): «오늘의 한 걸음» 을 state 에 기억해 둔다.
+  //   40분 잠금(overplay) 때 서버 요청 없이 «내일은 «X» 에 도전해 보고 싶어» 문장을 만들기 위함.
+  if(act) state.nextAction = act;
+  // ★ 2026-11-21 (v1.74) A3 계약: kind:'tower' 카드 — 제목/cta 가 없는 응답이라 여기서 조립한다.
+  //   말풍선을 채운 뒤 «오늘 할 일» 카드도 탑 타일로 갱신한다.
+  if(act && act.kind === 'tower'){
+    // fogCount 계약 필드가 없는(낡은) 응답이면 로컬 램프에서 흐린 등불 수를 센다
+    const fogN = (act.fogCount != null) ? Number(act.fogCount)
+      : ((state.lamps && Array.isArray(state.lamps.lamps)) ? state.lamps.lamps.filter(l=>(Number(l.decay)||0) >= 30).length : 0);
+    const nm = $('#nb-name'); if(nm) nm.textContent = (state.robot && state.robot.name) || '루미';
+    const av = $('#nb-avatar');
+    if(av && state.robot){
+      try{ av.innerHTML = robotSVG(state.robot.template, effectiveColors(state.robot.template, robotPalette())); }catch(e){}
+    }
+    const txt = $('#nb-text'); if(txt) txt.textContent = `루미의 기억이 안개에 잊혀져 가 — 흐린 등불 ${fogN}개를 탑으로 되찾아 줘!`;
+    const cta = $('#nb-cta');
+    if(cta){
+      cta.textContent = '탑으로 가기';
+      cta.onclick = ()=>{ box.classList.add('hidden'); openTower(); };
+    }
+    box.classList.remove('hidden');
+    try{ renderToday3(); }catch(e){}
+    return;
+  }
   const nm = $('#nb-name'); if(nm) nm.textContent = (state.robot && state.robot.name) || '루미';
   const av = $('#nb-avatar');
   if(av && state.robot){
@@ -7695,10 +8920,13 @@ function renderNextAction(act){
     cta.onclick = ()=>{ box.classList.add('hidden'); runNextAction(act); };
   }
   box.classList.remove('hidden');
+  try{ renderToday3(); }catch(e){}   // ★ v1.74: next-action 이 바뀌면 «오늘 할 일» 도 맞춰 간다
 }
 async function runNextAction(act){
   if(!act) return;
   try{
+    // ★ 2026-11-21 (v1.74) A3: 탑 카드의 실행 경로
+    if(act.kind === 'tower' || act.target === 'tower'){ openTower(); return; }
     if(act.target === 'chat'){ await chatOpen(); chatModeSet('chat'); return; }
     if(act.target === 'learn'){
       await chatOpen();
@@ -7871,6 +9099,11 @@ async function startFocus(){
     _focus.min = r.minutes;
     _focus.left = r.resumed ? Math.max(1, _focus.left || r.minutes*60) : r.minutes*60;
     _focus.running = true;
+    // ★ 2026-11-21 (v1.74) C5 «집중 + 대화 공존»: 집중이 진행 중인 동안엔
+    //   대화 패널과 대화 버튼이 집중 모달 «위» 로 떠오른다(z-index 105 > 100).
+    //   이때 채팅을 열어도 집중 타이머는 «끝까지» 돈다(타이머 코드는 한 줄도 건드리지 않았다).
+    //   게임·퀴즈 모달은 그대로 대화를 가린다 — 공존은 «같이 집중» 만.
+    document.body.classList.add('focus-live');
     $$('#focus-pick button').forEach(b=>b.disabled = true);
     $('#focus-start').classList.add('hidden');
     $('#focus-stop').classList.remove('hidden');
@@ -7888,6 +9121,8 @@ async function startFocus(){
 async function finishFocus(){
   clearInterval(_focus.timer);
   _focus.timer = null; _focus.running = false;
+  document.body.classList.remove('focus-live');   // ★ v1.74 C5: 대화를 다시 모달 아래로
+  notifyNaturalBreak();                            // ★ v1.74 C2: 집중 끝 = 자연스러운 마무리 지점
   try{
     const r = await api('/api/focus/finish', { sessionId:_focus.sessionId, minutes:_focus.min });
     if(r.balance != null){ setBalance(r.balance); state.user.cell_balance = r.balance; }
@@ -7903,6 +9138,7 @@ async function finishFocus(){
 function stopFocus(){
   clearInterval(_focus.timer);
   _focus.timer = null; _focus.running = false;
+  document.body.classList.remove('focus-live');   // ★ v1.74 C5: 그만두면 대화를 다시 가린다
   $$('#focus-pick button').forEach(b=>b.disabled = false);
   $('#focus-start').classList.remove('hidden');
   $('#focus-stop').classList.add('hidden');
@@ -7943,6 +9179,18 @@ async function claimSeason(){
 
 // ── 이벤트 바인딩 ──
 (function bindCompanionUI(){
+  // ★ v1.80: 답변 방식 — 자동(의도 판단) / 단계로(유도) / 바로 설명
+  state.answerStyle = localStorage.getItem('roomi_answer_style') || 'auto';
+  $$('#chat-style .cs-btn').forEach(b=>{
+    b.classList.toggle('on', b.dataset.style === state.answerStyle);
+    b.addEventListener('click', ()=>{
+      state.answerStyle = b.dataset.style;
+      try{ localStorage.setItem('roomi_answer_style', state.answerStyle); }catch(e){}
+      $$('#chat-style .cs-btn').forEach(x=>x.classList.toggle('on', x === b));
+      toast(state.answerStyle === 'direct' ? '이제 바로 설명해 줄게'
+        : state.answerStyle === 'guide' ? '한 단계씩 같이 생각해 볼게' : '상황에 맞게 답할게');
+    });
+  });
   const on = (sel, fn)=>{ const el = $(sel); if(el) el.addEventListener('click', fn); };
   // ★ v1.49: 한 번 닫은 말풍선은 이번 세션 동안 다시 띄우지 않는다
   //   (예전에는 닫아도 renderPlan/renderMyroom 때마다 같은 카드가 다시 나타났다).
@@ -8043,4 +9291,327 @@ async function claimSeason(){
 
   // 다시 온 사람: 이미 찾았다는 사실만 조용히 기억한다(카드는 그대로 열린다)
   try{ if(localStorage.getItem(SEEN_KEY) === '1') opened = true; }catch(e){ }
+})();
+
+// ============================================================
+// ★ 2026-11-21 (v1.74) «논리와 편의» 배치 — 마지막 구역
+//   A2 goTeach 딥링크 · B 삼막 인도(showAct/축하) · C1 탭바 · C3 보관함 칩 ·
+//   C6 설정(PIN/이전 코드/이어하기) · C7 withThinking · C4 재시도 위임(위 emptyState 근처)
+//   모든 새 함수는 파일 스코프의 함수 선언이라 아무 곳에서나 부를 수 있다.
+// ============================================================
+
+// ---------- C7 «루미 생각 중» 상단 바 ----------
+// promise 를 그대로 돌려주는 «통과» 헬퍼 — 성공/실패를 건드리지 않는다(then 별도 가지로만 정리).
+// 5초가 지나면 문구가 «거의 다 됐어!» 로 바뀐다. 채팅 스트리밍에는 절대 쓰지 않는다(전용 UI 있음).
+function withThinking(promise, opts){
+  const label = String((opts && opts.label) || '루미가 생각 중…');
+  try{ document.querySelectorAll('.thinkbar').forEach(b=>b.remove()); }catch(e){}
+  const bar = document.createElement('div');
+  bar.className = 'thinkbar';
+  bar.innerHTML = `<span class="rumi-pose">${rumiPose('think', 26)}</span><span class="think-text"></span>`;
+  const txt = bar.querySelector('.think-text');
+  txt.textContent = label;
+  document.body.appendChild(bar);
+  let ended = false;
+  const finish = ()=>{ if(ended) return; ended = true; clearTimeout(longT); try{ bar.remove(); }catch(e){} };
+  const longT = setTimeout(()=>{ if(!ended && txt) txt.textContent = '거의 다 됐어!'; }, 5000);
+  Promise.resolve(promise).then(finish, finish);
+  return promise;
+}
+
+// ---------- A2 «다시 가르쳐 주기» 딥링크 ----------
+// 세 군데(안개 우편 · 등불 행 · 헬로 말풍선)에서 같은 흐름으로 진입시킨다:
+//   마이룸 → 대화 열기 → «같이 공부» 모드 → 입력창에 미리 채우기 → 포커스.
+async function goTeach(topic){
+  const t = String(topic || '').trim();
+  if(!t) return;
+  try{ goNav('myroom'); }catch(e){}
+  try{ await chatOpen(); }catch(e){ return; }
+  chatModeSet('learn');
+  const input = $('#chat-text');
+  if(input){
+    input.value = `«${t}» 다시 가르쳐 줄게`;
+    input.focus();
+    const end = input.value.length;
+    try{ input.setSelectionRange(end, end); }catch(e){}
+  }
+}
+
+// ---------- B 삼막 인도: 1회 마킹 + 액트 바 ----------
+// localStorage 가 1차 방어, 서버 ob_step/firstLamp/sosFirst/crystalNow 가 2차 방어(계약 필드).
+function obSeen(key){
+  try{ return localStorage.getItem('roomi_ob_' + key) === '1'; }catch(e){ return true; }
+}
+function obMark(key){
+  if(obSeen(key)) return false;
+  try{ localStorage.setItem('roomi_ob_' + key, '1'); }catch(e){}
+  return true;
+}
+// 1막 — «색칠 완료» 순간에만. ob_step===0(아직 등불 없음) 이고 이 브라우저에서 처음일 때만.
+function maybeAct1(){
+  if(obSeen('act1')) return;
+  const step = Number(state.obStep) || 0;
+  obMark('act1');   // 한 번만 띄운다 — ob_step 판정과 무관하게 이 브라우저에서는 재사하지 않는다
+  if(step !== 0) return;
+  showAct(1, ['이제 루미에게 오늘 배운 걸 가르쳐 줘!', '가르치면 루미의 방에 «기억 등불» 이 켜져.'],
+    { label:'루미와 대화하기', go: async ()=>{
+        try{ await chatOpen(); }catch(e){ return; }
+        chatModeSet('learn');
+        const i = $('#chat-text');
+        if(i){ i.value = '오늘 배운 거 하나 가르쳐 줄게'; i.focus(); }
+      } });
+}
+// 액트 바 — 바닥에 붙는 «비차단» 인도 바. 화면을 가리지 않고, 닫거나 목표를 눌러야 진행된다.
+let _actEl = null;
+function showAct(n, lines, action){
+  try{ if(_actEl) _actEl.remove(); }catch(e){}
+  hideAct();
+  const el = document.createElement('div');
+  el.className = 'act-guide act-' + n;
+  el.setAttribute('role', 'status');
+  const ava = document.createElement('span');
+  ava.className = 'act-ava';
+  ava.innerHTML = rumiPose(n === 2 ? 'sad' : 'wave', 38);
+  const txt = document.createElement('span');
+  txt.className = 'act-text';
+  txt.textContent = Array.isArray(lines) ? lines.join(' ') : String(lines || '');
+  el.appendChild(ava); el.appendChild(txt);
+  if(action && typeof action.go === 'function'){
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'btn primary small';
+    go.textContent = String(action.label || '가기');
+    go.onclick = ()=>{ hideAct(); action.go(); };
+    el.appendChild(go);
+  }
+  const arrow = document.createElement('span');
+  arrow.className = 'act-arrow';
+  arrow.setAttribute('aria-hidden', 'true');
+  arrow.textContent = '⬇';
+  el.appendChild(arrow);
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'act-x';
+  x.title = '닫기';
+  x.textContent = '✕';
+  x.onclick = hideAct;
+  el.appendChild(x);
+  _actEl = el;
+  document.body.appendChild(el);
+}
+function hideAct(){
+  if(_actEl){ try{ _actEl.remove(); }catch(e){} _actEl = null; }
+}
+
+// ---------- B 축하 카드 ----------
+// 전체 화면 «가벼운» 축하 — 배경은 pointer-events:none 이라 아래 조작을 막지 않고,
+// 카드 자체는 (버튼이 있을 때) 누를 수 있다. 4.2초 뒤 스스로 사라진다.
+function showCelebrate(title, sub, action){
+  try{ document.querySelectorAll('.lamp-celebrate').forEach(b=>b.remove()); }catch(e){}
+  const ov = document.createElement('div');
+  ov.className = 'lamp-celebrate';
+  const card = document.createElement('div');
+  card.className = 'celebrate-card';
+  const art = document.createElement('div');
+  art.className = 'empty-art';
+  art.style.cssText = 'width:84px;height:84px;margin:0 auto';
+  art.innerHTML = rumiPose('happy', 84);
+  const t = document.createElement('p');
+  t.className = 'celebrate-title';
+  t.textContent = title;
+  card.appendChild(art); card.appendChild(t);
+  if(sub){
+    const s = document.createElement('p');
+    s.className = 'celebrate-sub';
+    s.textContent = sub;
+    card.appendChild(s);
+  }
+  if(action && typeof action.go === 'function'){
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn primary small';
+    b.style.marginTop = '10px';
+    b.textContent = String(action.label || '가기');
+    b.onclick = ()=>{ ov.remove(); action.go(); };
+    card.appendChild(b);
+  }
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+  setTimeout(()=>{ try{ ov.remove(); }catch(e){} }, 4200);
+}
+// B1 삼막 1막 완료 — firstLamp:true 가 도착한 «그 순간».
+async function celebrateFirstLamp(){
+  obMark('act1');        // 1막 인도는 여기서 끝난 것으로 본다
+  if(!obMark('lamp1')) return;   // 이 브라우저에서 축하를 «두 번» 하지 않는다
+  try{ SFX.levelup(); }catch(e){}
+  state._lampBorn = true;        // renderLamps 가 첫 행 불꽃에 is-born 를 붙이게 한다
+  try{
+    goNav('myroom');
+    setRoomTab('growth');        // 등불 판넬이 사는 «성장» 탭으로 자동 전환
+    await loadLamps(true);
+    const panel = $('#lamp-panel');
+    if(panel && !panel.classList.contains('hidden')) panel.scrollIntoView({ behavior:'smooth', block:'center' });
+  }catch(e){}
+  showCelebrate('첫 기억 등불이 켜졌어!', '루미가 네 말을 정말 소중히 기억하고 있어. 방이 하나 더 밝아졌어 ✨');
+}
+
+// ---------- C1 하단 탭 바 바인딩 ----------
+// 홈/게임/성장은 goNav 로 화면을, 대화는 chatOpen, 마을은 기존 «AI 마을» 진입 버튼을 눌러 준다.
+(function bindTabbar(){
+  const bar = document.getElementById('tabbar'); if(!bar) return;
+  const setActive = (name)=>{
+    bar.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('on', b.dataset.tab === name));
+  };
+  bar.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.tab-btn'); if(!btn) return;
+    const tab = btn.dataset.tab;
+    if(tab === 'home'){ goNav('myroom'); setActive('home'); }
+    else if(tab === 'games'){ goNav('games'); setActive('games'); }
+    else if(tab === 'growth'){ goNav('board'); setActive('growth'); }
+    else if(tab === 'chat'){
+      chatOpen();
+      // 대화·마을은 «화면 전환» 이 아닌 위에 뜨는 흐름 — 탭 활성 표시는 홈에 둔다
+      setActive('home');
+    }
+    else if(tab === 'world'){
+      const b = $('#btn-world');
+      if(b){ b.click(); setActive('world'); }
+    }
+    try{ SFX.click(); }catch(e2){}
+  });
+})();
+
+// ---------- C3 보관함 보기/정렬 칩 + 행 클릭(goTeach) 위임 ----------
+(function bindLampVault(){
+  // 저장된 보기/정렬 복구(세션을 넘어가도 아이가 고른 보기가 유지된다)
+  try{ state.lampView = localStorage.getItem('roomi_lamp_view') === 'list' ? 'list' : 'grid'; }catch(e){}
+  const savedSort = (function(){ try{ return localStorage.getItem('roomi_lamp_sort'); }catch(e){ return null; } })();
+  if(savedSort === 'risk' || savedSort === 'crystal' || savedSort === 'recent') state.lampSort = savedSort;
+  // 칩의 .on 상태를 저장값에 맞춘다
+  $$('#lamp-views .lamp-viewchip').forEach(b=>b.classList.toggle('on', (b.dataset.lampView || '') === state.lampView));
+  $$('#lamp-sorts .lamp-sortchip').forEach(b=>b.classList.toggle('on', (b.dataset.lampSort || '') === state.lampSort));
+  $('#lamp-views')?.addEventListener('click', (e)=>{
+    const b = e.target.closest('[data-lamp-view]'); if(!b) return;
+    state.lampView = b.dataset.lampView === 'list' ? 'list' : 'grid';
+    $$('#lamp-views .lamp-viewchip').forEach(x=>x.classList.toggle('on', x === b));
+    try{ localStorage.setItem('roomi_lamp_view', state.lampView); }catch(e2){}
+    if(state.lamps) renderLamps(state.lamps);
+  });
+  $('#lamp-sorts')?.addEventListener('click', (e)=>{
+    const b = e.target.closest('[data-lamp-sort]'); if(!b) return;
+    const s = b.dataset.lampSort;
+    if(s === 'recent' || s === 'risk' || s === 'crystal') state.lampSort = s;
+    $$('#lamp-sorts .lamp-sortchip').forEach(x=>x.classList.toggle('on', x === b));
+    try{ localStorage.setItem('roomi_lamp_sort', state.lampSort); }catch(e2){}
+    if(state.lamps) renderLamps(state.lamps);
+  });
+  // 격자/목록 공통: data-topic 이 붙은 행(=막히지 않은 행)은 통째로 «다시 가르쳐 주기» 버튼
+  ['lamp-list', 'lamp-listview'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('click', (e)=>{
+      const row = e.target.closest('[data-topic]');
+      if(row) goTeach(row.dataset.topic);
+    });
+  });
+})();
+
+// ---------- C6 설정: PIN 만들기/변경 + 기기 이전 코드 ----------
+(function bindSettingsScreen(){
+  const msg = (el, text, good)=>{
+    if(!el) return;
+    el.textContent = text;
+    el.classList.toggle('good', !!good);
+    el.classList.toggle('bad', !good);
+    el.classList.remove('hidden');
+  };
+  const pinMsg = $('#set-pin-msg');
+  $('#set-pin-save')?.addEventListener('click', async ()=>{
+    const pin = (($('#set-pin') && $('#set-pin').value) || '').trim();
+    if(!/^\d{4}$/.test(pin)) return msg(pinMsg, 'PIN 은 숫자 4자리예요!', false);
+    const btn = $('#set-pin-save');
+    if(btn) btn.disabled = true;
+    try{
+      await api('/api/account/pin', { pin });
+      if($('#set-pin')) $('#set-pin').value = '';
+      msg(pinMsg, 'PIN 을 만들었어요! 다른 기기 로그인 화면에서 닉네임 + PIN 으로 들어올 수 있어요.', true);
+    }catch(e){ msg(pinMsg, e.message || 'PIN 을 저장하지 못했어요.', false); }
+    finally{ if(btn) btn.disabled = false; }
+  });
+  $('#set-pin')?.addEventListener('keydown', (e)=>{ if(e.key === 'Enter'){ e.preventDefault(); const b = $('#set-pin-save'); if(b) b.click(); } });
+
+  const out = $('#set-transfer-out');
+  $('#set-transfer-btn')?.addEventListener('click', async ()=>{
+    const btn = $('#set-transfer-btn');
+    if(btn) btn.disabled = true;
+    try{
+      const r = await api('/api/account/transfer/code', {});
+      if(out){
+        out.innerHTML = `새 이전 코드 <span class="transfer-code">${esc(String(r.code || ''))}</span><br>10 분 동안만 쓸 수 있어요. 새 기기의 «이어서 하기» 에 넣어 주세요!`;
+        out.classList.remove('hidden');
+      }
+    }catch(e){ msg(out, e.message || '코드를 만들지 못했어요.', false); }
+    finally{ if(btn) btn.disabled = false; }
+  });
+})();
+
+// ---------- C6 로그인 화면 «이어서 하기» (PIN 검증 + 기기 이전 코드 수령) ----------
+// 성공하면 기존 «토큰 저장 → /api/user → startPlayTimer → enter()» 흐름을 그대로 탄다.
+async function continueWithSession(nickname, token){
+  const nick = String(nickname || '').trim();
+  if(!nick || !token) throw new Error('로그인 정보가 부족해요');
+  localStorage.setItem(SK.token, token);
+  localStorage.setItem(SK.nick, nick);
+  const u2 = await api('/api/user', { nickname: nick });
+  state.user = u2.user; state.quests = u2.quests || { list:[], done:[] };
+  absorbUserMeta(u2);   // ★ v1.74: ob_step · play_limit_delta 스냅샷
+  localStorage.setItem(SK.uid, u2.user.id);
+  if(u2.user.token) localStorage.setItem(SK.token, u2.user.token);
+  if(u2.streakBonus) setTimeout(()=>bubble(` ${u2.streakBonus}일 연속 방문 보상 +${u2.streakBonus}셀!`), 800);
+  // ★ 자동 로그인 경로와 같은 «한도 초과» 차단 — 새로고침·재로그인으로 우회할 수 없게
+  if(u2.play && u2.play.overLimit && !state.overplayDismissed){
+    show('start');
+    showOverplay({ minutes: u2.play.minutes });
+    return;
+  }
+  startPlayTimer();
+  await enter();
+}
+(function bindContinue(){
+  const row = $('#continue-row'), msg = $('#cont-msg');
+  const say = (text, good)=>{
+    if(!msg) return;
+    msg.textContent = text;
+    msg.classList.toggle('bad', !good);
+    msg.classList.toggle('good', !!good);
+  };
+  $('#btn-continue')?.addEventListener('click', ()=>{
+    if(row) row.classList.toggle('hidden');
+  });
+  // PIN 검증 로그인 (계약: POST /api/account/pin/verify {nickname,pin} → {ok,token,nickname})
+  $('#cont-pin-go')?.addEventListener('click', async ()=>{
+    const nick = (($('#cont-nick') && $('#cont-nick').value) || '').trim();
+    const pin = (($('#cont-pin') && $('#cont-pin').value) || '').trim();
+    if(!nick || !/^\d{4}$/.test(pin)) return say('닉네임과 PIN 숫자 4자리를 넣어 줘.', false);
+    const btn = $('#cont-pin-go');
+    if(btn) btn.disabled = true;
+    try{
+      const r = await api('/api/account/pin/verify', { nickname: nick, pin });
+      say('다시 만나서 반가워! 들어갈게…', true);
+      await continueWithSession(r.nickname || nick, r.token);
+    }catch(e){ say(e.message || '들어가지 못했어요. 다시 확인해 줘.', false); }
+    finally{ if(btn) btn.disabled = false; }
+  });
+  // 기기 이전 코드 수령 (계약: POST /api/account/transfer/claim {code} → {ok,token,nickname})
+  $('#cont-code-go')?.addEventListener('click', async ()=>{
+    const code = (($('#cont-code') && $('#cont-code').value) || '').trim();
+    if(!/^\d{6}$/.test(code)) return say('이전 코드는 숫자 6자리예요.', false);
+    const btn = $('#cont-code-go');
+    if(btn) btn.disabled = true;
+    try{
+      const r = await api('/api/account/transfer/claim', { code });
+      say('기억을 옮겨 왔어! 들어갈게…', true);
+      await continueWithSession(r.nickname || '', r.token);
+    }catch(e){ say(e.message || '코드를 받지 못했어요. 유효 시간(10분)을 확인해 줘.', false); }
+    finally{ if(btn) btn.disabled = false; }
+  });
 })();
