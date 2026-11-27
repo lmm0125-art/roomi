@@ -4504,52 +4504,8 @@ function weekStartKST(){
 // ---- AI 학습 계획 (2026-10-28) ----
 // ★ v1.51 지식 카드 검색 — «글자 그대로» 가 아니라 «개념» 으로 찾는다.
 //   예전엔 msg.includes(topic) 만 봐서 «분모가 왜 달라» 가 «분수» 카드를 못 찾았다.
-const CARD_ALIASES = {
-  '변수': ['변수','미지수','값','저장','상자','x'],
-  '함수': ['함수','펑션','function','매개변수','인자','리턴','반환','입력값'],
-  '반복문': ['반복','루프','for','while','돌리'],   // ★ 2026-11-27 (v1.83): «계속»·«몇 번» 은 일반 단어라 제외
-  'while 반복': ['while','동안','계속 반복','조건이 맞는'],
-  '조건문': ['조건','if','만약','그러면','분기','경우'],
-  '리스트': ['리스트','배열','목록','index','인덱스','원소','순서','몇 번째'],
-  '문자열': ['문자열','글자','string','텍스트','따옴표','붙이'],
-  '산술 연산': ['더하','빼','곱하','나누','계산','연산','사칙'],
-  '비교 연산': ['크다','작다','같다','비교','이상','이하'],
-  '입력': ['입력','input','물어보','받기','적어'],
-  '출력': ['출력','print','보여주','화면에','찍'],
-  '이벤트': ['이벤트','클릭','버튼','누르면','event','터치'],
-  '오류 메시지': ['오류','에러','error','빨간 글씨','고장','안 돼'],
-  '디버깅': ['디버깅','버그','고치','찾기','확인','하나씩'],
-  'AI 추천': ['추천','AI가 골라','비슷한','다음에 뭐'],
-  'AI 윤리': ['윤리','개인정보','편향','책임','AI가 나쁜']
-};
-// ★ 2026-11-21 (v1.74) D1: 새 지식 카드 24장의 별칭 — 채팅 카드 매칭(matchCards) 이
-//   컴퓨터개론·수학·과학 주제도 «개념» 으로 찾게 한다(v1.51 원칙과 동일).
-Object.assign(CARD_ALIASES, {
-  '입출력': ['입출력','마우스','키보드','모니터','스피커','프린터'],
-  '바이너리': ['바이너리','이진법','binary','0과 1','비트'],
-  '메모리': ['메모리','작업 공간','임시 저장','열어 둔'],
-  'RAM·ROM': ['램','롬','ram','rom','기억 장치'],
-  '캐시': ['캐시','cache','보관함','임시 보관','서랍'],
-  'CPU 클록': ['클록','clock','ghz','메트로놈','cpu 속도','똑딱'],
-  '운영체제 프로세스': ['프로세스','운영체제','os','작업 관리자','동시에'],
-  '파일·디렉터리': ['폴더','디렉터리','디렉토리','파일','서랍'],
-  '데이터베이스 테이블': ['데이터베이스','테이블','db','출석부','행과 열'],
-  '네트워크 패킷': ['패킷','packet','소포','조각으로','나눠 보내'],
-  '프로토콜': ['프로토콜','protocol','여보세요','약속','통신 규칙'],
-  '압축': ['압축','zip','용량','말아 담','줄여 담'],
-  '곱셈 순서': ['곱셈','연산 순서','먼저 계산','사칙연산','계산 순서'],
-  '분수의 덧셈': ['분수','분모','분자','피자 조각','더하기'],
-  '약분·통분': ['약분','통분','간단한 분수','기약분수'],
-  '소수': ['소수','0.','눈금','십분의'],
-  '도형 넓이': ['넓이','면적','직사각형','타일','가로 세로'],
-  '각도': ['각도','직각','각도기','시계 바늘','벌어진'],
-  '물의 상태': ['얼음','수증기','상태','녹','끓'],
-  '온도와 열': ['온도','열','온기','이동'],
-  '빛의 반사': ['반사','거울','튕겨','손전등'],
-  '자석': ['자석','magnet','n극','s극','끌어당'],
-  '식물 광합성': ['광합성','양분','잎','식물의 부엌'],
-  '지층': ['지층','겹','화석','쌓'],
-});
+// ★ 2026-11-27 (v1.83): 별칭 표는 lib/card-aliases.js 로 옮겼다(테스트가 검사할 수 있게).
+const { CARD_ALIASES } = require('./lib/card-aliases.js');
 // ★ 2026-11-27 (v1.83): 일반 단어 별칭은 카드를 고르는 근거가 아니다(«계속», «몇 번» 등 — 수업 개념을 바꾸는 오탐).
 const GENERIC_ALIAS = new Set(['계속','몇 번','몇 번째','확인','하나씩','찍','돌리','보여주','계산','이상','이하','같다','크다','작다']);
 function matchCards(msg, chapter){
@@ -6087,10 +6043,12 @@ const EXPLAIN_DAILY = 5;
 // ★ 2026-11-27 (v1.83) 설명 판정 예산(ms). 이 안에 LLM 판정이 끝나지 않으면 미검증으로 저장하고 응답을 보낸다.
 const TEACH_VERIFY_TIMEOUT_MS = Number(process.env.TEACH_VERIFY_TIMEOUT_MS || 8000);
 // 판정용 LLM 호출 래퍼 — 계량(llm_logs)을 남긴다. 시간 초과 뒤에 끝난 호출도 기록된다.
+// 테스트 전용: ROOMI_TEST_LLM_STUB 가 있으면 그 모듈의 callLLM 을 쓴다(통합 테스트가 LLM 을 흉내 낸다). 운영에서는 설정하지 않는다.
+const callLLMForTeach = process.env.ROOMI_TEST_LLM_STUB ? require(require('path').resolve(process.env.ROOMI_TEST_LLM_STUB)).callLLM : callLLM;
 function teachLLMFor(uid){
   return async (prompt, opts) => {
     const t0 = Date.now();
-    const er = await callLLM(prompt, opts);
+    const er = await callLLMForTeach(prompt, opts);
     try{ db.prepare(`INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok,prompt_tokens,completion_tokens,total_tokens,prompt_chars)
       VALUES(?,?,?,?,?,?,?,?,?)`).run(uid, 'explain', (er && er.model) || null, Date.now()-t0, er && er.text ? 1 : 0,
       (er && er.usage && er.usage.prompt_tokens) || null, (er && er.usage && er.usage.completion_tokens) || null,
@@ -6098,16 +6056,62 @@ function teachLLMFor(uid){
     return er;
   };
 }
-// ★ 시간 초과로 미검증 저장된 설명의 뒤늦은 업그레이드. 같은 설명이 아직 미검증일 때만, LLM 이 맞다고 할 때만 승격한다.
-//   검증된 기억은 절대 내리지 않는다. 승격 시 마스터리 'lesson' 가점도 이때 준다.
+// ★ 2026-11-27 (v1.83) 뒤늦은 업그레이드 — 시간 초과로 미검증 저장된 설명을 LLM 으로 한 번 더 판정한다.
+//   · 승격 조건: 같은 설명이 아직 explain:unverified 이고, LLM 이 실제로 맞다고 할 때만(source==='llm').
+//   · 검증된 기억은 절대 내리지 않는다. 승격과 마스터리 'lesson' 가점은 한 트랜잭션(BEGIN IMMEDIATE)에서 함께 쓴다.
+//   · 동시성: 같은 (사용자·개념·설명) 업그레이드는 UPGRADE_INFLIGHT 로 한 번에 하나만 돈다(중복 예약 무시).
+//     판정 결과 확인과 쓰기는 한 동기 구간에서 일어나므로 두 작업이 같은 행을 두 번 승격·가점할 수 없다.
+//   · 재시도: 판정이 나지 않은 경우(시간 초과·LLM 실패)만 재시도하고, 최대 UPGRADE_MAX_ATTEMPTS 회에서 멈춘다.
+//     간격은 점점 늘어난다(base, base×4). 무한 재시도 없음. 서버가 재시작되면 대기 중인 재시도는 사라진다(의도된 단순화).
+const UPGRADE_MAX_ATTEMPTS = 3;
+const UPGRADE_BACKOFF_BASE_MS = Number(process.env.TEACH_UPGRADE_BACKOFF_MS || 5000);
+const UPGRADE_TIMEOUT_MS = Number(process.env.TEACH_UPGRADE_TIMEOUT_MS || 30000);
+const UPGRADE_INFLIGHT = new Set();
+function upgradeBackoffMs(attempt){ return UPGRADE_BACKOFF_BASE_MS * (attempt <= 1 ? 1 : 4); }
+
+// 한 번의 업그레이드 시도. 결과: 'verified' | 'rejected' | 'stale' | 'undecided'
+//   stale = 그 사이 다른 판정이 이미 기억을 바꿨다 / undecided = LLM 판정이 나지 않았다(재시도 대상)
 async function upgradeTeachVerdict(uid, concept, text, card){
   const memKey = ('taught:' + concept).replace(/\s+/g, '_').slice(0, 40);
-  const v = await LR.checkTeachBack(text, concept, card, { aliases: CARD_ALIASES, parseChatJSON, timeoutMs: 30000, callLLM: teachLLMFor(uid) });
-  if(v.source !== 'llm' || v.ok !== true) return false;
-  const cur = db.prepare("SELECT value, source FROM user_memories WHERE user_id=? AND kind='taught' AND key=?").get(uid, memKey);
-  if(!cur || cur.source !== 'explain:unverified' || String(cur.value) !== text.slice(0, 160)) return false;   // 그 사이 새 설명이 저장됐으면 건드리지 않는다
-  upsertMemory(uid, { kind:'taught', key:'taught:'+concept, value:text.slice(0,160), confidence:0.95, source:'explain:verified' });
-  bumpMastery(uid, concept, 'lesson');
+  const v = await LR.checkTeachBack(text, concept, card, { aliases: CARD_ALIASES, parseChatJSON, timeoutMs: UPGRADE_TIMEOUT_MS, callLLM: teachLLMFor(uid) });
+  if(v.source !== 'llm') return 'undecided';
+  if(v.ok !== true) return 'rejected';
+  // 판정 확인 + 쓰기는 같은 트랜잭션. 동기 구간이라 다른 업그레이드가 끼어들 수 없다.
+  db.exec('BEGIN IMMEDIATE');
+  try{
+    const cur = db.prepare("SELECT value, source FROM user_memories WHERE user_id=? AND kind='taught' AND key=?").get(uid, memKey);
+    if(!cur || cur.source !== 'explain:unverified' || String(cur.value) !== text.slice(0, 160)){
+      db.exec('ROLLBACK'); return 'stale';
+    }
+    upsertMemory(uid, { kind:'taught', key:'taught:'+concept, value:text.slice(0,160), confidence:0.95, source:'explain:verified' });
+    bumpMastery(uid, concept, 'lesson');
+    db.exec('COMMIT');
+    return 'verified';
+  }catch(e){
+    try{ db.exec('ROLLBACK'); }catch(e2){}
+    throw e;
+  }
+}
+// 예약 + 재시도. 같은 키는 한 번에 하나만 돈다.
+function scheduleUpgrade(uid, concept, text, card){
+  const key = uid + '|' + concept + '|' + text.slice(0, 160);
+  if(UPGRADE_INFLIGHT.has(key)) return false;
+  UPGRADE_INFLIGHT.add(key);
+  const attemptOnce = (attempt) => {
+    upgradeTeachVerdict(uid, concept, text, card).then((r) => {
+      if(r === 'undecided' && attempt < UPGRADE_MAX_ATTEMPTS){
+        setTimeout(() => attemptOnce(attempt + 1), upgradeBackoffMs(attempt));
+        return;
+      }
+      UPGRADE_INFLIGHT.delete(key);
+      if(r === 'undecided') console.log('[teach-upgrade] 재시도 한도 도달 — 미검증으로 둔다', uid);
+    }).catch((e) => {
+      if(attempt < UPGRADE_MAX_ATTEMPTS){ setTimeout(() => attemptOnce(attempt + 1), upgradeBackoffMs(attempt)); return; }
+      UPGRADE_INFLIGHT.delete(key);
+      console.log('[teach-upgrade] 실패(한도 도달):', e && e.message);
+    });
+  };
+  attemptOnce(1);
   return true;
 }
 const EXPLAIN_DEFAULT_CONCEPT = '방금 배운 것';
@@ -6152,7 +6156,7 @@ app.post('/api/chat/explain', async (req,res)=>{
   if(credited && concept !== EXPLAIN_DEFAULT_CONCEPT) bumpMastery(u.id, concept, 'lesson');
   // ★ 시간 초과: 응답은 바로 보내고, 판정은 뒤에서 LLM 으로 한 번 더 시도(성공 시에만 업그레이드).
   if(verdict.source === 'timeout' && card && concept !== EXPLAIN_DEFAULT_CONCEPT){
-    setImmediate(() => { upgradeTeachVerdict(u.id, concept, text, card).catch(() => {}); });
+    setImmediate(() => { scheduleUpgrade(u.id, concept, text, card); });
   }
   const lampRes = lightLamp(u.id, concept);   // ★ v1.71: teach-back 이 끝나면 기억 등불을 밝힌다(lit_day=오늘, 안개 리셋)
   db.prepare('UPDATE users SET understanding = understanding + 1 WHERE id=?').run(u.id);

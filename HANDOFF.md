@@ -350,6 +350,8 @@ Do **not** award cells for lighting lamps (economy ceiling, §8).
   **v1.83 latency budget:** verification waits at most `TEACH_VERIFY_TIMEOUT_MS` (default 8000 ms, DeepSeek first via
   `prefer:'fast'`). On timeout the explanation is stored **unverified** (never credited) and `upgradeTeachVerdict`
   retries the LLM in the background; it upgrades only if the same explanation is still unverified and the LLM says ok.
+  Upgrades: capped retries (3 attempts, backoff base `TEACH_UPGRADE_BACKOFF_MS`), one in-flight job per explanation,
+  state check + write in one `BEGIN IMMEDIATE` transaction. Mastery is credited only on the verified transition.
   Storage policy: `LR.teachStoragePlan` — an `explain:verified` memory is never overwritten by an unverified one.
 - `learning_plans.plan_json` = `{focus, steps:[{id,title,minutes,done}]}` for the day.
   Regeneration is capped at 2/day (`daily_counters kind='plan_refresh'`).
@@ -459,7 +461,9 @@ node /tmp/week59_browser.mjs      # weekly panel (7)
 node /tmp/dorobot-online-verify.mjs     # -> ONLINE 442 PASS / 0 FAIL  (v1.80 run)
 
 # v1.82 — repo-local tests (no API calls; ROOMI_TEST_NO_LLM=1 forces the rule fallback)
-npm test                                # unit (32) + regression (27)
+npm test                                # unit (35) + regression (27) + teach-upgrade (5)
+node --experimental-sqlite tests/teach-upgrade.mjs   # 뒤늦은 업그레이드 통합(테스트 LLM 스텁, 실제 모델 없음)
+npm run bench:verifier                  # 실제 키로 설명 판정 벤치마크(BENCH_SET=hard 는 어려운 오개념 세트)
 npm run test:unit                       # tests/unit.mjs — pure rules, mocked LLM, version consistency
 npm run test:regression                 # tests/regression.mjs — throwaway DB, black-box API
 # Manual browser checklist (PIN gate, dashboard, teach-back screen): tests/SMOKE.md

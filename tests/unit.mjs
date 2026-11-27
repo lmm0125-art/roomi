@@ -184,6 +184,33 @@ await test('저장 정책: 검증 성공 설명은 기존 미검증 기억을 �
   assert.equal(p.write, true); assert.equal(p.source, 'explain:verified'); assert.equal(p.confidence, 0.95);
 });
 
+import { CARD_ALIASES, isGenericAlias } from '../lib/card-aliases.js';
+
+await test('별칭: 표의 모든 별칭은 일반 단어 규칙을 통과한다(계속·좋아·다시 등은 없다)', async () => {
+  const bad = [];
+  for (const [card, list] of Object.entries(CARD_ALIASES)) for (const a of list) if (isGenericAlias(a)) bad.push(`${card}: ${a}`);
+  assert.deepEqual(bad, [], `일반 단어 별칭이 남아 있다: ${bad.join(' | ')}`);
+});
+await test('별칭: 사용자가 든 예(계속, 계속해, 좋아, 다시, 해볼게)는 모두 일반 단어로 거른다', async () => {
+  for (const w of ['계속', '계속해', '좋아', '다시', '해볼게', '해 볼게', '그냥', '몰라', '그러면', '만약']) {
+    assert.equal(isGenericAlias(w), true, `«${w}» 가 일반 단어로 걸러지지 않는다`);
+  }
+  // 정상 별칭은 걸러지면 안 된다
+  for (const w of ['분모', '반복', '램', '롬', '피자 조각', '0.']) assert.equal(isGenericAlias(w), false, `«${w}» 가 잘못 걸러졌다`);
+});
+await test('별칭: 카드마다 별칭이 하나 이상 있고, 같은 별칭이 두 카드에 걸치지 않는다(모호한 매칭 금지)', async () => {
+  const seen = new Map(); const problems = [];
+  for (const [card, list] of Object.entries(CARD_ALIASES)) {
+    if (!list.length) problems.push(`${card}: 별칭 없음`);
+    for (const a of list) {
+      const t = a.trim().toLowerCase();
+      if (seen.has(t) && seen.get(t) !== card) problems.push(`«${t}» 가 ${seen.get(t)} 와 ${card} 둘 다에 있다`);
+      seen.set(t, card);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
 // ---------- 5. 탑 층 설계 — 한 번의 탑(run) 안의 안개 분포 ----------
 // 한 탑 = 한 사용자 · 하루의 덱. 층마다 원래 말/안개 말이 섞여 있어야 하고, 층 번호나 고정 비트로 예측되면 안 된다.
 const ORIG_A = '분모가 같으면 분자끼리 더하면 돼요';
@@ -251,7 +278,9 @@ await test('탑: 같은 입력이면 같은 덱(GET/POST 가 같은 문장을 �
 });
 
 // ---------- 6. 버전 일관성 ----------
-await test('버전: package.json · index.html · HANDOFF.md 가 같은 minor 버전(1.82)을 가리킨다', async () => {
+// 현재 릴리스 minor. 버전을 올릴 때 package.json · index.html · HANDOFF.md 와 함께 이 값도 올린다.
+const CURRENT_MINOR = '1.83';
+await test('버전: package.json · index.html · HANDOFF.md 가 현재 릴리스(1.83)를 가리키고 서로 같다', async () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
   const hand = fs.readFileSync(path.join(ROOT, 'HANDOFF.md'), 'utf8');
@@ -262,6 +291,8 @@ await test('버전: package.json · index.html · HANDOFF.md 가 같은 minor �
   assert.ok(handV, 'HANDOFF.md 버전 표시를 찾지 못함');
   assert.equal(htmlV, handV, `index.html(v${htmlV}) ≠ HANDOFF.md(v${handV})`);
   assert.equal(pkgMinor, htmlV, `package.json(${pkg.version}) ≠ index.html(v${htmlV})`);
+  assert.equal(htmlV, CURRENT_MINOR, `현재 릴리스는 ${CURRENT_MINOR} 인데 index.html 은 v${htmlV}`);
+  assert.equal(pkgMinor, CURRENT_MINOR, `package.json 이 ${CURRENT_MINOR} 이 아니다`);
   // ?v= 캐시 버스터는 세 곳이 같아야 한다(HANDOFF §10)
   const busters = [...html.matchAll(/\?v=([\w]+)/g)].map(m => m[1]);
   assert.ok(busters.length >= 3 && new Set(busters).size === 1, `?v= 불일치: ${busters}`);

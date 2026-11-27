@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "start": "node --experimental-sqlite server.js",
-    "test": "node tests/unit.mjs && node --experimental-sqlite tests/regression.mjs",
+    "test": "node tests/unit.mjs && node --experimental-sqlite tests/regression.mjs && node --experimental-sqlite tests/teach-upgrade.mjs",
     "test:unit": "node tests/unit.mjs",
-    "test:regression": "node --experimental-sqlite tests/regression.mjs"
+    "test:regression": "node --experimental-sqlite tests/regression.mjs",
+    "test:upgrade": "node --experimental-sqlite tests/teach-upgrade.mjs",
+    "bench:verifier": "node scripts/verifier-bench.mjs"
   },
   "engines": {
     "node": ">=22"
