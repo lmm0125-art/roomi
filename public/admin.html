@@ -128,6 +128,61 @@
       <div class="msg" id="quest-msg"></div>
     </div>
 
+    <!-- ★ 2026-11-21 (v1.74) D2: 지식 카드 관리 — 알려진 문제 #3(knowledge_cards 무 UI) 종료 -->
+    <div class="panel">
+      <h2>🧠 지식 카드 관리 (퀴즈 · 힌트 · 선수개념)</h2>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost" id="btn-cards-load">목록 새로고침</button>
+        <span class="note" id="card-count"></span>
+      </div>
+      <div style="overflow:auto;max-height:260px">
+        <table id="card-rows">
+          <thead><tr><th>ID</th><th>주제</th><th>퀴즈 질문</th><th>선수개념</th><th>상태</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <div><label>ID (수정 시)</label><input id="card-id" type="number" min="1" style="width:80px"></div>
+        <div><label>주제 (topic)</label><input id="card-topic" placeholder="예: 메모리" style="width:130px"></div>
+        <div><label>챕터</label><input id="card-ch" type="number" min="1" max="9" value="2" style="width:60px"></div>
+        <div><label>선수개념 (쉼표)</label><input id="card-prereq" placeholder="예: 메모리,RAM·ROM" style="width:180px"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1;min-width:220px"><label>개념 설명 (concept)</label><input id="card-concept" style="width:100%"></div>
+        <div style="flex:1;min-width:180px"><label>태그 (쉼표)</label><input id="card-tags" style="width:100%"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1"><label>비유 (analogy)</label><input id="card-analogy" style="width:100%"></div>
+        <div style="flex:1"><label>예시 (example)</label><input id="card-example" style="width:100%"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1"><label>힌트 L1 (되묻기/둘 중 고르기)</label><input id="card-h1" style="width:100%"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1"><label>힌트 L2 (생활 비유)</label><input id="card-h2" style="width:100%"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1"><label>힌트 L3 (다음 행동 — 정답어 금지)</label><input id="card-h3" style="width:100%"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1;min-width:220px"><label>퀴즈 질문</label><input id="card-q" style="width:100%"></div>
+        <div><label>정답</label><select id="card-ans"><option value="0">1번</option><option value="1">2번</option><option value="2">3번</option><option value="3">4번</option></select></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1"><label>보기 1</label><input id="card-o1" style="width:100%"></div>
+        <div style="flex:1"><label>보기 2</label><input id="card-o2" style="width:100%"></div>
+        <div style="flex:1"><label>보기 3</label><input id="card-o3" style="width:100%"></div>
+        <div style="flex:1"><label>보기 4</label><input id="card-o4" style="width:100%"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-card-save">저장</button>
+        <button class="ghost" id="btn-card-delete">삭제</button>
+        <button class="ghost" id="btn-card-clear">폼 비우기</button>
+        <span class="note">선수개념(prereq) 은 쉼표로 여러 개 — «먼저 «X» 부터» 표시와 학습 순서 정렬에 쓰입니다.</span>
+      </div>
+      <div class="msg" id="card-msg"></div>
+    </div>
+
     <div class="panel">
       <h2>👥 계정별 현황</h2>
       <div style="overflow:auto;max-height:320px">
@@ -196,6 +251,7 @@ async function loadAll(){
     const t = await api('/api/public/stats').catch(()=>null);
     if(t) $('#topic-now').textContent = `현재: 참가자 ${t.participants}명 · 평균 재접속률 ${t.avgReturnRate}%`;
     loadItems();
+    loadCards();   // ★ 2026-11-21 (v1.74) 지식 카드 목록도 함께 준비
   }catch(e){ showMsg('#login-msg', e.message, false); }
 }
 
@@ -224,6 +280,91 @@ $('#btn-quest').addEventListener('click', async ()=>{
     showMsg('#quest-msg', `추가 완료 #${r.id}`, true); $('#quest-title').value='';
   }catch(e){ showMsg('#quest-msg', e.message, false); }
 });
+
+// ★ 2026-11-21 (v1.74) 지식 카드 CRUD — 서버 /api/admin/cards 와 연결(esc · api · showMsg 재사용)
+function cardFormBody(){
+  return {
+    id: Number($('#card-id').value) || 0,
+    topic: $('#card-topic').value.trim(),
+    chapter: Number($('#card-ch').value) || 2,
+    concept: $('#card-concept').value.trim(),
+    analogy: $('#card-analogy').value.trim(),
+    example: $('#card-example').value.trim(),
+    hint_l1: $('#card-h1').value.trim(),
+    hint_l2: $('#card-h2').value.trim(),
+    hint_l3: $('#card-h3').value.trim(),
+    prereq: $('#card-prereq').value.trim(),
+    tags: $('#card-tags').value.trim(),
+    quiz: {
+      q: $('#card-q').value.trim(),
+      options: [$('#card-o1').value.trim(), $('#card-o2').value.trim(), $('#card-o3').value.trim(), $('#card-o4').value.trim()],
+      answer: Number($('#card-ans').value) || 0,
+    },
+  };
+}
+async function loadCards(){
+  try{
+    const r = await api('/api/admin/cards');
+    const okCount = r.cards.filter(c => c.status === 'ok').length;
+    $('#card-count').textContent = `총 ${r.total}장 (완성 ${okCount} · 미완성 ${r.total - okCount})`;
+    $('#card-rows tbody').innerHTML = r.cards.map(c => `<tr>
+      <td>${c.id}</td><td>${esc(c.topic)}</td><td>${esc(c.question || '—')}</td>
+      <td>${esc(c.prereq || '—')}</td><td>${c.status === 'ok' ? '✅' : '미완성'}</td>
+      <td><button class="ghost" data-card="${c.id}">편집</button></td>
+    </tr>`).join('');
+  }catch(e){ showMsg('#card-msg', e.message, false); }
+}
+$('#btn-cards-load').addEventListener('click', loadCards);
+// 행의 «편집» 버튼 → 카드를 폼에 불러온다(이벤트 위임 — 행이 다시 그려져도 유지)
+$('#card-rows').addEventListener('click', async (ev)=>{
+  const b = ev.target.closest('button[data-card]');
+  if(!b) return;
+  try{
+    const r = await api('/api/admin/cards');
+    const c = r.cards.find(x => x.id === Number(b.dataset.card));
+    if(!c) return;
+    $('#card-id').value = c.id; $('#card-topic').value = c.topic || ''; $('#card-ch').value = c.chapter || 2;
+    $('#card-concept').value = c.concept || ''; $('#card-analogy').value = c.analogy || '';
+    $('#card-example').value = c.example || ''; $('#card-tags').value = c.tags || '';
+    $('#card-h1').value = c.hint_l1 || ''; $('#card-h2').value = c.hint_l2 || ''; $('#card-h3').value = c.hint_l3 || '';
+    $('#card-prereq').value = c.prereq || '';
+    $('#card-q').value = (c.quiz && c.quiz.q) || '';
+    const opts = (c.quiz && c.quiz.options) || [];
+    for(let i = 0; i < 4; i++) $('#card-o' + (i + 1)).value = opts[i] || '';
+    $('#card-ans').value = String((c.quiz && c.quiz.answer) || 0);
+    showMsg('#card-msg', '편집 폼에 불러왔어요 (#' + c.id + ')', true);
+  }catch(e){ showMsg('#card-msg', e.message, false); }
+});
+$('#btn-card-save').addEventListener('click', async ()=>{
+  const b = cardFormBody();
+  if(!b.topic) return showMsg('#card-msg', '주제(topic) 를 입력해 주세요', false);
+  try{
+    if(b.id){
+      await api('/api/admin/cards/' + b.id, { method:'PUT', body: JSON.stringify(b) });
+      showMsg('#card-msg', `수정 완료 #${b.id}`, true);
+    }else{
+      const r = await api('/api/admin/cards', { method:'POST', body: JSON.stringify(b) });
+      showMsg('#card-msg', `추가 완료 #${r.id}`, true);
+    }
+    loadCards();
+  }catch(e){ showMsg('#card-msg', e.message, false); }
+});
+$('#btn-card-delete').addEventListener('click', async ()=>{
+  const id = Number($('#card-id').value) || 0;
+  if(!id) return showMsg('#card-msg', '먼저 목록에서 «편집» 으로 카드를 불러와 주세요', false);
+  if(!confirm(`지식 카드 #${id} 을 삭제할까요? 복구할 수 없어요.`)) return;
+  try{
+    await api('/api/admin/cards/' + id, { method:'DELETE', body: '{}' });
+    showMsg('#card-msg', `삭제 완료 #${id}`, true);
+    loadCards();
+  }catch(e){ showMsg('#card-msg', e.message, false); }
+});
+$('#btn-card-clear').addEventListener('click', ()=>{
+  for(const id of ['card-id','card-topic','card-concept','card-analogy','card-example',
+                   'card-h1','card-h2','card-h3','card-prereq','card-tags','card-q',
+                   'card-o1','card-o2','card-o3','card-o4']) $('#'+id).value = '';
+  $('#card-ch').value = 2; $('#card-ans').value = '0';
+});
 function esc(v){ return String(v==null?'':v).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 // 주제 저장
@@ -251,7 +392,26 @@ $('#btn-mail').addEventListener('click', async ()=>{
 });
 
 // CSV / 정리
-$('#btn-csv').addEventListener('click', ()=>{ location.href = '/api/admin/export.csv?key=' + encodeURIComponent(KEY); });
+// ★ 관리 키를 URL 로 보내지 않는다 — location.href 방식은 키가 브라우저 히스토리·서버 로그에 남는다.
+//   서버의 x-admin-key 헤더 지원에 맞춰 fetch + Blob 다운로드로 바꾼다.
+$('#btn-csv').addEventListener('click', async ()=>{
+  try{
+    const res = await fetch('/api/admin/export.csv', { headers: { 'X-Admin-Key': KEY } });
+    if(!res.ok) throw new Error('내보내기 실패 (' + res.status + ')');
+    const blob = await res.blob();
+    // 서버가 내려주는 파일명이 있으면 그대로 쓴다
+    const cd = res.headers.get('content-disposition') || '';
+    const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = m ? decodeURIComponent(m[1]) : 'roomi-accounts.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message || '내보내기에 실패했어요'); }
+});
 $('#btn-cleanup').addEventListener('click', async ()=>{
   if(!confirm('시연용 더미 계정(시연_*)을 삭제할까요?')) return;
   try{
