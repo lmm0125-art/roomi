@@ -1,6 +1,6 @@
 # RooMi — Engineering Handoff (for Claude)
 
-> **Last verified**: 2026-11-27 · app version **v1.81** · local regression `npm test` **21/21 PASS** (online smoke 442/442 was v1.80 — re-run after deploy)
+> **Last verified**: 2026-11-27 · app version **v1.82** · local tests `npm test` (unit + regression) all PASS (online smoke 442/442 was v1.80 — re-run after deploy)
 > **Live demo**: https://my-dorobot.app.workbuddy.host/?sharecode=M3SXYFV64Y
 > **Owner**: 이멍멍 (Hanyang ERICA, AI major) · IC-PBL course project
 > **Read this file fully before touching code.** It supersedes `CODEX_CONTEXT.md` (Oct 2026, obsolete).
@@ -99,7 +99,8 @@ If hashes differ, the deploy did not pick up your files — redeploy, don't gues
 
 ```
 dorobot/
-├── server.js              7,797 lines — Express app, ALL routes, DB schema + migrations, LLM layer
+├── server.js              ~7,950 lines — Express app, ALL routes, DB schema + migrations, LLM layer
+├── lib/learning-rules.js  pure rules (decay, gotIt, particles, L1 rotation, teach-back check, tower floor plan) — v1.82
 ├── public/
 │   ├── index.html         1,475 lines — all screens as <section class="screen">, modals at the bottom
 │   ├── app.js             9,617 lines — screen router, chat UI, 3D room, shop, parent, admin glue
@@ -331,6 +332,8 @@ Do **not** award cells for lighting lamps (economy ceiling, §8).
 - Deck is fixed per day: `daily_counters kind='tower_deck'` stores the floor layout so GET and
   POST agree (same tower all day). 4–6 floors; weekends add a BOSS floor (concept transplant).
 - Each floor: a statement is either **the robot's original words** or **fog-distorted**.
+  **v1.82:** a fog-capable floor is shown unfogged when seed bit 7 is 0 (about half the floors), so a flip-word
+  sentence (같으면, 모두…) is no longer always fogged. BOSS floors always fog; the deck always has ≥1 fogged floor.
   The child picks `original` / `fogged`. Wrong answer ends the day (`tower_ended=1`).
 - Correct floor sets `immune_day = today` on that lamp (the shield icon in the UI).
 - `POST /api/tower/answer` returns `{correct, expected, why, clearedMask, ended}` — `why` explains
@@ -451,8 +454,11 @@ node /tmp/week59_browser.mjs      # weekly panel (7)
 # online full smoke (needs share cookie)
 node /tmp/dorobot-online-verify.mjs     # -> ONLINE 442 PASS / 0 FAIL  (v1.80 run)
 
-# v1.81 — repo-local regression (throwaway DB, ROOMI_TEST_NO_LLM=1 → rule fallback only, no API calls)
-npm test                                # node --experimental-sqlite tests/regression.mjs → 21/21
+# v1.82 — repo-local tests (no API calls; ROOMI_TEST_NO_LLM=1 forces the rule fallback)
+npm test                                # unit (19) + regression (22)
+npm run test:unit                       # tests/unit.mjs — pure rules, mocked LLM, version consistency
+npm run test:regression                 # tests/regression.mjs — throwaway DB, black-box API
+# Manual browser checklist (PIN gate, dashboard, teach-back screen): tests/SMOKE.md
 # NOTE: the test forces the rule fallback, so it still passes when the LLM keys are absent.
 ```
 

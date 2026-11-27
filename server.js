@@ -12,6 +12,10 @@ const crypto = require('crypto');
 const express = require('express');
 
 // DB 경로: 환경변수 DB_PATH 우선(배포 시 데이터 보존용), 기본은 프로젝트 폴더
+// ★ 2026-11-27 (v1.82): 순수 학습 규칙 — lib/learning-rules.js (테스트가 직접 검증한다).
+const LR = require('./lib/learning-rules.js');
+const { daysBetween, fogStability, fogDecay, isGotIt, koIraNeun, koJosaFix, fogEscapeRe, l1LineFor,
+  fogFlipAt, fogDayHash, planFloor, TOWER_FLOOR_MAX } = LR;
 const db = new DatabaseSync(process.env.DB_PATH || path.join(__dirname, 'roomi.db'));
 // ★ v1.53: 배포 재시작 때 이전 프로세스가 잠깐 DB 를 쥐고 있으면 «database is locked» 로 죽는다.
 //   WAL 로 읽기/쓰기 충돌을 줄이고, 잠금은 최대 8초 기다린다(그 사이 이전 프로세스가 종료된다).
@@ -877,12 +881,6 @@ db.exec(`CREATE TABLE IF NOT EXISTS memory_lamps(
 )`);
 
 // 두 KST 날짜(YYYY-MM-DD) 사이의 일수. b 가 a 보다 미래면 양수(0 = 같은 날).
-function daysBetween(a, b){
-  const ta = Date.parse(String(a) + 'T00:00:00Z');
-  const tb = Date.parse(String(b) + 'T00:00:00Z');
-  if(!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
-  return Math.floor((tb - ta) / 86400000);
-}
 
 // user_memories 의 taught 기억을 기억 등불로 «지연 동기화» 한다(없는 등불만 생성 — 멱등).
 //   taught 키 포맷: 'taught:<개념>'(공백은 _ 로 저장 → 읽을 때 복원, robot/recall 과 동일 규칙).
@@ -910,29 +908,6 @@ function lampSyncFromMemories(uid){
 //     stability = 2^(reinforce-1) × (숙련도 ≥0.75 면 1.5), 상한 6.
 //     → 처음 가르친 등불(reinforce 1, 숙련도 낮음)은 예전과 똑같이 잊힌다(stability 1).
 //     → 간격을 두고 한 번 더 가르치면 잊히는 데 걸리는 날이 두 배가 된다(3번이면 4배).
-function fogStability(lamp){
-  const r = Math.max(1, Math.min(3, Number(lamp.reinforce) || 1));
-  const mastery = Number(lamp.mastery) || 0;
-  const s = Math.pow(2, r - 1) * (mastery >= 0.75 ? 1.5 : 1);
-  return Math.max(1, Math.min(6, s));
-}
-function fogDecay(lamp, day){
-  try{
-    if(Number(lamp.crystal) === 1) return 0;
-    if(lamp.immune_day && String(lamp.immune_day) === String(day)) return 0;
-    const lit = String(lamp.lit_day || '');
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(lit)) return 100;   // 날짜가 이상하면 최대 안개(안전 쪽으로)
-    const d = daysBetween(lit, day);
-    // 안정도로 나눈 «유효 경과일» 로 단계표를 적용한다(안정도 1 이면 예전과 동일).
-    const eff = d > 0 ? Math.floor(d / fogStability(lamp)) : 0;
-    let base = 0;
-    if(eff === 1) base = 10;
-    else if(eff === 2) base = 25;
-    else if(eff >= 3) base = 45 + (eff - 3) * 10;
-    const extra = Math.max(0, Math.min(50, Number(lamp.extra_decay) || 0));
-    return Math.min(100, base + extra);
-  }catch(e){ return 0; }
-}
 
 // 등불 주제 → 숙련도(concept_mastery.score) 맵. 없으면 0.
 function masteryMapFor(uid){
@@ -1136,36 +1111,13 @@ function fogPenalize(uid, topicRaw){
 //   «탑에 최소 1층은 왜곡» 보장: 각 층이 3종 전부를 시도하므로, 어느 한 층이라도
 //   왜곡 가능하면 그 층은 반드시 왜곡 문제가 된다(모두 불가능하면 «원래 말» 탑이 된다).
 // ============================================================
-const TOWER_FLOOR_MAX = 6;
 
 // 안개 변형 쌍 — [원래 단어, 바뀔 단어, 조사 결합 허용 여부].
-const FOG_FLIP_PAIRS = [
-  ['모두', '일부', true], ['항상', '가끔'], ['있다', '없다'], ['먼저', '나중에'],
-  ['더하면', '빼면'], ['나누면', '곱하면'], ['같으면', '다르면'], ['크다', '작다'],
-];
 // 단어 경계 문자(공백·문장부호) — 한글엔 \b 가 없어 «긴 단어 한복판» 교체를 막는다.
-const FOG_EDGE_RE = /[\s.,!?…:;'"()«»\-]/;
-const FOG_JOSA = '가을이는의로도만와과에서';
 
 // 문장에서 from 을 «단어 경계에서만» to 로 바꾼다. 불가능하면 null.
-function fogFlipAt(sentence, from, to, josaOk){
-  const s = String(sentence);
-  let idx = s.indexOf(from);
-  while(idx >= 0){
-    const before = idx === 0 ? '' : s[idx - 1];
-    const afterCh = idx + from.length >= s.length ? '' : s[idx + from.length];
-    const okBefore = before === '' || FOG_EDGE_RE.test(before);
-    const okAfter = afterCh === '' || FOG_EDGE_RE.test(afterCh) || (!!josaOk && FOG_JOSA.includes(afterCh));
-    if(okBefore && okAfter) return s.slice(0, idx) + to + s.slice(idx + from.length);
-    idx = s.indexOf(from, idx + 1);
-  }
-  return null;
-}
 
 // 날짜 문자열 → 결정론적 해시(시드 재료)
-function fogDayHash(day){
-  return String(day).split('').reduce((a, ch) => (a * 131 + ch.charCodeAt(0)) >>> 0, 7);
-}
 
 // 왜곡의 «재료»: 다른 등불·다른 카드의 개념(자기 개념은 제외). 순서 고정 → 결정론 보장.
 function fogOtherConceptsFor(uid, topic){
@@ -1220,50 +1172,9 @@ function towerOriginalFor(uid, topic){
 }
 
 // 왜곡 전략 1건 시행 — 불가능하면 null(그 층엔 그 전략을 못 쓴다).
-function fogApplyStrategy(name, topic, original, others, seed){
-  if(name === 'flip'){
-    for(let i = 0; i < FOG_FLIP_PAIRS.length; i++){
-      const p = FOG_FLIP_PAIRS[(i + seed % FOG_FLIP_PAIRS.length) % FOG_FLIP_PAIRS.length];
-      const out = fogFlipAt(original, p[0], p[1], !!p[2]);
-      if(out && out !== original) return { strategy: 'flip', statement: out.slice(0, 80) };
-    }
-    return null;
-  }
-  if(name === 'graft'){
-    const names = fogTopicNamesIn(topic, original);
-    if(!names.length || !others.length) return null;
-    const name = names[seed % names.length];
-    const other = others[seed % others.length];
-    // ★ 2026-11-27 (v1.81): 개념명 뒤 조사를 «새 이름의 받침» 에 맞춰 다시 고른다(이/가·은/는·을/를).
-    const re = new RegExp(fogEscapeRe(name) + '([은는이가을를])?');
-    const out = String(original).replace(re, (m, josa) => other.topic + (josa ? koJosaFix(other.topic, josa) : ''));
-    if(out !== original) return { strategy: 'graft', statement: out.slice(0, 80) };
-    return null;
-  }
-  // swap — v1.70 teachFallbackPair 의 «대상 교체» 템플릿(개념 정의를 다른 카드 것으로 끼워 넣기)
-  const withConcept = others.find(o => o.concept && String(o.concept).trim());
-  if(!withConcept) return null;
-  const c = String(withConcept.concept).trim();
-  return { strategy: 'swap', statement: `${topic}는 ${c}${koIraNeun(c)} 뜻이야.`.slice(0, 80) };
-}
 
 // 한 층의 문장 — 결정론. seed=uid*31+날짜 해시+층. boss 면 «개념 이식» 을 반드시 먼저 시도한다.
 //   반환: { statement(출제 문장), fogged(왜곡 여부 — 응답엔 절대 실지 않는다), canFog, original }
-function fogStatement(uid, topic, floor, day, opts){
-  const o = opts || {};
-  const original = towerOriginalFor(uid, topic);
-  const seed = (((Number(uid) || 0) * 31 + fogDayHash(day) + (Number(floor) || 0)) >>> 0);
-  const others = fogOtherConceptsFor(uid, topic);
-  const all = ['flip', 'graft', 'swap'];
-  const st = seed % 3;
-  // BOSS(주말) 층은 «개념 이식 필수» — graft → swap(교차 개념) → flip 순. 일반 층은 시드 회전 순.
-  const order = o.boss ? ['graft', 'swap', 'flip'] : [all[st], all[(st + 1) % 3], all[(st + 2) % 3]];
-  for(const name of order){
-    const r = fogApplyStrategy(name, topic, original, others, seed);
-    if(r) return { statement: r.statement, fogged: true, canFog: true, original, strategy: r.strategy };
-  }
-  return { statement: original, fogged: false, canFog: false, original, strategy: 'none' };
-}
 
 // ============================================================
 // ★ v1.71 «탑 덱(층 배치)» — 하루 1회 고정. GET 과 POST 가 다른 시점에 불려도 «같은 탑» 이 되게.
@@ -1312,6 +1223,16 @@ function bossConceptFor(deck){
   return (deck && deck[0]) || null;
 }
 
+// ★ 2026-11-27 (v1.82): 층 설계 규칙은 lib/learning-rules.js(순수 함수)에 있다. 서버는 DB 값만 모은다.
+function fogStatement(uid, topic, floor, day, opts){
+  const o = opts || {};
+  const original = towerOriginalFor(uid, topic);
+  const seed = (((Number(uid) || 0) * 31 + fogDayHash(day) + (Number(floor) || 0)) >>> 0);
+  const others = fogOtherConceptsFor(uid, topic);
+  const names = fogTopicNamesIn(topic, original);
+  return planFloor({ topic, original, others, names, seed, boss: !!o.boss, forceFog: !!o.forceFog });
+}
+
 // 탑 전체 상태(층 배열) — GET/POST 가 공유하는 유일한 출제 경로(같은 입력 → 같은 문장).
 //   BOSS: 주말(KST 토·일)이면 7층을 추가한다(개념 이식 필수 층).
 //   ★ 2026-11-21 (v1.74) A3 ③: BOSS 개념은 deck[0] 대신 «prereq 가 붙은 개념» 을 우선 출제한다.
@@ -1319,6 +1240,11 @@ function towerStateFor(uid, day, deck, boss){
   const floors = [];
   for(let i = 0; i < deck.length; i++){
     floors.push({ floor: i, concept: deck[i], ...fogStatement(uid, deck[i], i, day, { boss: false }) });
+  }
+  // ★ 2026-11-27 (v1.82): 덱에 안개 층이 하나도 없으면 안개가 가능한 첫 층을 안개로 바꾼다(전부 원래 말인 탑 방지).
+  if(!floors.some(f => f.fogged)){
+    const idx = floors.findIndex(f => f.canFog);
+    if(idx >= 0) floors[idx] = { floor: idx, concept: deck[idx], ...fogStatement(uid, deck[idx], idx, day, { boss: false, forceFog: true }) };
   }
   if(boss && deck.length){
     const bossTopic = bossConceptFor(deck) || deck[0];
@@ -4706,13 +4632,6 @@ const L1_FALLBACK_LINE = '같이 한 단계씩 해 보자. «예시를 먼저 �
 // ★ 2026-11-27 (v1.81): L1 되묻기 회전 — 같은 문장이 연달아 나오면 «고장난 로봇» 처럼 보인다.
 //   카드의 hint_l1 + 미리 쓴 2문장을 세션 턴 수로 돌려 쓴다. 모델 호출은 0회(규칙 문장).
 //   반환: «같이 생각해 보자.» 뒤에 붙을 문장(접두사는 호출부가 붙인다).
-function l1LineFor(card, concept, turns){
-  const c = String(concept || '').trim() || '이것';
-  const base = card && String(card.hint_l1 || '').trim();
-  const pool = [base, `${c}${koJosaFix(c, '을')} 한 단계씩 같이 볼까, 아니면 예시부터 볼까?`,
-    `${c}에서 어느 부분이 제일 헷갈려? 숫자야, 말이야?`].filter(Boolean);
-  return pool[Math.abs(Number(turns) || 0) % pool.length];
-}
 // ★ v1.70 ⑥: learn 모드 시스템 프롬프트 말미에 붙는 태그 프로토콜(화면에는 태그가 보이지 않는다).
 // ★ v1.80 «전부 유도 / 전부 답변» 금지 — 턴마다 의도를 나눈다.
 //   ① 답을 명시적으로 요구 ② 지금 배우는 개념 ③ 그 외 지식 질문.
@@ -4801,14 +4720,6 @@ function frustrationOf(uid, msg, sess, day){
 // ★ 2026-11-27 (v1.81) 버그 2 수정: «이해했다» 는 말인지 판정한다.
 //   · 질문형(«?» 가 있거나 «맞아» 로 끝남)은 확인이 아니다. «1/2+1/3=2/5 이거 맞아?» 가 confirm 으로 넘어가던 문제.
 //   · 부정형(못·안·않 + 풀/알/이해, 모르겠)은 확인이 아니다. «못 풀었어» 가 «다 했다» 로 세어지던 문제.
-function isGotIt(msg){
-  const m = String(msg || '').trim();
-  if(!/(알겠|이해했|맞았|맞아|다 했|풀었)/.test(m)) return false;
-  if(/[?？]/.test(m)) return false;                                  // 질문형 — «맞아?» 는 확인이 아님
-  if(/(맞아|맞니|맞나|맞지|맞을까)\s*$/.test(m)) return false;      // 물음 어미 없이 끝나는 질문
-  if(/(못|안|않|전혀)\s*(풀|알|이해|맞|했|해)|모르|몰라/.test(m)) return false;  // 부정형
-  return true;
-}
 
 // ★ v1.54 스트리밍 경로가 /api/chat 과 «같은 판단» 을 쓰도록 문맥만 따로 모은다.
 // ★ v1.70 ③④: 관심사 비유 도메인(interest)·숙련도 힌트 축소(fade)·좌절 신호(frustrated) 를
@@ -6188,7 +6099,7 @@ app.post('/api/chat/explain', async (req,res)=>{
     .get(u.id, day).c;
   if(used >= EXPLAIN_DAILY) return res.status(429).json({error:'오늘은 설명을 충분히 했어! 내일 또 들려줘.'});
   const card = concept === EXPLAIN_DEFAULT_CONCEPT ? null : teachCardFor(concept);
-  const verdict = await checkTeachBack(text, concept, card);
+  const verdict = await LR.checkTeachBack(text, concept, card, { callLLM, parseChatJSON, aliases: CARD_ALIASES });
   const reply = sanitizeLine(verdict.reply, 180);
   saveChatTurn(u.id, text, reply, 'explain', { topic: concept, hintLevel: 3, solved: false });
   // 설명까지 왔으면 이번 대화의 목표는 «달성» 단계로 본다.
@@ -6224,47 +6135,6 @@ app.post('/api/chat/explain', async (req,res)=>{
 //   반환: { ok:boolean, reply:string, source:'llm'|'rule'|'nocard' }
 //   · 카드의 정답 토큰(hint_l3·퀴즈 정답)은 프롬프트·규칙 어디에도 쓰지 않는다(hint_l2·analogy 까지만).
 //   · 규칙 판정: 카드의 핵심어(개념명·별칭·태그) 중 설명에 2개 이상 들어 있으면 맞는 설명으로 본다.
-function teachKeywordsFor(card, concept){
-  const words = new Set();
-  const add = (s) => String(s || '').split(/[\s,·/]+/).map(x => x.trim()).filter(x => x.length >= 2).forEach(x => words.add(x));
-  if(card){
-    add(card.concept); add(card.topic);
-    add(String(card.tags || '').replace(/,/g, ' '));
-    for(const a of (CARD_ALIASES[card.topic] || [])) if(a) add(a);
-  }
-  add(concept);
-  return [...words];
-}
-async function checkTeachBack(text, concept, card){
-  const reply0 = (ok) => ok
-    ? `«${String(text).slice(0,38)}${String(text).length > 38 ? '…' : ''}» 라고 설명했구나. 그럼 만약 ${concept}에서 숫자가 하나 바뀌면 어떻게 될까?`
-    : (() => {
-        const ana = card && card.analogy ? String(card.analogy).split(/[,.]/)[0].trim().slice(0, 30) : '';
-        return ana
-          ? `«${String(text).slice(0,38)}${String(text).length > 38 ? '…' : ''}» 라고 생각했구나. 만약 ${concept}를 ${ana}처럼 생각하면 어떻게 될까?`
-          : `«${String(text).slice(0,38)}${String(text).length > 38 ? '…' : ''}» 라고 했구나. 만약 ${concept}가 다르게 움직이면 어떻게 될까?`;
-      })();
-  if(!card) return { ok:false, reply: reply0(false), source:'nocard' };
-  // 1) LLM 판정(있으면) — 출력 JSON {"ok":true|false,"reply":"..."}
-  try{
-    const ref = [card.analogy, card.hint_l2].map(s => String(s || '').trim()).filter(Boolean).join(' ');
-    const prompt = `너는 7-11세 아이의 학습 친구 '루미'다. 개념 «${concept}»의 핵심 정의(참고): ${ref}
-[아이의 설명] ${text}
-판정: 아이 설명의 핵심이 위 정의와 어긋나는 말이 없으면 ok=true, 어긋나는 말이 있으면 ok=false.
-규칙: 1) 아이 표현을 «그대로» 한 번 되받아라. 칭찬·평가·점수는 금지. 2) 설명에서 한 군데만 골라 «만약 ~라면?» 질문 1개(어긋난 부분이 있으면 그곳을 겨냥). 3) 2문장, 80자 이내, 존댓말. 정답을 말하지 마라.
-JSON만: {"ok":true 또는 false,"reply":"..."}`;
-    const er = await callLLM(prompt, { temperature:0.2, maxTokens:220, json:true });
-    const j = parseChatJSON(er ? er.text : null);
-    if(j && typeof j.ok === 'boolean'){
-      return { ok: j.ok, reply: String(j.reply || '').trim() || reply0(j.ok), source:'llm' };
-    }
-  }catch(e){}
-  // 2) 규칙 판정(결정론) — 카드 핵심어 2개 이상
-  const low = String(text);
-  const hits = teachKeywordsFor(card, concept).filter(k => low.includes(k)).length;
-  const ok = hits >= 2;
-  return { ok, reply: reply0(ok), source:'rule' };
-}
 
 // ============================================================
 // ★ 2026-11-20 / v1.70 ② «루미가 틀려볼게» — 루미가 두 문장을 말하고 아이가 틀린 문장을 찾는다.
@@ -6278,24 +6148,9 @@ const TEACH_DAILY_LIMIT = 3;
 const pendingTeach = new Map();   // user_id → { day, a, b, correctChoice, concept }
 
 // 한글 받침 판정 — «(이)라는» 조사 붙이기용
-function koIraNeun(word){
-  const last = String(word || '').slice(-1);
-  if(!/[가-힣]/.test(last)) return '이라는';
-  return ((last.charCodeAt(0) - 0xAC00) % 28 === 0) ? '라는' : '이라는';
-}
 // ★ 2026-11-27 (v1.81) 조사 맞춤 — 단어의 받침 유무로 짝 조사를 고른다.
 //   josa 가 짝 조사(은/는·이/가·을/를)면 받침 있는 단어엔 앞쪽, 없는 단어엔 뒤쪽을 돌려준다.
 //   짝이 아니거나 한글이 아니면 입력을 그대로 돌려준다(안전한 기본값).
-const KO_JOSA_PAIRS = { '은':['은','는'], '는':['은','는'], '이':['이','가'], '가':['이','가'], '을':['을','를'], '를':['을','를'] };
-function koJosaFix(word, josa){
-  const pair = KO_JOSA_PAIRS[String(josa || '')];
-  if(!pair) return String(josa || '');
-  const last = String(word || '').slice(-1);
-  if(!/[가-힣]/.test(last)) return pair[1];        // 한글이 아니면 받침 없음 취급
-  const hasBatchim = ((last.charCodeAt(0) - 0xAC00) % 28) !== 0;
-  return hasBatchim ? pair[0] : pair[1];
-}
-function fogEscapeRe(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 // 개념에 맞는 지식 카드 찾기 — topic 정확 → 별칭/태그 매칭 순
 function teachCardFor(concept){

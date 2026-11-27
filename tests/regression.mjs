@@ -291,6 +291,32 @@ async function extras() {
     d.close();
     assert(f && f.follow_up && f.follow_up.includes('이어서'), `follow_up 이 저장되지 않음: ${JSON.stringify(f)}`);
   });
+  await test('막힘 인사: 어제 막힌 개념은 하루 1번만 말하고, 그 개념을 해결하면 더 말하지 않는다', async () => {
+    // 어제 막힌 기록(chat_analyses.stuck=1)을 직접 심는다
+    const seedStuck = (uid) => {
+      const d = db();
+      const m = d.prepare("INSERT INTO chat_messages(user_id,role,content,mode,ts) VALUES(?,'user','어려워','learn',?)")
+        .run(uid, `${kstDay(-1)} 12:00:00`);
+      d.prepare(`INSERT INTO chat_analyses(user_id,user_msg_id,ai_msg_id,day,mode,topic,subject,stuck)
+        VALUES(?,?,NULL,?,'learn',?,?,1)`).run(uid, Number(m.lastInsertRowid), kstDay(-1), CONCEPT, CONCEPT);
+      d.close();
+    };
+    const u = await newUser('stuck');
+    seedStuck(u.id);
+    const first = await api('/api/robot/hello', { token: u.token });
+    assert(first.data.kind === 'stuck', `첫 인사 기대 stuck, 실제 ${first.data.kind} (${first.data.line})`);
+    const second = await api('/api/robot/hello', { token: u.token });
+    assert(second.data.kind !== 'stuck', `같은 날 두 번째도 막힘 인사가 나왔다: ${second.data.line}`);
+
+    // 해결한 개념은 더 이상 막힘 인사를 하지 않는다
+    const v = await newUser('stuck2');
+    seedStuck(v.id);
+    const d = db();
+    d.prepare("INSERT INTO learning_help_logs(user_id,day,subject,level,solved) VALUES(?,?,?,3,1)").run(v.id, kstDay(), CONCEPT);
+    d.close();
+    const solvedHello = await api('/api/robot/hello', { token: v.token });
+    assert(solvedHello.data.kind !== 'stuck', `해결한 개념을 여전히 막혔다고 말함: ${solvedHello.data.line}`);
+  });
   await test('PIN 로그인: 만든 PIN 으로 로그인할 수 있다(해시 비교 수정)', async () => {
     const u = await newUser('pin');
     const made = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '4321' } });
