@@ -1176,10 +1176,22 @@ async function openParentGate(){
   const ov = $('#overplay');
   if(ov && !ov.classList.contains('hidden')) ov.classList.add('hidden');
   modal.classList.remove('hidden');
+  // ★ 2026-11-27 (v1.81): PIN 을 만든 보호자 계정은 PIN 으로 푼다(곱셈 문제 대신). PIN 이 없으면 예전 문제 그대로.
+  try{
+    const st = await api('/api/parent/status', null, 8000);
+    if(st && st.pinSet){
+      _gate = { mode:'pin' };
+      $('#gate-q').textContent = '보호자 PIN 4자리를 입력해 주세요';
+      $('#gate-a').type = 'password';
+      $('#gate-a').removeAttribute('max');
+      return;
+    }
+  }catch(e){ /* 상태를 못 읽으면 곱셈 문제로 대신한다 */ }
+  $('#gate-a').type = 'number';
   // 문제 요청(실패하면 살리�� 않고 모달만 닫는다 — 게임을 못 하게 만들지 않는다)
   try{
     const q = await api('/api/parent/quiz', null, 8000);
-    _gate = { a:q.a, b:q.b, token:q.token };
+    _gate = { mode:'quiz', a:q.a, b:q.b, token:q.token };
     $('#gate-q').textContent = `${q.a} × ${q.b} = ?`;
   }catch(e){
     // 서버가 잠깐 응답하지 않아도 아이를 막지 않는다(신중한 실패 처리)
@@ -1193,10 +1205,15 @@ function closeParentGate(){
 }
 async function verifyParent(){
   const msg = $('#gate-msg');
-  const ans = Number($('#gate-a').value);
-  if(!ans){ msg.textContent = '정답을 입력해 주세요.'; return; }
+  const isPin = _gate && _gate.mode === 'pin';
+  const raw = String($('#gate-a').value || '').trim();
+  if(isPin ? !/^\d{4}$/.test(raw) : !Number(raw)){
+    msg.textContent = isPin ? 'PIN 숫자 4자리를 입력해 주세요.' : '정답을 입력해 주세요.';
+    return;
+  }
   try{
-    await api('/api/parent/verify', { a:_gate.a, b:_gate.b, token:_gate.token, answer:ans });
+    if(isPin) await api('/api/parent/verify-pin', { pin: raw });
+    else await api('/api/parent/verify', { a:_gate.a, b:_gate.b, token:_gate.token, answer:Number(raw) });
     msg.textContent = ''; msg.style.color = '#2b8a3e';
     closeParentGate();
     bubble('부모 승인 완료! 오늘도 조금 더 놀자 ');
@@ -7088,6 +7105,19 @@ async function openParentDashboard(){
       <div class="pd-stat pd-wide pd-talk">
         <b>오늘 아이와 나눌 말</b>
         <ul>${r.conversationStarters.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
+      </div>` : ''}
+      ${(r.taughtThisWeek && r.taughtThisWeek.length) ? `
+      <div class="pd-stat pd-wide pd-talk">
+        <b>이번 주 아이가 루미에게 가르친 것 (검증된 설명)</b>
+        <ul>${r.taughtThisWeek.map(t=>`<li>${esc(t.topic)} <span class="hint">${esc(String(t.day).slice(5).replace('-', '/'))}</span></li>`).join('')}</ul>
+      </div>` : ''}
+      ${r.lamps ? `
+      <div class="pd-stat"><b>기억 등불</b><span>${esc(r.lamps.total)}개 · 수정 구슬 ${esc(r.lamps.crystals)}개</span></div>` : ''}
+      ${r.letterPreview ? `
+      <div class="pd-stat pd-wide pd-talk">
+        <b>루미의 편지 미리보기 (아직 보내지 않았어요)</b>
+        <span class="hint">${esc(r.letterPreview.subject)}</span>
+        <ul>${String(r.letterPreview.body).split('\n').map(l=>`<li>${esc(l)}</li>`).join('')}</ul>
       </div>` : ''}
       ${(r.errorPatterns && r.errorPatterns.length) ? `
       <div class="pd-stat pd-wide pd-talk pd-errors">
