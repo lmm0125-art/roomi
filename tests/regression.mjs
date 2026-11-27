@@ -317,6 +317,16 @@ async function extras() {
     const solvedHello = await api('/api/robot/hello', { token: v.token });
     assert(solvedHello.data.kind !== 'stuck', `해결한 개념을 여전히 막혔다고 말함: ${solvedHello.data.line}`);
   });
+  await test('편지 미리보기: 개념명 뒤 조사가 받침에 맞다(«분수의 덧셈» → 을)', async () => {
+    const u = await newUser('letter');
+    await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 같으면 분자끼리 더하면 돼요' } });
+    shiftLamp(u.id, CONCEPT, 5);   // 5일 전 → decay 65 → 편지 미리보기 대상
+    const r = await api('/api/parent/dashboard', { token: u.token });
+    const body = r.data && r.data.letterPreview && r.data.letterPreview.body;
+    assert(body, '편지 미리보기가 없음');
+    assert(body.includes(`«${CONCEPT}»을 한 번 다시`), `조사 오류: ${body.split('\n')[2]}`);
+    assert(!body.includes(`«${CONCEPT}» 를`) && !body.includes(`«${CONCEPT}»를`), '하드코딩 조사가 남아 있음');
+  });
   await test('PIN 로그인: 만든 PIN 으로 로그인할 수 있다(해시 비교 수정)', async () => {
     const u = await newUser('pin');
     const made = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '4321' } });

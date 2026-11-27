@@ -2983,7 +2983,7 @@ function letterPreviewFor(u){
     body: [
       '안녕하세요, 보호자님.',
       `루미의 기억 중 «${fog.topic}» 이 안개로 많이 흐려졌어요.`,
-      `오늘 «${fog.topic}» 를 한 번 다시 가르쳐 주면 루미의 기억이 맑아져요.`,
+      `오늘 «${fog.topic}»${koJosaFix(fog.topic, '를')} 한 번 다시 가르쳐 주면 루미의 기억이 맑아져요.`,
       '(이 편지는 개념 이름만 담고 있습니다. 아이의 대화·성적 같은 개인 데이터는 보내지 않아요.)',
     ].join('\n'),
   };
@@ -6092,7 +6092,19 @@ app.post('/api/chat/explain', async (req,res)=>{
     .get(u.id, day).c;
   if(used >= EXPLAIN_DAILY) return res.status(429).json({error:'오늘은 설명을 충분히 했어! 내일 또 들려줘.'});
   const card = concept === EXPLAIN_DEFAULT_CONCEPT ? null : teachCardFor(concept);
-  const verdict = await LR.checkTeachBack(text, concept, card, { callLLM, parseChatJSON, aliases: CARD_ALIASES });
+  // ★ 2026-11-27 (v1.83): 설명 검증의 모델 호출도 llm_logs 에 남긴다(v1.82 리팩터링에서 빠졌던 계량 복구).
+  const verdict = await LR.checkTeachBack(text, concept, card, {
+    aliases: CARD_ALIASES, parseChatJSON,
+    callLLM: async (prompt, opts) => {
+      const t0 = Date.now();
+      const er = await callLLM(prompt, opts);
+      try{ db.prepare(`INSERT INTO llm_logs(user_id,mode,model,latency_ms,ok,prompt_tokens,completion_tokens,total_tokens,prompt_chars)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(u.id, 'explain', (er && er.model) || null, Date.now()-t0, er && er.text ? 1 : 0,
+        (er && er.usage && er.usage.prompt_tokens) || null, (er && er.usage && er.usage.completion_tokens) || null,
+        (er && er.usage && er.usage.total_tokens) || null, (er && er.promptChars) || null); }catch(e){}
+      return er;
+    },
+  });
   const reply = sanitizeLine(verdict.reply, 180);
   saveChatTurn(u.id, text, reply, 'explain', { topic: concept, hintLevel: 3, solved: false });
   // 설명까지 왔으면 이번 대화의 목표는 «달성» 단계로 본다.
@@ -7917,7 +7929,7 @@ async function rumiLetterRun(){
         '안녕하세요, 보호자님.',
         `${u.nickname} 님이 루미와 ${idleDays}일 동안 함께하지 않았어요.`,
         `루미의 기억 중 «${fog.topic}» 이 안개로 많이 흐려졌어요.`,
-        `오늘 «${fog.topic}» 를 한 번 다시 가르쳐 주면 루미의 기억이 맑아져요.`,
+        `오늘 «${fog.topic}»${koJosaFix(fog.topic, '를')} 한 번 다시 가르쳐 주면 루미의 기억이 맑아져요.`,
         '',
         '(이 편지는 개념 이름과 일수만 담고 있습니다. 아이의 대화·성적 같은 개인 데이터는 보내지 않아요.)',
         '(편지 수신을 원하지 않으면 루미 앱의 보호자 화면에서 동의를 끄세요.)',

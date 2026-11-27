@@ -127,6 +127,23 @@ await test('teach-back: 카드가 없으면 검증하지 않고 nocard(실패)�
   assert.equal(v.ok, false); assert.equal(v.source, 'nocard');
 });
 
+await test('teach-back(화면 비공개): 모델 답에 «맞아/틀려» 같은 판정 말이 있으면 중립 문장으로 바꾼다', async () => {
+  const deps = { aliases: ALIASES,
+    callLLM: async () => ({ text: '{"ok":true,"reply":"맞아, 분모가 같으면 분자끼리 더하면 돼! 다음은?"}' }),
+    parseChatJSON: (raw) => JSON.parse(raw) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  assert.equal(v.ok, true);
+  assert.equal(R.hasEvalWord(v.reply), false, `판정 말이 화면에 새었다: ${v.reply}`);
+});
+await test('teach-back(화면 비공개): 틀린 설명에 대한 모델 답도 «틀렸어» 를 말하면 안 된다', async () => {
+  const deps = { aliases: ALIASES,
+    callLLM: async () => ({ text: '{"ok":false,"reply":"틀렸어. 분모가 클수록 더 큰 건 아니야."}' }),
+    parseChatJSON: (raw) => JSON.parse(raw) };
+  const v = await R.checkTeachBack('분모가 클수록 더 큰 수야', '분수의 덧셈', CARD, deps);
+  assert.equal(v.ok, false);
+  assert.equal(R.hasEvalWord(v.reply), false, `판정 말이 화면에 새었다: ${v.reply}`);
+});
+
 // ---------- 5. 탑 층 설계 — 한 번의 탑(run) 안의 안개 분포 ----------
 // 한 탑 = 한 사용자 · 하루의 덱. 층마다 원래 말/안개 말이 섞여 있어야 하고, 층 번호나 고정 비트로 예측되면 안 된다.
 const ORIG_A = '분모가 같으면 분자끼리 더하면 돼요';
