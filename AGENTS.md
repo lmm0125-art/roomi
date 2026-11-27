@@ -1,5 +1,8 @@
 # AGENTS.md — 项目协作约定
 
+> **New to this repo? Read `HANDOFF.md` first** — full English handoff verified at v1.80 (2026-11-27).
+
+
 ## 每次会话开始（不用用户提醒）
 
 1. 先读 `.context/memo.md` 与 `.context/tasks.md`，或直接运行：
