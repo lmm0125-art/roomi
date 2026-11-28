@@ -2228,12 +2228,19 @@
   const QUEST_SPOTS = [
     { key:'well', x:0.5,   z:-8.5,  label:'우물' },
     { key:'mill', x:26.5,  z:-13.5, label:'풍차' },
-    { key:'bell', x:-20.0, z:-2.0,  label:'종탑' }
+    { key:'bell', x:-20.0, z:-2.0,  label:'종탑' },
+    // ★ v1.84 «기억의 등대» — 미니게임이 아니라 «루미에게 설명하기» 로 푸는 학습 의뢰.
+    //   좌표는 호수 중심(27,12)에서 마을 반대편(24°) 물가. heightAt 으로 미리 계산한 값이다:
+    //   등대 탑은 수심 0.4m 얕은 물(물가 8.0m 안쪽 7.4m), 상호작용 자리는 마른 땅(10.0m, 높이 0.6).
+    //   난수(rnd)를 쓰지 않으므로 기존 나무·바위 배치 시퀀스는 그대로다.
+    { key:'light', x:36.14, z:16.07, label:'등대' }
   ];
+  const LIGHTHOUSE = { x: 33.76, z: 15.01 };
   const QUEST_PROMPT = {
     well:'우물이 버그로 막혔어 · 두더지 300점',
     mill:'풍차가 멈췄어 · 슈터 800점 + 목숨 1개',
-    bell:'종탑이 잠들었어 · 퍼즐 3문제 한 번에'
+    bell:'종탑이 잠들었어 · 퍼즐 3문제 한 번에',
+    light:'등대 불이 흐려졌어 · 루미에게 개념 하나 설명하기'
   };
 
   function questMat(scene, name, hex, alpha){
@@ -2277,9 +2284,11 @@
     if(!S) return;
     W.questRelics.forEach(n => { try{ n.dispose(); }catch(e){ } });
     W.questRelics = [];
+    // ★ v1.84 등대는 «파란 구슬» 대신 등대 불 자체가 켜지는 것으로 완료를 보여 준다
+    setLighthouseLit(W.questDone.has('light'));
     W.questDone.forEach(key => {
       const sp = QUEST_SPOTS.find(s => s.key === key);
-      if(!sp) return;
+      if(!sp || key === 'light') return;
       const y = heightAt(sp.x, sp.z);
       // 완료한 의뢰는 «파란 빛» 으로 남는다 — village_props 덕분에 다음 날에도 유지(P2)
       const orb = BABYLON.MeshBuilder.CreateSphere('questRelic_' + key,
@@ -2299,7 +2308,7 @@
       }
     });
     const hud = $('#world-quests');
-    if(hud) hud.textContent = `🛠 ${W.questDone.size} / 3`;
+    if(hud) hud.textContent = `🛠 ${W.questDone.size} / ${QUEST_SPOTS.length}`;
   }
 
   async function loadWorldQuests(){
@@ -2441,8 +2450,47 @@
     { x: -28.0, z: -20.0 },
     { x: 23.0, z: -13.0 }
   ];
+  // ★ v1.84 보물상자 나무결 — 널판 4장 + 결 무늬 + 이음매. 장면당 한 번만 만들어 상자 5개가 공유한다.
+  //   난수는 쓰지 않는다(자체 해시) → 전역 rnd 시퀀스·마을 배치는 그대로다.
+  function chestWoodTexture(scene) {
+    if (scene.__roomiChestWood) return scene.__roomiChestWood;
+    const S = 256;
+    const dt = new BABYLON.DynamicTexture('chestWoodTex', { width: S, height: S }, scene, true);
+    const g = dt.getContext();
+    const base = [138, 90, 52];
+    const PLANKS = 4, PH = S / PLANKS;
+    for (let p = 0; p < PLANKS; p++) {
+      // 널판마다 살짝 다른 명도 (결정적 해시: 인덱스만 쓴다)
+      const k = ((p * 2654435761) >>> 0) % 1000 / 1000;
+      const shade = 0.92 + k * 0.16;
+      g.fillStyle = `rgb(${Math.round(base[0] * shade)},${Math.round(base[1] * shade)},${Math.round(base[2] * shade)})`;
+      g.fillRect(0, p * PH, S, PH);
+      // 결 무늬 — 물결치는 가는 선 여러 줄
+      for (let l = 0; l < 9; l++) {
+        const y0 = p * PH + 4 + l * ((PH - 8) / 9);
+        const amp = 1.5 + ((l * 7 + p * 3) % 5) * 0.6;
+        g.strokeStyle = (l + p) % 2 ? 'rgba(70,40,18,0.22)' : 'rgba(255,220,170,0.10)';
+        g.lineWidth = 1.2;
+        g.beginPath();
+        for (let x = 0; x <= S; x += 8) {
+          const y = y0 + Math.sin(x * 0.045 + l * 1.7 + p) * amp;
+          if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.stroke();
+      }
+      // 널판 이음매 — 어두운 가는 선
+      g.fillStyle = 'rgba(40,22,10,0.55)';
+      g.fillRect(0, p * PH, S, 2);
+    }
+    dt.hasAlpha = false;
+    dt.update(false);
+    scene.__roomiChestWood = dt;
+    return dt;
+  }
   function makeChest(scene, sp, i) {
-    const wood = pbr(scene, 'chestWood' + i, '#8a5a34', 0.85, 0);
+    const wood = pbr(scene, 'chestWood' + i, '#ffffff', 0.85, 0);
+    wood.albedoTexture = chestWoodTexture(scene);
+    const iron = pbr(scene, 'chestIron' + i, '#3d3a38', 0.5, 0.6);
     // ★ 포인트라이트 대신 emissive 강화로 발광 보상 (씬 라이트 총량 축소)
     const gold = emissiveMat(scene, 'chestGold' + i, '#ffd15c', 1.25);
     const y = heightAt(sp.x, sp.z);
@@ -2456,6 +2504,14 @@
     lid.receiveShadows = true; lid.castShadow = true; lid.isPickable = false;
     const band = BABYLON.MeshBuilder.CreateBox('chestBand' + i, { width: 0.2, height: 0.8, depth: 0.8 }, scene);
     band.position.y = 0.4; band.parent = node; band.material = gold; band.isPickable = false;
+    // 쇠 띠 — 앞뒤 면에 두 줄씩. 금 띠(가운데)와 겹치지 않게 x=±0.38 에 둔다
+    [-0.38, 0.38].forEach((sx) => {
+      [-0.39, 0.39].forEach((sz) => {
+        const strap = BABYLON.MeshBuilder.CreateBox('chestStrap' + i, { width: 0.1, height: 0.76, depth: 0.03 }, scene);
+        strap.position.set(sx, 0.37, sz); strap.parent = node; strap.material = iron;
+        strap.isPickable = false; strap.receiveShadows = true;
+      });
+    });
     // 멀리서도 보이는 표식 (떠 있는 빛)
     const beacon = BABYLON.MeshBuilder.CreateSphere('chestBeacon' + i, { diameter: 0.34, segments: 8 }, scene);
     beacon.position.y = 1.75; beacon.parent = node; beacon.material = gold; beacon.isPickable = false;
@@ -2652,6 +2708,160 @@
     W.secretSign = node;
     // 기둥에 부딪히지 않게 «작은 충돌체» 만 등록한다 (아이들이 통과하지 않도록)
     COLL.push({ x: sp.x, z: sp.z, r: 0.34 });
+  }
+
+  // ────────────── ★ v1.84 «기억의 등대» — 학습 의뢰 랜드마크 ──────────────
+  //   호수 건너편 물가의 흰 등대. 등불 유리는 의뢰 전에는 흐린 회청색,
+  //   아이가 루미에게 개념을 설명해 의뢰를 끝내면 따뜻한 금빛으로 켜지고 빛줄기 두 갈래가 돈다.
+  //   예산: PointLight 를 추가하지 않는다(emissive + GlowLayer 만). 난수(rnd) 소모 없음.
+  //   로컬 좌표: y=0 은 물 밑 바위 바닥(WATER_Y-0.35), -Z 면(문)이 상호작용 자리(뭍)를 본다.
+  function buildLighthouse(scene) {
+    if (!scene || W.lighthouse) return;
+    const T = LIGHTHOUSE;
+    const Q = QUEST_SPOTS.find((s) => s.key === 'light');
+    // 뭍 쪽 빈터 — 카메라가 아이 뒤 12m 에 서므로 바깥쪽으로 4m 밀어 둔다(비밀 이정표와 같은 이유)
+    const ox = Q.x - T.x, oz = Q.z - T.z, ol = Math.hypot(ox, oz) || 1;
+    clearGlade(scene, Q.x + (ox / ol) * 4, Q.z + (oz / ol) * 4, 7.5);
+    clearGlade(scene, T.x, T.z, 2.6);   // 탑 발치의 물가 바위
+
+    const node = new BABYLON.TransformNode('lighthouse', scene);
+    node.position.set(T.x, WATER_Y - 0.35, T.z);
+    node.rotation.y = Math.atan2(-ox, -oz);   // 로컬 -Z → 뭍 방향
+
+    const white = pbr(scene, 'lhWhite', '#f3eee3', 0.78, 0);
+    const red = pbr(scene, 'lhRed', '#c4513e', 0.72, 0);
+    const roofMat = pbr(scene, 'lhRoof', '#a8402f', 0.7, 0);
+    const stone = pbr(scene, 'lhStone', '#9a958a', 0.95, 0);
+    const stone2 = pbr(scene, 'lhStone2', '#7f7a70', 0.95, 0);
+    const wood = pbr(scene, 'lhWood', '#5e4331', 0.9, 0);
+    const iron = pbr(scene, 'lhIron', '#3d4650', 0.5, 0.6);
+    const lens = pbr(scene, 'lhLens', '#8fa2b6', 0.2, 0);
+    lens.alpha = 0.92;
+
+    const meshes = [];
+    const part = (m, mat, x, y, z) => {
+      m.position.set(x, y, z); m.parent = node; m.material = mat;
+      m.isPickable = false; m.receiveShadows = true;
+      meshes.push(m);
+      return m;
+    };
+
+    // ① 바위 받침 — 물에서 솟은 둥근 돌무더기(가장 큰 돌 꼭대기가 수면 위 0.5m)
+    [[0, 0, 2.3, 1.15, 2.1, stone], [1.05, 0.45, 1.25, 0.8, 1.05, stone2], [-0.95, 0.7, 1.15, 0.7, 1.0, stone],
+      [0.6, -1.05, 1.05, 0.62, 1.15, stone2], [-0.75, -0.85, 1.2, 0.72, 0.95, stone]].forEach((r, i) => {
+      const b = BABYLON.MeshBuilder.CreateSphere('lhRock' + i, { diameter: 1, segments: 10 }, scene);
+      b.scaling.set(r[2], r[4], r[3]);
+      part(b, r[5], r[0], r[4] * 0.3, r[1]);
+    });
+
+    // ② 돌 기단
+    part(BABYLON.MeshBuilder.CreateCylinder('lhPlinth', { height: 0.45, diameter: 2.0, tessellation: 18 }, scene),
+      stone, 0, 0.975, 0);
+
+    // ③ 탑 몸통 — 아래가 넓은 원뿔대 + 빨간 띠 두 줄
+    const TB = 1.2, TH = 4.0, DB = 1.45, DT = 1.0;
+    const dAt = (t) => DB + (DT - DB) * t;           // 높이 비율 t 의 지름
+    part(BABYLON.MeshBuilder.CreateCylinder('lhTower',
+      { height: TH, diameterBottom: DB, diameterTop: DT, tessellation: 20 }, scene), white, 0, TB + TH / 2, 0);
+    [0.36, 0.7].forEach((t, i) => {
+      const bh = 0.42 / TH;
+      part(BABYLON.MeshBuilder.CreateCylinder('lhBand' + i,
+        { height: 0.42, diameterBottom: dAt(t - bh / 2) + 0.03, diameterTop: dAt(t + bh / 2) + 0.03, tessellation: 20 }, scene),
+        red, 0, TB + TH * t, 0);
+    });
+
+    // ④ 문·계단·창 — 문은 -Z 면(뭍 쪽)
+    part(BABYLON.MeshBuilder.CreateBox('lhDoor', { width: 0.42, height: 0.74, depth: 0.08 }, scene),
+      wood, 0, TB + 0.37, -(dAt(0.09) / 2) + 0.01);
+    part(BABYLON.MeshBuilder.CreateBox('lhStep', { width: 0.62, height: 0.1, depth: 0.34 }, scene),
+      stone, 0, TB + 0.05, -(DB / 2) - 0.12);
+    const win1 = part(BABYLON.MeshBuilder.CreateBox('lhWin1', { width: 0.18, height: 0.3, depth: 0.06 }, scene),
+      iron, 0, TB + TH * 0.52, -(dAt(0.52) / 2) + 0.005);
+    win1.rotation.x = 0.06;
+    const win2 = part(BABYLON.MeshBuilder.CreateBox('lhWin2', { width: 0.06, height: 0.28, depth: 0.16 }, scene),
+      iron, dAt(0.82) / 2 - 0.005, TB + TH * 0.82, 0);
+    win2.rotation.z = -0.06;
+
+    // ⑤ 전망대 — 바닥판 + 난간(고리 + 기둥 10개)
+    const GY = TB + TH;
+    part(BABYLON.MeshBuilder.CreateCylinder('lhDeck', { height: 0.12, diameter: 1.62, tessellation: 20 }, scene),
+      iron, 0, GY + 0.06, 0);
+    part(BABYLON.MeshBuilder.CreateTorus('lhRail', { diameter: 1.52, thickness: 0.035, tessellation: 28 }, scene),
+      iron, 0, GY + 0.46, 0);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      part(BABYLON.MeshBuilder.CreateCylinder('lhPost' + i, { height: 0.36, diameter: 0.035, tessellation: 6 }, scene),
+        iron, Math.cos(a) * 0.76, GY + 0.3, Math.sin(a) * 0.76);
+    }
+
+    // ⑥ 등불 방 — 유리 원기둥 + 창살 6개, 위에 빨간 원뿔 지붕과 꼭지 구슬
+    const LY = GY + 0.12 + 0.35;
+    part(BABYLON.MeshBuilder.CreateCylinder('lhLens', { height: 0.7, diameter: 0.8, tessellation: 16 }, scene),
+      lens, 0, LY, 0);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      part(BABYLON.MeshBuilder.CreateCylinder('lhMullion' + i, { height: 0.7, diameter: 0.035, tessellation: 6 }, scene),
+        iron, Math.cos(a) * 0.405, LY, Math.sin(a) * 0.405);
+    }
+    part(BABYLON.MeshBuilder.CreateCylinder('lhRoofCone', { height: 0.55, diameterTop: 0.04, diameterBottom: 1.06, tessellation: 18 }, scene),
+      roofMat, 0, LY + 0.35 + 0.275, 0);
+    part(BABYLON.MeshBuilder.CreateSphere('lhFinial', { diameter: 0.14, segments: 8 }, scene),
+      iron, 0, LY + 0.35 + 0.6, 0);
+
+    // ⑦ 빛줄기 두 갈래 — 등불이 켜졌을 때만. 좁은 끝이 등불 안에서 시작해 바깥으로 넓어진다.
+    const beamMat = new BABYLON.StandardMaterial('lhBeamMat', scene);
+    beamMat.emissiveColor = BABYLON.Color3.FromHexString('#ffe3a1');
+    beamMat.diffuseColor = new BABYLON.Color3(0, 0, 0);
+    beamMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    beamMat.disableLighting = true;
+    beamMat.backFaceCulling = false;
+    beamMat.alpha = 0.12;
+    const pivot = new BABYLON.TransformNode('lhBeamPivot', scene);
+    pivot.parent = node; pivot.position.set(0, LY, 0);
+    const beams = [-1, 1].map((sgn, i) => {
+      const b = BABYLON.MeshBuilder.CreateCylinder('lhBeam' + i,
+        { height: 7, diameterTop: 1.9, diameterBottom: 0.16, tessellation: 14 }, scene);
+      b.rotation.z = -sgn * Math.PI / 2;   // 원기둥 축(y)을 ±x 로 눕힌다 — 넓은 끝이 바깥
+      b.position.set(sgn * 3.5, 0, 0);
+      b.parent = pivot; b.material = beamMat; b.isPickable = false;
+      b.setEnabled(false);
+      return b;
+    });
+
+    // 그림자·수면 반사 — 호수 40m 안 구조물 규칙을 따른다(빛줄기는 제외)
+    meshes.forEach((m) => {
+      if (W.shadow && m.position.y > 0.9) { m.castShadow = true; try { W.shadow.addShadowCaster(m, false); } catch (e) { } }
+      if (W.waterWM) { try { W.waterWM.addToRenderList(m); } catch (e) { } }
+    });
+
+    COLL.push({ x: T.x, z: T.z, r: 1.5 });
+    W.lighthouse = { node, lens, pivot, beams, beamMat, lit: false };
+    setLighthouseLit(!!W.lighthouseLit);   // 의뢰 상태가 빌드보다 먼저 도착했으면 여기서 반영
+  }
+
+  // 등불 켜기/끄기 — applyQuestVisuals 가 부른다. 빌드 전이면 상태만 기억해 둔다.
+  function setLighthouseLit(on) {
+    W.lighthouseLit = !!on;
+    const L = W.lighthouse;
+    if (!L) return;
+    L.lit = !!on;
+    L.lens.emissiveColor = BABYLON.Color3.FromHexString(on ? '#ffcf6b' : '#5d6f84');
+    L.lens.emissiveIntensity = on ? 1.5 : 0.35;
+    L.beams.forEach((b) => b.setEnabled(!!on));
+  }
+
+  // 매 프레임 — 켜진 등불은 천천히 돌고, 밤일수록 빛줄기가 진해진다. 꺼진 등불은 아주 약하게 숨 쉰다.
+  function updateLighthouse(dt) {
+    const L = W.lighthouse;
+    if (!L) return;
+    if (L.lit) {
+      L.pivot.rotation.y += dt * 0.55;
+      const nk = (W.dayNight && W.dayNight.nightK) || 0;
+      L.beamMat.alpha = 0.05 + 0.22 * nk;
+      L.lens.emissiveIntensity = 1.4 + 0.2 * Math.sin(W.t * 2.2);
+    } else {
+      L.lens.emissiveIntensity = 0.3 + 0.08 * Math.sin(W.t * 0.9);
+    }
   }
 
   // ────────────────────────── v1.39 별빛 저장고 ──────────────────────────
@@ -4798,6 +5008,7 @@
     updateStarfall(dt);
     updatePeers(dt);          // v1.35 친구 위치 보간·근접 판정
     updateCrystals(dt);       // ★ 2026-11-20 (v1.71) 수정 구슬 부유·자전
+    updateLighthouse(dt);     // ★ v1.84 기억의 등대 — 켜진 등불 회전·밤 빛줄기
     updateRumi(dt);           // ★ 2026-11-20 (v1.71) 루미 NPC — 시간표·대기 부유·근접 판정
     updateLife(dt);           // ★ 2026-11-21 (v1.73) L4/L5/L6 — 생명감·스토리·마감 프레임 오케스트레이터
     // ★ 2026-11-21 (v1.74) — 빛의 조각 근접 팁(루미 팁 «뒤» 에 정리) + 빠른 이동 페이드 전환
@@ -5365,6 +5576,7 @@
       createStations(scene);
       CHEST_SPOTS.forEach((sp, i) => { try { makeChest(scene, sp, i); } catch (e) { } });
       try { buildSecretSign(scene); } catch (e) { console.warn('[world] secret sign', e && e.message); }
+      try { buildLighthouse(scene); } catch (e) { console.warn('[world] lighthouse', e && e.message); }
       try { buildThoughtVault(scene); } catch (e) { console.warn('[world] thought vault', e && e.message); }
       try { loadVillage(scene); } catch (e) { }
       try { loadTreasure(); } catch (e) { }
@@ -5525,6 +5737,7 @@
     W.engine = null; W.scene = null; W.cam = null; W.root = null; W.model = null;
     W.anims = {}; W.stars = []; W.clouds = []; W.birds = null; W.fires = []; W.windmills = [];
     W.quests = []; W.questDone = new Set(); W.questMarks = []; W.questRelics = []; W.nearQuest = null;
+    W.lighthouse = null; W.lighthouseLit = false;   // ★ v1.84 등대 메시는 씬 dispose 를 따라간다
     W.collected = 0; W.ready = false; W.keys = {}; W.animName = ''; W.animLock = 0;
     W.stations = []; W.lessons = null; W.nearStation = -1; W.quizOpen = false; W.lessonDone = 0; W.villageKeys = [];
     W.chests = []; W.nearType = ''; W.near = -1; W.starfall = null; W.starTimer = 40;
@@ -6046,6 +6259,8 @@
     { id: 'st2',   label: '📖 지혜의 샘 · 버드나무숲 북쪽', mark: stationMarkFor(2), pick: () => warpPoint(STATION_SPOTS[2].x, STATION_SPOTS[2].z) },
     { id: 'mill',  label: '🌬️ 풍차',        mark: questMarkFor('mill'), pick: () => warpPoint(26.5, -13.5) },
     { id: 'bell',  label: '🔔 종탑',        mark: questMarkFor('bell'), pick: () => warpPoint(-20.0, -2.0) },
+    // 탑 좌표로 찾으면 물·충돌체를 피한 가장 가까운 뭍 자리에 내려 «탑을 바라보며» 선다
+    { id: 'light', label: '🗼 기억의 등대',  mark: questMarkFor('light'), pick: () => warpPoint(LIGHTHOUSE.x, LIGHTHOUSE.z, 4) },
     { id: 'vault', label: '🏮 별빛 저장고',  mark: () => '', pick: () => warpPoint(VAULT_SPOT.x, VAULT_SPOT.z) },
     { id: 'rumi',  label: '🤖 루미 (일과 중)', mark: rumiPlaceMark, pick: rumiPick },
     { id: 'gate',  label: '🚪 마을 입구',    mark: () => '', pick: () => warpPoint(0, 12) }

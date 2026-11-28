@@ -5269,8 +5269,18 @@ const WORLD_QUESTS = [
   { key:'mill', prop:'mill',      kind:'shooter', label:'풍차',
     cond:{ score:800, lives:1 },     text:'풍차 날개가 멈췄어. 목숨 1개 이상 남기고 800점!' },
   { key:'bell', prop:'belltower', kind:'puzzle',  label:'종탑',
-    cond:{ firstTry:3 },             text:'종탑이 잠들었어. 퍼즐 3문제를 한 번에 맞혀 봐!' }
+    cond:{ firstTry:3 },             text:'종탑이 잠들었어. 퍼즐 3문제를 한 번에 맞혀 봐!' },
+  // ★ v1.84 «기억의 등대» — 미니게임이 아닌 학습 의뢰. 오늘 루미에게 설명(teach-back)을 1번 이상 했으면 완료.
+  //   설명 화면은 채점하지 않으므로 «검증된» 설명이 아니라 «설명한 사실» 만 본다(시간 초과 미검증도 인정).
+  //   판정은 서버 DB(chat_messages explain 기록)로만 한다 — 클라이언트가 보낸 점수는 쓰지 않는다.
+  { key:'light', prop:'lighthouse', kind:'teach', label:'등대',
+    cond:{ teach:1 },                text:'등대 불이 흐려졌어. 루미에게 개념 하나를 네 말로 설명해 줘!' }
 ];
+// 오늘 설명(teach-back) 횟수 — /api/chat/explain 의 하루 한도 쿼리와 같은 조건
+function explainsToday(uid, day){
+  return db.prepare("SELECT COUNT(*) c FROM chat_messages WHERE user_id=? AND mode='explain' AND role='user' AND substr(ts,1,10)=?")
+    .get(uid, day).c;
+}
 const WORLD_QUEST_REWARD = 15;
 
 function worldQuestState(uid, day){
@@ -5316,6 +5326,7 @@ app.post('/api/world/quest/claim', (req,res)=>{
   if(def.cond.score && score < def.cond.score) need.push('score>=' + def.cond.score);
   if(def.cond.lives && lives < def.cond.lives) need.push('lives>=' + def.cond.lives);
   if(def.cond.firstTry && firstTry < def.cond.firstTry) need.push('firstTry>=' + def.cond.firstTry);
+  if(def.cond.teach && explainsToday(u.id, day) < def.cond.teach) need.push('teach>=' + def.cond.teach);
   if(need.length) return res.json({ ok:false, need: need.join(' & ') });
 
   try{

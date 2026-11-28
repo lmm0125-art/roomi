@@ -3863,14 +3863,43 @@ function closeGame(id){
 // ★ 어떤 경우에도 버튼이 '제출 중' 으로 굳지 않도록 finally 에서 반드시 복구한다.
 //   (예전에는 catch 에서 bubble 만 띄우고 버튼을 돌려주지 않아 화면이 영구히 멈췄다)
 // ── v1.37 «대세계 의뢰» 브리지: 세계 → 게임 → 세계 ──
-const QUEST_KIND = { well:'mole', mill:'shooter', bell:'puzzle' };
+const QUEST_KIND = { well:'mole', mill:'shooter', bell:'puzzle', light:'teach' };
 try{ state.quest = JSON.parse(sessionStorage.getItem('roomi_quest') || 'null'); }
 catch(e){ state.quest = null; }
+
+// ★ v1.84 «기억의 등대» 의뢰 — 세계를 닫지 않고 그 자리에서 대화창(in-world)을 연다.
+//   ① 오늘 이미 설명했으면 서버가 바로 완료 처리한다(설명 하루 한도에 걸린 아이도 막히지 않게).
+//   ② 아니면 가장 흐려진 등불의 개념으로 «설명하기» 모드를 연다. 등불이 없으면 서버 기본 개념.
+//   완료 판정은 서버가 오늘의 설명 기록으로 한다(클라이언트가 보낸 값은 쓰지 않는다).
+async function startLighthouseQuest(){
+  try{
+    const r = await api('/api/world/quest/claim', { quest:'light' }, 10000);
+    if(r && r.ok){
+      if(!r.already) toast(r.reward ? `🗼 등대에 불이 켜졌어! +${r.reward}셀` : '🗼 등대에 불이 켜졌어!');
+      state.quest = null;
+      try{ sessionStorage.removeItem('roomi_quest'); }catch(e){ }
+      if(window.World && window.World.refresh) window.World.refresh();
+      return;
+    }
+  }catch(e){ /* 네트워크 실패 — 아래 설명 흐름으로 그대로 진행 */ }
+  let concept = '';
+  try{
+    const l = await api('/api/lamps', undefined, 8000, 'GET');
+    const dim = (l.lamps || []).filter(x => !x.crystal).sort((a,b)=> (b.decay||0) - (a.decay||0))[0];
+    if(dim && dim.topic) concept = dim.topic;
+  }catch(e){ }
+  await chatOpen();
+  startExplain(concept ? { concept } : {});
+  toast(concept
+    ? `🗼 «${concept}» 이야기를 루미에게 설명하면 등대 불이 켜져`
+    : '🗼 오늘 배운 것을 루미에게 설명하면 등대 불이 켜져');
+}
 
 function startWorldQuest(key){
   if(!QUEST_KIND[key]) return;
   state.quest = { key, startedAt: Date.now() };
   try{ sessionStorage.setItem('roomi_quest', JSON.stringify(state.quest)); }catch(e){ }
+  if(key === 'light'){ startLighthouseQuest(); return; }
   if(window.World && window.World.close) window.World.close();
   // closeWorld() 가 씬을 dispose 할 시간을 0.18초 벌어준다
   setTimeout(()=>{
@@ -6044,6 +6073,8 @@ async function sendExplain(){
     state.explainMode = null;
     input.placeholder = '루미에게 말을 걸어 보세요';
     toast('🧠 네 설명을 루미가 기억했어');
+    // ★ v1.84 등대 의뢰 중이었다면 설명이 끝난 지금 완료를 청한다(판정은 서버가 오늘 기록으로 한다)
+    if(state.quest && state.quest.key === 'light') tryClaimQuest({ kind:'teach' });
   }catch(e){
     chatTyping(false);
     chatAdd('assistant', e.message || '설명을 받지 못했어. 다시 해 볼까?');

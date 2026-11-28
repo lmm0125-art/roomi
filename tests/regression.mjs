@@ -407,13 +407,45 @@ async function extras() {
   });
 }
 
+// ============================================================
+// v1.84 «기억의 등대» 의뢰 — 오늘 루미에게 설명했는지로만 판정(클라이언트 점수 무시)
+// ============================================================
+async function lighthouse() {
+  await test('등대 의뢰: 목록에 teach 의뢰로 나오고 처음에는 미완료다', async () => {
+    const u = await newUser('lh1');
+    const r = await api('/api/world/quest', { token: u.token });
+    assert(r.status === 200, `quest 목록 실패 ${r.status}`);
+    const q = (r.data.quests || []).find((x) => x.key === 'light');
+    assert(q && q.kind === 'teach' && q.done === false, `등대 의뢰 이상: ${JSON.stringify(q)}`);
+    assert(r.data.quests.length === 4, `의뢰 수 기대 4, 실제 ${r.data.quests.length}`);
+  });
+
+  await test('등대 의뢰: 설명 전에는 점수를 부풀려 보내도 완료되지 않는다', async () => {
+    const u = await newUser('lh2');
+    const r = await api('/api/world/quest/claim', { method: 'POST', token: u.token, body: { quest: 'light', score: 99999, firstTry: 9 } });
+    assert(r.status === 200 && r.data.ok === false && /teach/.test(r.data.need || ''), `거절돼야 함: ${JSON.stringify(r.data)}`);
+  });
+
+  await test('등대 의뢰: 설명 1번 뒤에는 완료(+15셀), 두 번째 청구는 보상 없음', async () => {
+    const u = await newUser('lh3');
+    const e = await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 클수록 더 큰 수야' } });
+    assert(e.status === 200, `explain 실패 ${e.status}`);
+    const r1 = await api('/api/world/quest/claim', { method: 'POST', token: u.token, body: { quest: 'light' } });
+    assert(r1.data.ok === true && r1.data.reward === 15 && !r1.data.already, `완료돼야 함: ${JSON.stringify(r1.data)}`);
+    const r2 = await api('/api/world/quest/claim', { method: 'POST', token: u.token, body: { quest: 'light' } });
+    assert(r2.data.ok === true && r2.data.already === true && r2.data.reward === 0, `중복 보상: ${JSON.stringify(r2.data)}`);
+    const list = await api('/api/world/quest', { token: u.token });
+    assert(list.data.quests.find((x) => x.key === 'light').done === true, '목록에서 완료로 보여야 함');
+  });
+}
+
 // ---------- 실행 ----------
 (async () => {
   let code = 0;
   try {
     await waitReady();
     console.log(`RooMi 회귀 테스트 · 서버 ${BASE} · DB ${DB_FILE}`);
-    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras();
+    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse();
   } catch (e) {
     console.log('\n[실행 오류] ' + e.message);
     code = 1;
