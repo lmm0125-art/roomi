@@ -74,5 +74,8 @@ docs/*
 CODEX_CONTEXT.md
 assets/bot-render.png
 
+# handoff (kept local only)
+HANDOFF.md
+
 # context-memo (project memos)
 .context/
