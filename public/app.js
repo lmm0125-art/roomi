@@ -4847,7 +4847,9 @@ $('#demo-tour-close').addEventListener('click', ()=> $('#demo-tour').classList.a
 async function runDemoTour(){
   const panel = $('#demo-tour'), list = $('#demo-tour-steps'), enterBtn = $('#demo-tour-enter'), btn = $('#btn-demo-tour');
   const reportBtn = $('#demo-tour-report');
+  const learnBtn = $('#demo-tour-learn');
   list.textContent = ''; enterBtn.classList.add('hidden'); if(reportBtn) reportBtn.classList.add('hidden');
+  if(learnBtn) learnBtn.classList.add('hidden');
   panel.classList.remove('hidden'); btn.disabled = true;
 
   // 한 단계 = 목록 항목 하나. 실패하면 그 자리에 실패 문구를 남기고 뒤 단계는 멈춘다(앞 단계에 의존하므로).
@@ -4909,6 +4911,15 @@ async function runDemoTour(){
 
     // 시연 끝: 같은 데모 계정으로 앱 화면에 들어가는 버튼. 다시 시드하지 않아 방금 만든 기록이 남는다.
     enterBtn.classList.remove('hidden');
+    // ★ 2026-11-28: «발표 모드로 같이 공부 시작» — 발표 보기를 켜고 방에 들어간 뒤 같이 공부 창을 바로 연다.
+    if(learnBtn){
+      learnBtn.classList.remove('hidden');
+      learnBtn.onclick = async ()=>{
+        setPresenter(true);
+        await enterBtn.onclick();
+        await chatOpen();
+      };
+    }
     // ★ v1.85: «오늘의 성과 보기» — 방에 들어가기 전에 성장 리포트로 바로 보낸다.
     if(reportBtn){
       reportBtn.classList.remove('hidden');
@@ -5698,6 +5709,8 @@ async function chatOpen(){
   // world.js 의 걷기 입력 잠금 상태를 맞춘다
   if (window.__worldState) window.__worldState.chatOpen = inWorld;
   $('#chat-text').focus();
+  // ★ 2026-11-28 발표 보기가 켜져 있으면 대화는 «같이 공부» 로 시작한다(발표 때 바로 문제를 집을 수 있게).
+  if(presenterOn()) chatModeSet('learn');
   await loadChatHistory();
   refreshMemoryChips();
   refreshReviewChip();
@@ -5734,6 +5747,77 @@ function chatModeSet(mode){
   if(hint) hint.textContent = mode==='learn' ? '정답 대신 한 단계씩 같이 생각해요'
     : mode==='reflect' ? '판단 없이 마음을 들어요' : '편하게 이야기해요';
   renderChatChips();
+  renderLearnTrack();   // ★ 2026-11-28 같이 공부 단계 표시줄을 모드에 맞춘다
+}
+
+// ★ 2026-11-28 «발표 보기» — AI 의 판단 과정을 발표 자리에서만 펼친다(아이 화면은 기본으로 그대로 둔다).
+const PRESENT_KEY = 'roomi_presenter';
+const DEMO_PROBLEMS = ['1/3 + 1/4 는 어떻게 계산해?', '반복문은 어떻게 써?', '소수는 어떻게 더해?'];
+function presenterOn(){ try{ return localStorage.getItem(PRESENT_KEY) === '1'; }catch(e){ return false; } }
+function setPresenter(on){
+  try{ localStorage.setItem(PRESENT_KEY, on ? '1' : '0'); }catch(e){}
+  const b = $('#chat-present');
+  if(b){ b.classList.toggle('on', !!on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+  const panel = $('#chat-panel');
+  if(on && panel && !panel.classList.contains('hidden')) chatModeSet('learn');   // 켜면 같이 공부로 바로 들어간다
+  renderChatChips();
+}
+// 같이 공부 단계 줄: 서버가 준 session.stage(L1·L2·L3·confirm)와 설명 완료(teachback)를 다섯 칸으로 보여 준다.
+const TRACK_STEPS = ['되묻기', '비유', '다음 한 단계', '내 말로 설명', '등불 켜기'];
+const TRACK_STAGE = { L1:0, L2:1, L3:2, confirm:3, teachback:5 };
+function renderLearnTrack(){
+  const el = $('#chat-track'); if(!el) return;
+  const on = state.chatMode === 'learn';
+  el.classList.toggle('hidden', !on);
+  el.textContent = '';
+  if(!on) return;
+  const stage = state.tutorStage;
+  const cur = Object.prototype.hasOwnProperty.call(TRACK_STAGE, stage) ? TRACK_STAGE[stage] : 0;
+  TRACK_STEPS.forEach((label, i)=>{
+    const d = document.createElement('span');
+    d.className = 'ct-step' + (i < cur ? ' done' : (i === cur && cur < TRACK_STEPS.length ? ' on' : ''));
+    const bar = document.createElement('i'); bar.setAttribute('aria-hidden', 'true');
+    d.append(bar, document.createTextNode(label));
+    el.appendChild(d);
+  });
+}
+// 루미의 판단 한 줄: 어떤 단계로 답했고 막힘 유형을 무엇으로 봤는지(발표 보기에서만 붙는다).
+const STUCK_KO = { concept:'개념', procedure:'절차', reading:'읽기', careless:'부주의' };
+function judgeText(lvl, r){
+  const parts = [];
+  if(!lvl) parts.push('요청에 따라 바로 설명');
+  else if(lvl === 1) parts.push('되묻기로 생각을 열었어');
+  else if(lvl === 2) parts.push('비유로 연결했어');
+  else parts.push('정답 대신 다음 한 단계만 알려 줬어');
+  const st = r && r.session && r.session.stuckType;
+  parts.push(st ? `막힘 유형 «${STUCK_KO[st] || st}»` : '막힘 유형 판단 전');
+  if(r && r.solved) parts.push('스스로 해결 기록');
+  if(r && r.frustration) parts.push('좌절 감지 → 쉬어가기 제안');
+  return '루미의 판단: ' + parts.join(' · ');
+}
+// 설명 검증 결과 카드(발표 보기 전용): 판정 방식·항목·핵심어·저장 여부를 보여 준다.
+const VERDICT_SRC = { llm:'AI 판정', rule:'키워드 규칙(백업)', nocard:'카드 없음 · 저장만', gate:'연산 게이트(카드와 모순)', timeout:'시간 초과 · 나중에 다시 판정' };
+const CHECK_KO = { operation:'연산', condition:'조건', result:'결과' };
+function renderExplainCard(v, concept){
+  const log = $('#chat-log'); if(!log || !v) return;
+  const pass = v.ok === true && v.source !== 'timeout';
+  const card = document.createElement('div');
+  card.className = 'explain-card' + (pass ? '' : ' warn');
+  const title = document.createElement('b');
+  title.textContent = pass ? `설명 검증 통과 · ${concept || ''}`.trim()
+    : (v.source === 'timeout' ? '판정 보류 · 나중에 다시 확인' : '아직 미검증 · 한 가지 더 확인 필요');
+  card.appendChild(title);
+  const row = (label, text)=>{ const d = document.createElement('div'); d.className = 'ec-row'; d.textContent = `${label}: ${text}`; card.appendChild(d); };
+  row('판정 방식', VERDICT_SRC[v.source] || v.source || '-');
+  if(v.checks){
+    const items = Object.keys(CHECK_KO).filter(k => typeof v.checks[k] === 'boolean').map(k => `${CHECK_KO[k]} ${v.checks[k] ? '✓' : '✕'}`);
+    if(items.length) row('항목 확인', items.join(' · '));
+  }
+  if(typeof v.hits === 'number') row('핵심어', `${v.hits}개 (2개 이상이면 통과)`);
+  row('저장', v.saved ? (v.stored === 'explain:verified' ? '검증된 설명' : '미검증 설명') : '이번 설명은 저장하지 않음(검증된 기억 유지)');
+  row('마스터리', v.credited ? '가점 적용(검증된 설명만)' : '가점 없음');
+  log.appendChild(card);
+  log.scrollTop = log.scrollHeight;
 }
 function chatAdd(role, text, hint){
   const log = $('#chat-log');
@@ -5856,6 +5940,9 @@ async function chatStreamOnce(text, solved){
   }
   chatTyping(false);
   const lvl = Number(r.hintLevel) || 0;
+  // ★ 2026-11-28 단계 표시줄: 서버가 준 현재 단계(session.stage)를 기억해 다시 그린다.
+  if(r.session && r.session.stage) state.tutorStage = r.session.stage;
+  renderLearnTrack();
   if(!live) chatAdd('assistant', r.reply, lvl > 1);
   else live.end(r.reply || partial);
   // ★ 비스트리밍 경로와 같이 onend 를 넘긴다. 없으면 TTS 를 다 읽어도
@@ -5896,6 +5983,12 @@ async function chatStreamOnce(text, solved){
     quiz.onclick = ()=>openPuzzle();
     meta.appendChild(quiz);
     (live ? live.el : $('#chat-log')).appendChild(meta);
+  }
+  // ★ 2026-11-28 발표 보기: 루미가 왜 이렇게 답했는지 한 줄로 붙인다(아이 화면에는 나오지 않는다).
+  if(state.chatMode === 'learn' && presenterOn()){
+    const jl = document.createElement('div'); jl.className = 'msg-judge';
+    jl.textContent = judgeText(lvl, r);
+    (live ? live.el : $('#chat-log')).appendChild(jl);
   }
   if(r.solved) setRobotMode('cheer');   // ★ v1.58: 스스로 해결한 순간 로봇이 같이 기뻐한다
   if(r.wrapUp) chatAdd('assistant', '⏳ ' + r.wrapUp, true);
@@ -5954,8 +6047,10 @@ function renderChatChips(){
     const topic = String(weak.key).replace(/^weak:/,'');
     if(topic) extras.push(`${topic} 다시 보기`);
   }
-  const list = [...extras, ...base];
-  if(state.plan && state.plan.plan && !state.plan.allDone && !list.includes('오늘의 계획')) list.unshift('오늘의 계획');
+  // ★ 2026-11-28 발표 보기 + 같이 공부: 준비된 문제 3개를 칩으로 먼저 보여 준다(입력 없이 한 번에 시작).
+  const demoProblems = (state.chatMode==='learn' && presenterOn()) ? DEMO_PROBLEMS : [];
+  const list = demoProblems.length ? [...demoProblems, ...base] : [...extras, ...base];
+  if(!demoProblems.length && state.plan && state.plan.plan && !state.plan.allDone && !list.includes('오늘의 계획')) list.unshift('오늘의 계획');
   list.slice(0,6).forEach(t=>{
     const b=document.createElement('button'); b.textContent=t;
     b.onclick=()=>{
@@ -6061,6 +6156,10 @@ async function sendExplain(){
     const r = await api('/api/chat/explain', { concept: ex.concept, text }, 35000);
     chatTyping(false);
     chatAdd('assistant', r.reply, true);
+    // ★ 2026-11-28 단계 표시줄: 설명까지 끝났으니 다섯 칸을 모두 채운다.
+    state.tutorStage = 'teachback'; renderLearnTrack();
+    // ★ 2026-11-28 발표 보기: 설명 검증 결과 카드(판정 방식·항목·저장 여부).
+    if(presenterOn() && r.verdict) renderExplainCard(r.verdict, ex.concept);
     // ★ 2026-11-21 (v1.71) «함께 가르친 친구» — explain 응답에 coTaught 가 오면 루미가 축하 한 줄을 덧붙인다.
     //   chatAdd 는 내부에서 textContent 로 넣으므로 닉네임이 HTML 로 새지 않는다.
     if(r && r.coTaught){
@@ -8713,6 +8812,9 @@ window.addEventListener('pointerup', rpPressEnd);
 window.addEventListener('blur', rpPressEnd);
 $('#chat-fab')?.addEventListener('click', chatOpen);
 $('#chat-close')?.addEventListener('click', chatClose);
+// ★ 2026-11-28 발표 보기 토글 — 켜진 상태는 브라우저에 남는다(발표 기기에서 한 번만 켜면 된다).
+$('#chat-present')?.addEventListener('click', ()=>setPresenter(!presenterOn()));
+setPresenter(presenterOn());
 $('#chat-send')?.addEventListener('click', ()=>sendChat(false));
 $('#chat-text')?.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendChat(false); } });
 $$('.chat-modes .chip').forEach(b=>b.addEventListener('click', ()=>chatModeSet(b.dataset.mode)));

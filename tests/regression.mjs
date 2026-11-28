@@ -88,6 +88,9 @@ async function bug1() {
     for (let i = 0; i < 3; i++) {
       const r = await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text } });
       assert(r.status === 200, `explain 실패 ${r.status}`);
+      // ★ 2026-11-28 발표 보기: explain 응답은 판정 근거(verdict)를 함께 돌려준다
+      assert(r.data && r.data.verdict && typeof r.data.verdict.source === 'string', 'verdict.source 없음');
+      assert(typeof r.data.verdict.saved === 'boolean', 'verdict.saved 없음');
       if (i < 2) shiftLamp(u.id, CONCEPT, 1);   // 하루 지난 것처럼 lit_day 를 어제로
     }
     const row = lampRow(u.id, CONCEPT);

@@ -129,6 +129,17 @@ await test('teach-back(키워드 폴백): «분모가 클수록 더 큰 수야»
   const v = await R.checkTeachBack('분모가 클수록 더 큰 수야', '분수의 덧셈', CARD, noLLM);
   assert.equal(v.ok, false);
 });
+await test('teach-back(발표 보기 근거): LLM 판정은 항목별 checks 를, 규칙 판정은 핵심어 수 hits 를 돌려준다', async () => {
+  const deps = { aliases: ALIASES,
+    callLLM: async () => ({ text: '{"checks":{"operation":true,"condition":false,"result":true},"ok":false,"reply":"분모가 같을 때 말했구나. 만약 분모가 다르면 어떻게 될까?"}' }),
+    parseChatJSON: (raw) => JSON.parse(raw) };
+  const v = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, deps);
+  assert.equal(v.source, 'llm');
+  assert.deepEqual(v.checks, { operation: true, condition: false, result: true });
+  const r = await R.checkTeachBack('분모가 같으면 분자끼리 더하면 돼요', '분수의 덧셈', CARD, noLLM);
+  assert.equal(r.source, 'rule'); assert.equal(typeof r.hits, 'number');
+  assert.equal(r.checks, undefined);
+});
 await test('teach-back: 카드가 없으면 검증하지 않고 nocard(실패)로 본다', async () => {
   const v = await R.checkTeachBack('아무 설명이나 길게 써 본다', '방금 배운 것', null, noLLM);
   assert.equal(v.ok, false); assert.equal(v.source, 'nocard');

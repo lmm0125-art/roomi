@@ -2434,6 +2434,22 @@ body.focus-live #chat-fab{z-index:105}
 
 /* ═══════════ v1.80 답변 방식 선택 ═══════════ */
 .chat-style{display:flex;align-items:center;gap:6px;padding:2px 14px 9px;flex-wrap:wrap}
+/* ★ 2026-11-28 발표 보기 — 헤더 토글, 같이 공부 단계 줄, 루미의 판단 한 줄, 설명 검증 카드 */
+.chat-pres{border:1px solid rgba(255,255,255,.6);background:transparent;color:#fff;font-size:11px;padding:4px 9px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.chat-pres:hover{background:rgba(255,255,255,.2)}
+.chat-pres.on{background:#fff;color:#2f6fed;border-color:#fff}
+.chat-track{display:flex;gap:6px;padding:2px 14px 9px}
+.chat-track.hidden{display:none}
+.ct-step{flex:1;min-width:0;font-size:10.5px;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:4px;align-items:stretch}
+.ct-step i{display:block;height:5px;border-radius:3px;background:rgba(90,107,133,.22)}
+.ct-step.done i{background:#4fc3a1}
+.ct-step.on{color:#2f6fed;font-weight:600}
+.ct-step.on i{background:#2f6fed}
+.msg-judge{font-size:11px;color:var(--muted);margin:2px 4px 8px;line-height:1.5}
+.explain-card{margin:8px 0 10px;padding:10px 12px;border:1px solid rgba(79,195,161,.55);border-radius:12px;background:rgba(79,195,161,.1);font-size:12px;line-height:1.6}
+.explain-card.warn{border-color:rgba(232,160,50,.6);background:rgba(232,160,50,.1)}
+.explain-card b{display:block;font-size:12.5px;margin-bottom:3px}
+.explain-card .ec-row{color:var(--muted)}
 .cs-label{font-size:10.5px;color:var(--muted);margin-right:2px}
 .cs-btn{font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid var(--line);
   background:#fff;color:var(--muted);cursor:pointer;transition:.15s}

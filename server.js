@@ -6175,7 +6175,21 @@ app.post('/api/chat/explain', async (req,res)=>{
   const lampRes = lightLamp(u.id, concept);   // ★ v1.71: teach-back 이 끝나면 기억 등불을 밝힌다(lit_day=오늘, 안개 리셋)
   db.prepare('UPDATE users SET understanding = understanding + 1 WHERE id=?').run(u.id);
   const coTaught = coTeacherOf(u.id, concept);   // ★ v1.71: 친구도 가르친 개념이면 닉네임만(내용 비공개)
+  // ★ 2026-11-28 발표 보기: 판정 근거를 함께 보낸다(화면은 발표 보기가 켜졌을 때만 펼친다).
+  //   source: llm|rule|nocard|gate|timeout · checks: 연산/조건/결과 불리언 · hits: 규칙 판정의 핵심어 개수
+  //   saved: 이번 설명을 기억에 저장했는지 · stored: 저장된 종류(explain:verified|explain:unverified) · credited: 마스터리 가점 여부
+  const savedNow = !!(plan.write && concept !== EXPLAIN_DEFAULT_CONCEPT);
+  const verdictInfo = {
+    ok: verdict.ok === true,
+    source: verdict.source || null,
+    checks: verdict.checks || null,
+    hits: Number.isFinite(verdict.hits) ? verdict.hits : null,
+    saved: savedNow,
+    stored: savedNow ? plan.source : null,
+    credited
+  };
   res.json({ ok:true, reply, concept, saved:true, left: Math.max(0, EXPLAIN_DAILY-used-1),
+    verdict: verdictInfo,
     ...(coTaught ? { coTaught } : {}),
     // ★ 2026-11-21 (v1.74) B1 삼막 1막: «첫 등불» 인 그 한 번만 firstLamp 로 알려준다.
     ...(lampRes && lampRes.first ? { firstLamp:true } : {}) });

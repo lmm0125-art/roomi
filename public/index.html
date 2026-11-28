@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261128d">
+<link rel="stylesheet" href="style.css?v=20261128e">
 </head>
 <body>
 
@@ -831,6 +831,7 @@
       <div class="chat-head-avatar" id="chat-head-avatar">🤖</div>
       <div class="chat-head-text"><b>루미</b><span>같이 생각하는 AI 친구</span></div>
       <span id="chat-und" class="chat-und">이해도 0</span>
+      <button id="chat-present" class="chat-pres" aria-pressed="false" title="발표 보기: 루미가 왜 그렇게 답했는지 함께 보여 줘요">발표 보기</button>
       <button id="chat-memory" class="chat-mem" title="루미의 기억">🧠</button>
       <button id="chat-close" class="chat-x" title="닫기">✕</button>
     </div>
@@ -846,6 +847,7 @@
       <button class="cs-btn" data-style="guide">단계로</button>
       <button class="cs-btn" data-style="direct">바로 설명</button>
     </div>
+    <div id="chat-track" class="chat-track hidden" aria-label="같이 공부 단계"></div>
     <div id="chat-log" class="chat-log"></div>
     <div id="chat-chips" class="chat-chips"></div>
     <div class="chat-input">
@@ -1470,14 +1472,15 @@
     <ol id="demo-tour-steps" class="demo-tour-steps"></ol>
     <div class="demo-tour-actions">
       <button id="demo-tour-enter" class="btn primary hidden">앱 화면으로 들어가기</button>
+      <button id="demo-tour-learn" class="btn hidden">발표 모드로 같이 공부 시작</button>
       <button id="demo-tour-report" class="btn hidden">오늘의 성과 보기</button>
       <button id="demo-tour-close" class="btn ghost">닫기</button>
     </div>
   </div>
 </div>
-<script src="app.js?v=20261128d"></script>
+<script src="app.js?v=20261128e"></script>
 <!-- ★ 2026-11-21 (v1.74) C8: world.js 캐시도 함께 bump(index.html 담당) — world.js 본체는 월드 담당이 고친다 -->
-<script src="world.js?v=20261128d"></script>
+<script src="world.js?v=20261128e"></script>
 </body>
 </html>
 
