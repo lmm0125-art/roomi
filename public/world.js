@@ -1492,12 +1492,60 @@
     } catch (e) { /* 파티클 생략 */ }
   }
 
+  // ★ v1.84 암석 결 텍스처 — 가로 층리 + 어두운 얼룩 + 세로 금. 먼 능선·부유섬 암반이 공유한다.
+  //   이름별로 한 번만 만들고(장면 단위 캐시), 난수는 쓰지 않는다(순수 해시 함수) → 배치 시퀀스 보존.
+  //   값은 1 근처의 밝은 바탕에 어두운 결만 얹는다: PBR albedo·emissive 에 곱해져도 원래 색을 유지한다.
+  function rockStrataTexture(scene, name, seed) {
+    if (scene['__roomi_' + name]) return scene['__roomi_' + name];
+    const S = 256;
+    const dt = new BABYLON.DynamicTexture(name, { width: S, height: S }, scene, false);
+    const g = dt.getContext();
+    const h = (n) => { const v = Math.sin(n * 127.1 + seed * 311.7) * 43758.5453; return v - Math.floor(v); };
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, S, S);
+    // 층리 — 가로로 긴 어두운 띠 18줄(두께·농도는 해시로 조금씩 다르게)
+    for (let b = 0; b < 18; b++) {
+      const y = (b / 18) * S + h(b) * 7;
+      g.fillStyle = `rgba(40,36,30,${(0.05 + h(b + 3) * 0.13).toFixed(3)})`;
+      g.fillRect(0, y, S, 2 + h(b + 7) * 4);
+    }
+    // 얼룩 — 작은 점 420개(밝고 어두운 것 섞어)
+    for (let i = 0; i < 420; i++) {
+      const x = h(i + 500) * S, y = h(i + 900) * S, r = 0.6 + h(i + 1300) * 1.6;
+      g.fillStyle = h(i + 1700) < 0.6
+        ? `rgba(30,27,22,${(0.08 + h(i + 2100) * 0.14).toFixed(3)})`
+        : `rgba(255,255,255,${(0.10 + h(i + 2500) * 0.16).toFixed(3)})`;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    // 세로 금 — 구불구불한 짧은 선 6개
+    g.strokeStyle = 'rgba(35,31,26,0.28)';
+    g.lineWidth = 1.1;
+    for (let c = 0; c < 6; c++) {
+      let x = h(c + 3000) * S, y = h(c + 3100) * S * 0.4;
+      g.beginPath(); g.moveTo(x, y);
+      for (let k = 0; k < 9; k++) {
+        x += (h(c * 31 + k + 3200) - 0.5) * 9;
+        y += 8 + h(c * 17 + k + 3300) * 10;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    dt.hasAlpha = false;
+    dt.update(false);
+    scene['__roomi_' + name] = dt;
+    return dt;
+  }
+
   function makeFloatingIsland(scene, x, y, z, s) {
     // v1.33 «비정형 암반 + 층진 잔디 + 다단 폭포 + 부유 쇄석» 전면 재설계
     const grassM = pbr(scene, 'fiGrass', '#6fa552', 0.94, 0);
     const grassEdge = pbr(scene, 'fiGrassEdge', '#4f8440', 0.96, 0);
     const soilM = pbr(scene, 'fiSoil', '#6b573f', 0.98, 0);
     const rockM = pbr(scene, 'fiRock', '#6d675c', 0.96, 0);
+    // ★ v1.84 암반 결 — 흰 바탕 텍스처라 albedo 색(#6d675c)이 그대로 살고 층리만 더해진다
+    const islandTex = rockStrataTexture(scene, 'wIslandStrata', 7);
+    islandTex.uScale = 2; islandTex.vScale = 2;
+    rockM.albedoTexture = islandTex;
     const rockDark = pbr(scene, 'fiRockDark', '#4e4941', 0.98, 0);
     // 쇄석은 PBR 조명에서 «하얗게» 날아가므로 색을 고정한 StandardMaterial 을 쓴다
     const chipM = new BABYLON.StandardMaterial('fiChipMat', scene);
@@ -5284,6 +5332,10 @@
       //   → 이 메시는 안개에서 제외하고, rings 의 3단 명도차로 대기 원근을 만든다.
       const m = new BABYLON.StandardMaterial('wRidgeMat' + ri, scene);
       m.emissiveColor = BABYLON.Color3.FromHexString(R.col);
+      // ★ v1.84 능선 결 — emissive 는 색×텍스처로 곱해지므로 결만 얹히고 기존 색·밤 디밍은 그대로다
+      const rtex = rockStrataTexture(scene, 'wRidgeStrata', 3);
+      rtex.uScale = 6; rtex.vScale = 1;
+      m.emissiveTexture = rtex;
       m.diffuseColor = new BABYLON.Color3(0, 0, 0);
       m.specularColor = new BABYLON.Color3(0, 0, 0);
       m.disableLighting = true;
