@@ -2213,6 +2213,10 @@
   function createStations(scene) {
     const stone = pbr(scene, 'stStone', '#cfc6b4', 0.92, 0);
     const stone2 = pbr(scene, 'stStone2', '#b7ad99', 0.9, 0);
+    // ★ v1.84 샘 돌 결 — 암석 결 텍스처 재사용(흰 바탕이라 돌 색이 유지된다)
+    const stTex = rockStrataTexture(scene, 'stStoneStrata', 11);
+    stTex.uScale = 2; stTex.vScale = 2;
+    stone.albedoTexture = stTex; stone2.albedoTexture = stTex;
     STATION_SPOTS.forEach((sp, i) => {
       const y = heightAt(sp.x, sp.z);
       const node = new BABYLON.TransformNode('station' + i, scene);
@@ -5356,11 +5360,48 @@
 
   // v1.33 마을 광장 — 판석을 «높이차·미세 회전» 으로 깔아 평면 타일 느낌을 없앤다.
   //   GLB 지형판은 원본 높이가 제각각이라 비율이 튀므로 여기선 절차적으로 만든다.
+  // ★ v1.84 판석 텍스처 — 한 장의 판석: 가장자리 줄눈(살짝 흔들린 선) + 표면 얼룩.
+  //   장면당 한 번 만들고 광장의 세 재질이 공유한다. 난수 없음(순수 해시) → 배치 시퀀스 보존.
+  function plazaFlagTexture(scene) {
+    if (scene.__roomi_plazaFlag) return scene.__roomi_plazaFlag;
+    const S = 256;
+    const dt = new BABYLON.DynamicTexture('plazaFlagTex', { width: S, height: S }, scene, false);
+    const g = dt.getContext();
+    const h = (n) => { const v = Math.sin(n * 127.1 + 19.3) * 43758.5453; return v - Math.floor(v); };
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, S, S);
+    // 표면 얼룩 — 작은 점
+    for (let i = 0; i < 260; i++) {
+      const x = h(i) * S, y = h(i + 400) * S, r = 0.5 + h(i + 800) * 1.3;
+      g.fillStyle = h(i + 1200) < 0.55
+        ? `rgba(60,52,40,${(0.05 + h(i + 1600) * 0.10).toFixed(3)})`
+        : `rgba(255,255,250,${(0.08 + h(i + 2000) * 0.12).toFixed(3)})`;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+    // 줄눈 — 가장자리를 따라 흔들리는 어두운 띠(네 변)
+    g.strokeStyle = 'rgba(58,52,42,0.42)';
+    g.lineWidth = 5;
+    const wob = (k) => (h(k) - 0.5) * 3.2;
+    g.beginPath();
+    for (let x = 0; x <= S; x += 16) g.lineTo(x, 2 + wob(x * 3 + 1));
+    for (let y = 0; y <= S; y += 16) g.lineTo(S - 2 + wob(y * 3 + 2), y);
+    for (let x = S; x >= 0; x -= 16) g.lineTo(x, S - 2 + wob(x * 3 + 3));
+    for (let y = S; y >= 0; y -= 16) g.lineTo(2 + wob(y * 3 + 4), y);
+    g.closePath(); g.stroke();
+    dt.hasAlpha = false;
+    dt.update(false);
+    scene.__roomi_plazaFlag = dt;
+    return dt;
+  }
+
   function makePlaza(scene, cx, cz) {
     // v1.33: 밝은 회색은 ACES 노출에서 «하얀 타일» 로 날아가므로 한 톤 이상 낮춘다
     const light = pbr(scene, 'plazaLight', '#9c927c', 0.94, 0);
     const dark = pbr(scene, 'plazaDark', '#7d7462', 0.95, 0);
     const moss = pbr(scene, 'plazaMoss', '#6c8759', 0.96, 0);
+    // ★ v1.84 판석 결 — 흰 바탕 텍스처라 재질 색(시멘트 톤)이 그대로 살고 줄눈만 더해진다
+    const flag = plazaFlagTexture(scene);
+    [light, dark, moss].forEach((m) => { m.albedoTexture = flag; });
     for (let row = 0; row < 4; row++) {
       for (let col = 0; col < 6; col++) {
         const i = row * 6 + col;
