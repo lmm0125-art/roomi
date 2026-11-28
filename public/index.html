@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261128f">
+<link rel="stylesheet" href="style.css?v=20261128j">
 </head>
 <body>
 
@@ -42,7 +42,7 @@
     <div class="brand">
       <div class="brand-mark"><svg viewBox="0 0 48 48"><use href="#roomi-logo"/></svg></div>
       <!-- ★ 2026-11-21 (v1.74): 버전 표기 갱신 — 논리/편의 빅 배치(설정 화면 · 탭바 · 삼막 인도) -->
-      <div class="brand-text"><b>Roo<span>Mi</span><em class="ver">v1.83</em></b><span>루미 · AI 학습 파트너</span></div>
+      <div class="brand-text"><b>Roo<span>Mi</span><em class="ver">v1.87</em></b><span>루미 · AI 학습 파트너</span></div>
     </div>
 
     <nav class="side-nav">
@@ -79,10 +79,10 @@
         <span class="side-user-go">📊</span>
       </button>
       <div class="side-tools">
-        <button id="btn-sfx" class="icon-btn" title="소리 켜기/끄기">🔊</button>
-        <button id="btn-reset" class="icon-btn" title="처음부터 다시 시작">↺</button>
+        <button id="btn-sfx" class="icon-btn" title="소리 켜기/끄기" aria-label="소리 켜기/끄기">🔊</button>
+        <button id="btn-reset" class="icon-btn" title="처음부터 다시 시작" aria-label="처음부터 다시 시작">↺</button>
         <!-- ★ 2026-11-21 (v1.74) C6: 설정 화면으로 가는 진입점 — 사이드바 맨 아래 ⚙️ -->
-        <button id="btn-settings-side" class="icon-btn" title="설정 화면">⚙️</button>
+        <button id="btn-settings-side" class="icon-btn" title="설정 화면" aria-label="설정 화면">⚙️</button>
       </div>
     </div>
   </aside>
@@ -101,10 +101,10 @@
         <span id="cellbadge" class="pill cellbadge"><i data-icon="cell">🪙</i> <b id="cell-balance">0</b> 셀</span>
         <span class="pill"><b id="top-level">Lv.1</b></span>
         <span class="pill"><b id="top-streak">🔥0</b></span>
-        <button id="btn-report" class="pill pill-btn report-mobile" title="리포트">📊</button>
+        <button id="btn-report" class="pill pill-btn report-mobile" title="리포트" aria-label="리포트">📊</button>
         <button id="btn-parent" class="pill pill-btn" title="보호자 대시보드">🛡 보호자</button>
-        <button id="btn-guide" class="pill pill-btn" title="사용법">?</button>
-        <button id="btn-settings" class="pill pill-btn" title="설정">⚙</button>
+        <button id="btn-guide" class="pill pill-btn" title="사용법" aria-label="사용법">?</button>
+        <button id="btn-settings" class="pill pill-btn" title="설정" aria-label="설정">⚙</button>
       </div>
     </header>
 
@@ -208,7 +208,8 @@
           </div>
           <div class="screen-actions">
             <button id="btn-today-start" class="btn primary">▶ 오늘 학습 시작</button>
-            <button id="btn-more" class="btn ghost more-btn" title="더 보기" aria-haspopup="menu" aria-expanded="false">⋯</button>
+            <button id="btn-next-todo" class="btn ghost" title="지금 해 볼 것 한 가지를 골라 줘요">▶ 다음 할 일</button>
+            <button id="btn-more" class="btn ghost more-btn" title="더 보기" aria-haspopup="menu" aria-expanded="false" aria-label="더 보기">⋯</button>
             <div id="actions-menu" class="actions-menu hidden" role="menu">
               <button id="btn-story" class="btn ghost">🪛 정비사 수첩</button>
               <button id="btn-growth" class="btn ghost">📈 성장 지도</button>
@@ -225,7 +226,7 @@
           <span class="nb-avatar" id="nb-avatar">🤖</span>
           <div class="nb-body"><b id="nb-name">루미</b><span id="nb-text"></span></div>
           <button id="nb-cta" class="btn primary small">가기</button>
-          <button id="nb-close" class="nb-x" title="닫기">✕</button>
+          <button id="nb-close" class="nb-x" title="닫기" aria-label="닫기">✕</button>
         </div>
 
         <div id="mood-card" class="mood-card hidden">
@@ -268,7 +269,7 @@
             <div class="room-panes">
               <div class="room-pane on" data-room-pane="today">
                 <div class="panel plan-panel">
-                  <div class="panel-head"><h3>오늘의 학습 계획</h3><div class="plan-head-right"><span class="mini-chip" id="plan-source">AI</span><button id="btn-prefs" class="mini-chip" title="학습 설정">⚙</button></div></div>
+                  <div class="panel-head"><h3>오늘의 학습 계획</h3><div class="plan-head-right"><span class="mini-chip" id="plan-source">AI</span><button id="btn-prefs" class="mini-chip" title="학습 설정" aria-label="학습 설정">⚙</button></div></div>
                   <p id="plan-focus" class="plan-focus hidden"></p>
                   <div id="plan-list"></div>
                   <div class="plan-foot"><span id="plan-progress">0/0</span><span class="hint" id="tomorrow-note">내일 오면 새 계획이 기다려</span></div>
@@ -667,7 +668,7 @@
         <div class="friends-layout">
           <div class="panel">
             <div class="panel-head"><h3>내 친구 코드</h3><span class="mini-chip">CODE</span></div>
-            <button class="friend-code" id="friend-code" title="복사">------</button>
+            <button class="friend-code" id="friend-code" title="복사" aria-label="친구 코드 복사">------</button>
             <p class="hint">친구에게 이 코드를 알려 주세요. 실명·전화번호는 필요 없어요.</p>
             <div class="friend-add">
               <input id="friend-code-input" maxlength="6" placeholder="친구 코드 6자리">
@@ -814,8 +815,8 @@
       <div class="chat-head-text"><b>루미</b><span>같이 생각하는 AI 친구</span></div>
       <span id="chat-und" class="chat-und">이해도 0</span>
       <button id="chat-present" class="chat-pres" aria-pressed="false" title="발표 보기: 루미가 왜 그렇게 답했는지 함께 보여 줘요">발표 보기</button>
-      <button id="chat-memory" class="chat-mem" title="루미의 기억">🧠</button>
-      <button id="chat-close" class="chat-x" title="닫기">✕</button>
+      <button id="chat-memory" class="chat-mem" title="루미의 기억" aria-label="루미의 기억">🧠</button>
+      <button id="chat-close" class="chat-x" title="닫기" aria-label="닫기">✕</button>
     </div>
     <div class="chat-modes">
       <button class="chip on" data-mode="chat">수다</button>
@@ -834,7 +835,7 @@
     <div id="chat-chips" class="chat-chips"></div>
     <div class="chat-input">
       <input id="chat-text" maxlength="200" placeholder="루미에게 말을 걸어 보세요">
-      <button id="chat-mic" class="chat-mic" title="음성으로 말하기">🎤</button>
+      <button id="chat-mic" class="chat-mic" title="음성으로 말하기" aria-label="음성으로 말하기">🎤</button>
       <button id="chat-send" class="btn primary">보내기</button>
     </div>
     <div class="chat-foot">
@@ -861,7 +862,7 @@
   <!-- ══════════ 루미랑 같이 집중 (2026-11-04) ══════════ -->
   <div id="focus-modal" class="modal hidden">
     <div class="modal-card focus-card">
-      <button class="preview-close" data-close="focus-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="focus-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>⏱ 루미랑 같이 집중</h3>
       <p class="desc">루미가 옆에 앉아 있을게요. 끝나면 작은 선물이 있어요!</p>
       <div class="focus-pick" id="focus-pick">
@@ -893,7 +894,7 @@
   <!-- v1.40 대화 분석 상세 — 원문 JOIN + 분류 결과 -->
   <div id="chat-analysis-modal" class="modal hidden">
     <div class="modal-card ca-modal">
-      <button id="ca-close" class="preview-close" data-close="chat-analysis-modal" title="닫기">✕</button>
+      <button id="ca-close" class="preview-close" data-close="chat-analysis-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>대화 기록 · 분석 결과</h3>
       <p class="hint">루미와 주고받은 모든 대화가 저장되고, 한 턴씩 분석돼요.</p>
       <div id="ca-list" class="ca-list"></div>
@@ -904,7 +905,7 @@
        틀린 답을 지우는 대신 «처음 생각» 을 남기고, 나중에 스스로 «고쳐 쓴 생각» 을 적는다. -->
   <div id="story-modal" class="modal hidden">
     <div class="modal-card story-card">
-      <button id="story-close" class="preview-close" data-close="story-modal" title="닫기">✕</button>
+      <button id="story-close" class="preview-close" data-close="story-modal" title="닫기" aria-label="닫기">✕</button>
       <div class="story-head">
         <span class="story-badge" id="story-badge">새내기 정비사</span>
         <h3>공작소 · 정비사 수첩</h3>
@@ -959,7 +960,7 @@
         <!-- ★ span → button : 키보드·스크린리더로도 «의뢰 건너뛰기» 를 누를 수 있게 (world.js 는 같은 addEventListener 바인딩) -->
         <button id="world-quests" class="world-chip" type="button">🛠 0 / 3</button>
       </div>
-      <button id="world-close" class="world-close" title="나가기">✕</button>
+      <button id="world-close" class="world-close" title="나가기" aria-label="나가기">✕</button>
     </div>
     <div id="world-hint" class="world-hint-line">드래그로 둘러보고, WASD로 걸어요</div>
     <button id="world-prompt" class="world-prompt hidden">
@@ -970,7 +971,7 @@
       <div class="wq-card">
         <div class="wq-head">
           <span class="wq-chip" id="wq-topic">오늘의 질문</span>
-          <button id="wq-close" class="wq-x" title="닫기">✕</button>
+          <button id="wq-close" class="wq-x" title="닫기" aria-label="닫기">✕</button>
         </div>
         <p class="wq-q" id="wq-q"></p>
         <div class="wq-opts" id="wq-opts"></div>
@@ -984,7 +985,7 @@
     <!-- v1.38 이스터에그: 길이 끊기는 자리에 서 있는 낡은 이정표 -->
     <div id="world-secret" class="world-secret hidden">
       <div class="ws-card">
-        <button id="ws-close" class="wq-x" title="닫기">✕</button>
+        <button id="ws-close" class="wq-x" title="닫기" aria-label="닫기">✕</button>
         <div class="ws-head">
           <span class="ws-ico">🪧</span>
           <div class="ws-title"><b>오래된 이정표</b><span>RooMi 마을 · 2026</span></div>
@@ -1003,7 +1004,7 @@
     <!-- v1.39 «별빛 저장고» — 고쳐 쓴 생각 수만큼 등이 켜지는 대세계 장치 -->
     <div id="world-vault" class="world-secret hidden">
       <div class="ws-card vault-card">
-        <button id="wv-close" class="wq-x" title="닫기">✕</button>
+        <button id="wv-close" class="wq-x" title="닫기" aria-label="닫기">✕</button>
         <div class="ws-head">
           <span class="ws-ico">🏮</span>
           <div class="ws-title"><b>별빛 저장고</b><span>고쳐 쓴 생각이 여기에 쌓여요</span></div>
@@ -1064,7 +1065,7 @@
 
   <div id="game-puzzle" class="modal hidden">
     <div class="modal-card game-card">
-      <button class="preview-close" data-close="game-puzzle" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-puzzle" title="닫기" aria-label="닫기">✕</button>
       <h3>🧩 오늘의 퍼즐</h3>
       <p class="desc" id="pz-topic"></p>
       <div id="pz-question" class="pz-q"></div>
@@ -1085,7 +1086,7 @@
        이 모달은 방어 놀이일 뿐 잠금 화면이 아니므로 배경 클릭·Escape 로도 닫힌다. -->
   <div id="game-tower" class="modal hidden">
     <div class="modal-card game-card tower-card">
-      <button class="preview-close" data-close="game-tower" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-tower" title="닫기" aria-label="닫기">✕</button>
       <h3>🗼 안개 속의 탑</h3>
       <p class="hint" id="tw-howto" hidden>루미가 배운 말과 안개가 왜곡한 말을 구별해 줘!</p>
       <div id="tw-floor" class="tw-floor"></div>
@@ -1096,7 +1097,7 @@
 
   <div id="game-roomi" class="modal hidden">
     <div class="modal-card game-card ng-modal">
-      <button class="preview-close" data-close="game-roomi" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-roomi" title="닫기" aria-label="닫기">✕</button>
       <span class="ng-kicker">루미 연습실</span>
       <h3>루미 훈련소</h3>
       <p class="desc">예시를 골라 주면 루미가 규칙을 추측해요. 한쪽으로 치우친 예시는 엉뚱한 규칙을 낳아요.</p>
@@ -1106,7 +1107,7 @@
 
   <div id="game-balance" class="modal hidden">
     <div class="modal-card game-card ng-modal">
-      <button class="preview-close" data-close="game-balance" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-balance" title="닫기" aria-label="닫기">✕</button>
       <span class="ng-kicker">루미 연습실</span>
       <h3>균형 공방</h3>
       <p class="desc">저울 왼쪽과 똑같아지도록 블록을 올려 줘. 분수와 소수는 같은 무게일 수 있어요.</p>
@@ -1116,7 +1117,7 @@
 
   <div id="game-estimate" class="modal hidden">
     <div class="modal-card game-card ng-modal">
-      <button class="preview-close" data-close="game-estimate" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-estimate" title="닫기" aria-label="닫기">✕</button>
       <span class="ng-kicker">루미 연습실</span>
       <h3>어림 항해</h3>
       <p class="desc">답을 대략 고르고, 얼마나 확신하는지 함께 말해 줘. 좁게 말하면 점수가 크지만 빗나가면 0점이에요.</p>
@@ -1126,7 +1127,7 @@
 
   <div id="game-reverse" class="modal hidden">
     <div class="modal-card game-card ng-modal">
-      <button class="preview-close" data-close="game-reverse" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-reverse" title="닫기" aria-label="닫기">✕</button>
       <span class="ng-kicker">루미 연습실</span>
       <h3>거꾸로 질문소</h3>
       <p class="desc">답을 먼저 보고, 그 답이 나오는 식을 만들어 봐. 60초 동안 많이 만들수록 좋아요.</p>
@@ -1136,7 +1137,7 @@
 
   <div id="game-repair" class="modal hidden">
     <div class="modal-card game-card repair-card">
-      <button class="preview-close" data-close="game-repair" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-repair" title="닫기" aria-label="닫기">✕</button>
       <h3 id="repair-title">🛠️ 고장 탐정 · 멈춘 기계의 사슬</h3>
       <p class="hint" id="repair-hint">전기가 지나가는 길을 따라가며 «가장 위에서 멈춘 부품» 을 찾아요. 찾았으면 그 부품을 «꾹 누르고» 초록 테두리가 다 찰 때까지 기다려요. 전력은 한정되어 있어요.</p>
       <div class="repair-hud">
@@ -1161,7 +1162,7 @@
        모든 판은 solver 가 «풀 수 있음» 을 확인한 뒤에만 시작한다. -->
   <div id="game-sort" class="modal hidden">
     <div class="modal-card game-card sort-card">
-      <button class="preview-close" data-close="game-sort" title="닫기">✕</button>
+      <button class="preview-close" data-close="game-sort" title="닫기" aria-label="닫기">✕</button>
       <h3>💧 빛의 병 정리</h3>
       <p class="desc">위쪽 빛만 <b>같은 색</b> 위에 또는 <b>빈 병</b>에 부어요. <b>주문서</b>를 고르고, 좋은 붓기로 <b>빛 조각</b>을 모아 도구를 만들고, <b>보관 병</b>에 한 층 잠시 넣어 두세요. 보관 병은 비워야 끝나요!</p>
       <div class="sort-modes" role="tablist">
@@ -1203,7 +1204,7 @@
 
   <div id="parent-dashboard" class="modal hidden">
     <div class="modal-card pd-card">
-      <button class="preview-close" data-close="parent-dashboard" title="닫기">✕</button>
+      <button class="preview-close" data-close="parent-dashboard" title="닫기" aria-label="닫기">✕</button>
       <h3>🛡 보호자 대시보드</h3>
       <p class="desc">오늘의 학습 · 플레이 요약</p>
       <div id="pd-body" class="pd-grid"></div>
@@ -1219,7 +1220,7 @@
 
   <div id="revive-modal" class="modal hidden">
     <div class="modal-card center-card">
-      <button class="preview-close" data-close="revive-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="revive-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>어제 하루 쉬었네!</h3>
       <p class="desc">20셀로 <b id="revive-streak">🔥7</b>일 연속을 되살릴까?</p>
       <div class="revive-actions">
@@ -1231,7 +1232,7 @@
 
   <div id="review-modal" class="modal hidden">
     <div class="modal-card review-card">
-      <button class="preview-close" data-close="review-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="review-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>📚 3일 전 틀린 문제</h3>
       <p class="desc" id="review-topic"></p>
       <div id="review-question" class="review-q"></div>
@@ -1243,7 +1244,7 @@
 
   <div id="memory-modal" class="modal hidden">
     <div class="modal-card memory-card">
-      <button class="preview-close" data-close="memory-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="memory-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>🧠 루미의 기억</h3>
       <p class="desc">대화에서 배운 것을 기억해요. 지우고 싶으면 삭제할 수 있어요.</p>
       <div id="memory-list"></div>
@@ -1264,7 +1265,7 @@
 
   <div id="friend-chat" class="modal hidden">
     <div class="modal-card friend-chat-card">
-      <button class="preview-close" data-close="friend-chat" title="닫기">✕</button>
+      <button class="preview-close" data-close="friend-chat" title="닫기" aria-label="닫기">✕</button>
       <div class="fc-head">
         <div class="fc-avatar" id="fc-avatar"></div>
         <div class="fc-title"><b id="fc-name">친구</b><span id="fc-status">친구와 대화</span></div>
@@ -1278,7 +1279,7 @@
 
   <div id="guide-modal" class="modal hidden">
     <div class="modal-card guide-card">
-      <button class="preview-close" data-close="guide-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="guide-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>루미 사용법</h3>
       <p class="desc">처음이면 이 다섯 가지만 보면 돼요.</p>
       <ol class="guide-steps">
@@ -1298,7 +1299,7 @@
 
   <div id="prefs-modal" class="modal hidden">
     <div class="modal-card prefs-card">
-      <button class="preview-close" data-close="prefs-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="prefs-modal" title="닫기" aria-label="닫기">✕</button>
       <h3>학습 설정</h3>
       <p class="desc">루미가 계획을 짤 때 반영해요.</p>
       <div class="pref-row"><span>하루 학습 시간</span><div class="pref-chips" id="pref-minutes"><button data-min="5">5분</button><button data-min="10">10분</button><button data-min="15">15분</button></div></div>
@@ -1347,7 +1348,7 @@
 
   <div id="preview-modal" class="modal hidden">
     <div class="modal-card preview-card">
-      <button id="preview-close" class="preview-close" title="닫기">✕</button>
+      <button id="preview-close" class="preview-close" title="닫기" aria-label="닫기">✕</button>
       <h3 id="preview-title"></h3>
       <div class="preview-stage"><canvas id="preview-canvas"></canvas></div>
       <p id="preview-desc" class="desc"></p>
@@ -1357,7 +1358,7 @@
 
   <div id="share-modal" class="modal hidden">
     <div class="modal-card">
-      <button id="share-close" class="preview-close" title="닫기">✕</button>
+      <button id="share-close" class="preview-close" title="닫기" aria-label="닫기">✕</button>
       <h3 id="share-title">내 로봇</h3>
       <p id="share-desc" class="desc"></p>
       <img id="share-img" alt="내 로봇" style="width:100%;border-radius:16px;background:#e8f0fa">
@@ -1367,7 +1368,7 @@
 
   <div id="rank-modal" class="modal hidden">
     <div class="modal-card">
-      <button id="rank-close" class="preview-close" title="닫기">✕</button>
+      <button id="rank-close" class="preview-close" title="닫기" aria-label="닫기">✕</button>
       <h3>오늘의 랭킹</h3>
       <p class="desc">오늘 기록된 순위예요. 매일 새로 시작!</p>
       <div id="rank-body"></div>
@@ -1377,7 +1378,7 @@
   <!-- v1.38 주인공 카드 — 로고를 1.2초 누르거나 ↑↑↓↓←→←→BA 로 열린다 -->
   <div id="credits-modal" class="modal hidden">
     <div class="modal-card credits-card">
-      <button class="preview-close" data-close="credits-modal" title="닫기">✕</button>
+      <button class="preview-close" data-close="credits-modal" title="닫기" aria-label="닫기">✕</button>
       <div class="big-emoji">🛠️</div>
       <h3>이 마을을 만든 사람</h3>
       <p class="credits-name">이멍멍</p>
@@ -1443,15 +1444,18 @@
     <div class="demo-tour-actions">
       <button id="demo-tour-enter" class="btn primary hidden">앱 화면으로 들어가기</button>
       <button id="demo-tour-learn" class="btn hidden">발표 모드로 같이 공부 시작</button>
+      <button id="demo-tour-story" class="btn primary hidden">발표 이야기 모드 (일곱 장면)</button>
+      <button id="demo-tour-reset" class="btn ghost hidden">리허설 초기화 (데모 계정 처음 상태로)</button>
       <button id="demo-tour-report" class="btn hidden">오늘의 성과 보기</button>
       <button id="demo-tour-close" class="btn ghost">닫기</button>
     </div>
   </div>
 </div>
-<script src="app.js?v=20261128f"></script>
-<script src="minigames.js?v=20261128f"></script>
+<script src="app.js?v=20261128j"></script>
+<script src="minigames.js?v=20261128j"></script>
+<script src="present.js?v=20261128j"></script>
 <!-- ★ 2026-11-21 (v1.74) C8: world.js 캐시도 함께 bump(index.html 담당) — world.js 본체는 월드 담당이 고친다 -->
-<script src="world.js?v=20261128f"></script>
+<script src="world.js?v=20261128j"></script>
 </body>
 </html>
 

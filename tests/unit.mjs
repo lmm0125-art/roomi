@@ -395,8 +395,8 @@ await test('탑: 같은 입력이면 같은 덱(GET/POST 가 같은 문장을 �
 
 // ---------- 6. 버전 일관성 ----------
 // 현재 릴리스 minor. 버전을 올릴 때 package.json · index.html · HANDOFF.md 와 함께 이 값도 올린다.
-const CURRENT_MINOR = '1.83';
-await test('버전: package.json · index.html · HANDOFF.md 가 현재 릴리스(1.83)를 가리키고 서로 같다', async () => {
+const CURRENT_MINOR = '1.87';
+await test('버전: package.json · index.html · HANDOFF.md 가 현재 릴리스(1.87)를 가리키고 서로 같다', async () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
   const hand = fs.readFileSync(path.join(ROOT, 'HANDOFF.md'), 'utf8');

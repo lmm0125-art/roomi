@@ -27,7 +27,8 @@ const env = {
   STUB_MODE_FILE: MODE_FILE, STUB_LOG: LOG_FILE, STUB_DELAY_MS: '50',
   TEACH_VERIFY_TIMEOUT_MS: '10',      // 동기 판정은 50ms 스텁보다 먼저 끝나지 않게 → 시간 초과 경로
   TEACH_UPGRADE_TIMEOUT_MS: '300',    // 뒤늦은 업그레이드는 충분히 기다린다
-  TEACH_UPGRADE_BACKOFF_MS: '30',     // 재시도 간격 30ms, 120ms
+  TEACH_UPGRADE_BACKOFF_MS: '30',
+  TEACH_UPGRADE_TICK_MS: '20',       // 재시도 작업기 주기(테스트는 빠르게)
 };
 const server = spawn(process.execPath, ['--experimental-sqlite', 'server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';

@@ -19,7 +19,7 @@ cleanup() { [ -n "${PID:-}" ] && kill "$PID" 2>/dev/null || true; rm -f "$DB" "$
 trap cleanup EXIT
 
 step "0. 서버 시작 (규칙 폴백, 포트 $PORT)"
-(cd "$ROOT" && ROOMI_TEST_NO_LLM=1 DB_PATH="$DB" ADMIN_KEY=demo-admin PORT="$PORT" \
+(cd "$ROOT" && ROOMI_TEST_NO_LLM=1 ROOMI_DEMO=1 DB_PATH="$DB" ADMIN_KEY=demo-admin PORT="$PORT" \
   "$NODE" --experimental-sqlite server.js >"$LOG" 2>&1) &
 PID=$!
 for _ in $(seq 1 60); do curl -s -o /dev/null "$B/" && break; sleep 0.5; done

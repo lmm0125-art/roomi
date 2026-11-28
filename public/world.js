@@ -5715,6 +5715,14 @@
   }
 
   // ────────────────────────── 열기 / 닫기 ──────────────────────────
+  // ★ 2026-11-28: WebGL 이 없거나 엔진이 세워지지 않은 기기인지 판별한다(다시 시도해도 소용없는 경우).
+  function worldNoGl(e) {
+    try {
+      if (!window.BABYLON || !BABYLON.Engine) return true;
+      if (BABYLON.Engine.isSupported && !BABYLON.Engine.isSupported()) return true;
+    } catch (_) { return true; }
+    return /isSupported|WebGL/i.test(String((e && e.message) || ''));
+  }
   async function openWorld() {
     if (W.open || W.opening) return;
     W.opening = true;
@@ -5736,7 +5744,9 @@
       console.error('[world]', e);
       // ★ 사용자가 로딩 중 닫은 것(cancelled)은 오류 화면 없이 조용히 넘어간다
       if (!(e && e.cancelled)) {
-        if (loading) loading.innerHTML = '<span>AI 마을을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.</span>';
+        if (loading) loading.innerHTML = worldNoGl(e)
+          ? '<span>이 기기에서는 3D 마을을 켤 수 없어요. 지혜의 샘과 연습실은 그대로 쓸 수 있어요.</span>'
+          : '<span>AI 마을을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.</span>';
       }
       // 로딩 중 닫기 경로는 closeWorld 가 조기 반환해 FAB 를 못 돌려 준다 — 여기서 복구
       if (fab) fab.classList.remove('hidden');
