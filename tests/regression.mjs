@@ -519,6 +519,26 @@ async function durability() {
   });
 }
 
+// 2026-11-28 탑 화면용 정보: 등불 흐림(decay)·보스 여부는 항상 있고, 원래 문장과 안개 여부는 맞힌 뒤에만 나온다
+async function towerVisual() {
+  await test('탑 화면: 층마다 등불 흐림과 보스 여부가 있고, 정답 뒤에만 원래 문장이 나온다', async () => {
+    const u = await newUser('twv');
+    await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 같으면 분자끼리 더하면 돼요' } });
+    const t = await api('/api/tower/today', { token: u.token });
+    assert(t.status === 200 && Array.isArray(t.data.floors) && t.data.floors.length > 0, '탑 층이 없다');
+    const f0 = t.data.floors[0];
+    assert(typeof f0.decay === 'number' && f0.decay >= 0 && f0.decay <= 100, `decay 이상: ${f0.decay}`);
+    assert(typeof f0.isBoss === 'boolean', 'isBoss 가 없다');
+    assert(!('original' in f0) && !('fogged' in f0), '답하기 전에 정답 정보가 나오면 안 된다');
+    const a = await api('/api/tower/answer', { method: 'POST', token: u.token, body: { floor: 0, choice: 'original' } });
+    if (a.data.correct === true) {
+      assert(typeof a.data.fogged === 'boolean' && typeof a.data.original === 'string', '정답 뒤에 원래 문장과 안개 여부가 있어야 한다');
+    } else {
+      assert(a.data.correct === false && typeof a.data.why === 'string', '오답 뒤 이유가 있어야 한다');
+    }
+  });
+}
+
 async function security() {
   await test('보안: PIN 계정은 닉네임만으로 들어갈 수 없다(PIN 없으면 needPin, 틀리면 거절, 맞으면 통과)', async () => {
     const u = await newUser('sec1');
@@ -639,7 +659,7 @@ async function lighthouse() {
   try {
     await waitReady();
     console.log(`RooMi 회귀 테스트 · 서버 ${BASE} · DB ${DB_FILE}`);
-    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse(); await minigames(); await presenterTools(); await security(); await durability();
+    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse(); await minigames(); await presenterTools(); await security(); await durability(); await towerVisual();
   } catch (e) {
     console.log('\n[실행 오류] ' + e.message);
     code = 1;

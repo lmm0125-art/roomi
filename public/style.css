@@ -2642,3 +2642,92 @@ body.focus-live #chat-fab{z-index:105}
 @keyframes ngFade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 #btn-next-todo{white-space:nowrap}
 @media (prefers-reduced-motion: reduce){ .fh-hand{animation:none} .pst-spot{transition:none} }
+
+/* ───────────── 2026-11-28: 안개 속의 탑 — 탑 그림 · 안개 층 · 등반 · 원래 말 드러남 ───────────── */
+.tw-stage{display:flex;gap:16px;align-items:stretch;margin-top:6px}
+.tw-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.tw-tower{position:relative;width:138px;flex:none;align-self:center;overflow:hidden;border-radius:18px 18px 12px 12px;
+  background:linear-gradient(180deg,#e6eefb,#c7d7ee);border:1px solid #b9c9e2;
+  box-shadow:inset 0 0 0 4px rgba(255,255,255,.45),0 8px 18px rgba(40,70,120,.12)}
+.tw-tower::before{content:'';position:absolute;left:50%;top:0;bottom:0;width:20px;margin-left:-10px;
+  background:linear-gradient(90deg,rgba(255,255,255,.15),rgba(255,255,255,.6),rgba(255,255,255,.15));pointer-events:none}
+.tw-tower.shake{animation:twShake .5s}
+.tw-f{position:absolute;left:16px;right:16px;height:34px;border-radius:10px;z-index:1;
+  background:linear-gradient(180deg,#ffffff,#eef3fb);border:1px solid #d3deee;box-shadow:0 3px 0 rgba(40,70,120,.08);
+  display:flex;align-items:center;justify-content:center;transition:filter .4s,opacity .4s,border-color .4s}
+.tw-f.boss{height:44px;left:12px;right:12px;background:linear-gradient(180deg,#34456e,#1f2a48);border-color:#3c4f7c}
+.tw-win{position:relative;width:22px;height:16px;border-radius:8px 8px 4px 4px;background:rgba(120,140,170,.35);transition:background .5s,box-shadow .5s}
+.tw-glyph{position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;
+  background:#ffd36b;opacity:calc(var(--lamp,1) * 0.9 + 0.1);box-shadow:0 0 calc(var(--lamp,1) * 10px) #ffd36b}
+.tw-f.done .tw-win{background:#ffe08a;box-shadow:0 0 10px rgba(255,200,80,.8)}
+.tw-f.done{border-color:#e8c46a}
+.tw-f.now{border-color:#5b8def;box-shadow:0 0 0 3px rgba(91,141,239,.28),0 3px 0 rgba(40,70,120,.08)}
+.tw-f.now .tw-win{animation:twLit 1.6s ease-in-out infinite}
+.tw-f.above{filter:saturate(.35);opacity:.55}
+.tw-f.boss.above{opacity:.7}
+.tw-fog{position:absolute;left:-30%;right:-30%;top:-12%;bottom:var(--fog-bottom,0px);z-index:2;pointer-events:none;
+  background:
+    radial-gradient(ellipse 55% 22% at 30% 72%,rgba(236,243,252,.96),transparent 70%),
+    radial-gradient(ellipse 50% 20% at 72% 44%,rgba(228,237,250,.92),transparent 70%),
+    linear-gradient(180deg,rgba(238,244,252,.2),rgba(238,244,252,.78));
+  transition:bottom .9s cubic-bezier(.3,1,.4,1)}
+.tw-fog-a{animation:twFogA 9s ease-in-out infinite alternate}
+.tw-fog-b{opacity:.55;animation:twFogB 12s ease-in-out infinite alternate}
+.tower-card.fog-heavy .tw-fog{opacity:1}
+.tw-top{position:absolute;top:6px;left:0;right:0;text-align:center;font-size:16px;z-index:3}
+.tw-beam{position:absolute;left:50%;top:26px;bottom:0;width:26px;margin-left:-13px;z-index:3;opacity:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(255,240,180,.95),rgba(255,240,180,.0));transition:opacity .8s}
+.tw-tower.beam .tw-beam{opacity:.85;animation:twBeam 1.8s ease-in-out infinite alternate}
+.tw-climber{position:absolute;left:50%;margin-left:-20px;width:40px;height:44px;z-index:4;
+  transition:bottom .8s cubic-bezier(.3,1.3,.5,1);pointer-events:none}
+.tw-climber-pose svg{width:34px;height:34px;display:block;margin:0 auto;animation:twBob 2.2s ease-in-out infinite}
+.tw-lampcard{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:4px 0 6px}
+.tw-lamp-name{font-weight:800;color:#33415c}
+.tw-lamp-bar{flex:1;min-width:80px;height:8px;border-radius:6px;background:#e4ebf5;overflow:hidden}
+.tw-lamp-bar i{display:block;height:100%;width:var(--lvl,50%);background:linear-gradient(90deg,#ffd36b,#ffb020);transition:width .8s,box-shadow .6s;border-radius:6px}
+.tw-lampcard.bright .tw-lamp-bar i{box-shadow:0 0 10px #ffd36b}
+.tw-lamp-word{font-weight:800}
+.tw-bubble{position:relative;overflow:visible}
+.tw-bubble.fog-in{animation:twFogIn 1.1s ease-out}
+.tw-bubble.clear{box-shadow:0 0 0 3px rgba(255,210,100,.45)}
+.tw-wisp{position:absolute;bottom:0;width:34px;height:18px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(236,243,252,.95),rgba(236,243,252,0) 70%);animation:twWisp 1.3s ease-out forwards}
+.tw-compare{display:flex;flex-direction:column;gap:4px;margin-top:8px;font-size:13px;line-height:1.5}
+.tw-compare s{color:#9aa6b8}
+.tw-compare b{color:#2b8a5a;opacity:0;animation:twReveal .8s .45s forwards}
+.tw-chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:8px 0}
+.tw-chip{background:#fff7d6;border:1px solid #ffe08a;border-radius:999px;padding:4px 10px;font-size:12px;opacity:0;transform:translateY(6px);
+  animation:twChip .5s forwards;animation-delay:var(--d,0.5s)}
+.tower-card>.tw-lightning{position:absolute;inset:0;z-index:0;pointer-events:none;opacity:0;background:rgba(200,220,255,.0)}
+.tower-card.boss{background:linear-gradient(180deg,#26324f,#141b30)}
+.tower-card.boss h3,.tower-card.boss .tw-concept,.tower-card.boss .tw-count,.tower-card.boss .hint,.tower-card.boss .tw-lamp-name,.tower-card.boss .tw-lampcard{color:#dfe8ff}
+.tower-card.boss .tw-bubble{background:#1f2a46;color:#eef3ff;border-color:#3a4a74}
+.tower-card.boss .tw-tower{background:linear-gradient(180deg,#1f2a46,#101730);border-color:#33436a}
+.tower-card.boss .tw-fog{background:
+    radial-gradient(ellipse 55% 22% at 30% 72%,rgba(120,134,170,.8),transparent 70%),
+    radial-gradient(ellipse 50% 20% at 72% 44%,rgba(100,116,156,.7),transparent 70%),
+    linear-gradient(180deg,rgba(60,74,108,.2),rgba(60,74,108,.9))}
+.tower-card.boss>.tw-lightning{animation:twFlash 6s infinite}
+.tower-card.rise .tw-stage{animation:twRise 1.1s cubic-bezier(.2,.8,.3,1)}
+.tower-card.fog-clear .tw-tower{box-shadow:inset 0 0 0 4px rgba(255,255,255,.45),0 0 26px rgba(255,220,120,.55)}
+@keyframes twShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-5px)}40%{transform:translateX(5px)}60%{transform:translateX(-3px)}80%{transform:translateX(2px)}}
+@keyframes twLit{0%,100%{box-shadow:0 0 6px rgba(255,200,80,.5)}50%{box-shadow:0 0 14px rgba(255,200,80,.95)}}
+@keyframes twFogA{from{transform:translateX(-7%) translateY(-3%)}to{transform:translateX(7%) translateY(3%)}}
+@keyframes twFogB{from{transform:translateX(6%) translateY(2%)}to{transform:translateX(-6%) translateY(-2%)}}
+@keyframes twBeam{from{opacity:.55}to{opacity:.95}}
+@keyframes twBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@keyframes twFogIn{from{filter:blur(9px);opacity:0}to{filter:none;opacity:1}}
+@keyframes twWisp{0%{transform:translateY(0) scale(.6);opacity:.9}100%{transform:translateY(-60px) scale(1.4);opacity:0}}
+@keyframes twReveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes twChip{to{opacity:1;transform:none}}
+@keyframes twFlash{0%,91%,100%{opacity:0}92%{opacity:.35}93%{opacity:0}95%{opacity:.25}96%{opacity:0}}
+@keyframes twRise{from{transform:translateY(26px);opacity:0}to{transform:none;opacity:1}}
+@media (max-width:560px){
+  .tw-stage{flex-direction:column;gap:10px}
+  .tw-tower{width:100%;max-width:200px;margin:0 auto}
+}
+@media (prefers-reduced-motion: reduce){
+  .tw-tower,.tw-f,.tw-win,.tw-fog,.tw-climber,.tw-climber-pose svg,.tw-beam,.tw-bubble,.tw-wisp,.tw-compare b,.tw-chip,
+  .tower-card,.tower-card .tw-stage,.tower-card>.tw-lightning,.tw-lamp-bar i{animation:none!important;transition:none!important}
+  .tw-compare b,.tw-chip{opacity:1}
+}

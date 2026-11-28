@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261128j">
+<link rel="stylesheet" href="style.css?v=20261128l">
 </head>
 <body>
 
@@ -1089,9 +1089,15 @@
       <button class="preview-close" data-close="game-tower" title="닫기" aria-label="닫기">✕</button>
       <h3>🗼 안개 속의 탑</h3>
       <p class="hint" id="tw-howto" hidden>루미가 배운 말과 안개가 왜곡한 말을 구별해 줘!</p>
-      <div id="tw-floor" class="tw-floor"></div>
-      <div id="tw-question" class="tw-body"></div>
-      <div id="tw-feedback" class="tw-feedback hidden"></div>
+      <div class="tw-stage">
+        <div id="tw-tower" class="tw-tower" aria-hidden="true"></div>
+        <div class="tw-main">
+          <div id="tw-floor" class="tw-floor"></div>
+          <div id="tw-question" class="tw-body"></div>
+          <div id="tw-feedback" class="tw-feedback hidden"></div>
+        </div>
+      </div>
+      <div class="tw-lightning" aria-hidden="true"></div>
     </div>
   </div>
 
@@ -1451,11 +1457,11 @@
     </div>
   </div>
 </div>
-<script src="app.js?v=20261128j"></script>
-<script src="minigames.js?v=20261128j"></script>
-<script src="present.js?v=20261128j"></script>
+<script src="app.js?v=20261128l"></script>
+<script src="minigames.js?v=20261128l"></script>
+<script src="present.js?v=20261128l"></script>
 <!-- ★ 2026-11-21 (v1.74) C8: world.js 캐시도 함께 bump(index.html 담당) — world.js 본체는 월드 담당이 고친다 -->
-<script src="world.js?v=20261128j"></script>
+<script src="world.js?v=20261128l"></script>
 </body>
 </html>
 

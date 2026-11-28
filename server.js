@@ -2282,6 +2282,9 @@ function wipeUserData(uid){
     'season_claims',
     'concept_mastery',   // ★ v1.70: 새 학습 테이블도 계정 삭제 때 함께 지운다(누락 방지 규칙)
     'memory_lamps',      // ★ v1.71: 기억 등불도 계정 삭제 때 함께 지운다(누락 방지 규칙)
+    // ★ 2026-11-28: 하루 카운터(탑 종료·도전 횟수·PIN 실패 등)와 새 내구성 표도 함께 지운다.
+    //   예전엔 빠져 있어서 데모 초기화 뒤에도 «오늘의 탑은 끝» 같은 기록이 남았다.
+    'daily_counters', 'teach_pending', 'teach_upgrades', 'parent_sessions',
   ];
   for(const t of USER_TABLES){
     try{ db.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(uid); }catch(e){}
@@ -6555,8 +6558,11 @@ app.get('/api/tower/today', (req,res)=>{
   if(!deck.length) return res.status(404).json({ error:'기억 등불이 아직 없어요. 루미에게 뭔가 가르쳐 줄래?' });
   const boss = towerIsBoss(day);
   const floors = towerStateFor(u.id, day, deck, boss);
+  // ★ 2026-11-28 화면용: 층마다 등불이 얼마나 흐려졌는지(decay 0~100)와 보스 층 여부. 규칙은 바꾸지 않는다.
+  const decayMap = new Map(lamps.map(l => [l.topic, Number(l.decay) || 0]));
   res.json({ ok:true, day,
-    floors: floors.map(f => ({ floor: f.floor, concept: f.concept, statement: f.statement })),
+    floors: floors.map((f, i) => ({ floor: f.floor, concept: f.concept, statement: f.statement,
+      decay: decayMap.get(f.concept) || 0, isBoss: !!boss && i === deck.length })),
     boss,
     clearedMask: dailyCounterOf(u.id, day, 'tower_clears'),
     ended: dailyCounterOf(u.id, day, 'tower_ended') >= 1 });
@@ -6602,7 +6608,9 @@ app.post('/api/tower/answer', (req,res)=>{
     const isBossFloor = boss && floor === deck.length;
     db.prepare('UPDATE users SET understanding = understanding + ? WHERE id=?').run(isBossFloor ? 3 : 1, u.id);
     return res.json({ ok:true, correct:true, concept: info.concept, clearedMask: mask,
-      done: towerPopcount(mask) >= floors.length });
+      done: towerPopcount(mask) >= floors.length,
+      // ★ 2026-11-28 화면용: 정답 뒤에만 원래 문장과 안개 여부를 보낸다(답을 고르기 전에는 나가지 않는다)
+      fogged: !!info.fogged, statement: info.statement, original: info.original || info.statement });
   }
   // ★ 2026-11-27 (v1.81) 구조 구제: 완전히 흐려진(decay 100) 등불 층의 오답은 벌점이 없다.
   //   오늘의 탑을 끝내지 않고(tower_ended 미설정), 안개·마스터리 벌점도 주지 않는다 — 루미가 «다시 떠올려 보는» 층.

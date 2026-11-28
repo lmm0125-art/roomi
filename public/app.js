@@ -6230,6 +6230,78 @@ function twAllDone(t){
   return ((Number(t.clearedMask) || 0) & all) === all;
 }
 
+// ---------- ② 안개 속의 탑 (하루 한 번) — 2026-11-28: 탑 그림 · 안개 · 등반 · 원래 말 드러남 ----------
+//   규칙은 그대로다: 층은 아래에서 위로 한 번에 한 층, 틀리면 오늘은 끝, 주말은 안개 BOSS 층.
+//   이 블록은 «보이는 것» 만 바꾼다. 점수·덱·횟수 제한은 서버가 계속 정한다.
+const TW_TOWER_STEP = () => (window.innerWidth < 560 ? 26 : 40);   // 층 높이(px) — 좁은 화면은 촘촘하게
+function twEl(tag, cls, html){ const e = document.createElement(tag); if(cls) e.className = cls; if(html != null) e.innerHTML = html; return e; }
+// 등불 밝기: decay 0 = 환하다, 100 = 꺼졌다
+function twLampLevel(decay){ return Math.max(0, Math.min(1, 1 - (Number(decay) || 0) / 100)); }
+
+// 탑을 한 번 세운다. 이후에는 twUpdateTower 가 클래스와 위치만 바꾼다(그래서 등반이 부드럽게 이어진다).
+function twBuildTower(t){
+  const el = $('#tw-tower'); if(!el) return;
+  const H = TW_TOWER_STEP(), n = t.floors.length;
+  el.innerHTML = '';
+  el.style.height = (n * H + 30) + 'px';
+  el.style.setProperty('--H', H + 'px');
+  t.floors.forEach((f, i) => {
+    const d = twEl('div', 'tw-f' + (f.isBoss ? ' boss' : ''));
+    d.dataset.i = String(i);
+    d.style.bottom = (i * H + 6) + 'px';
+    d.style.setProperty('--lamp', String(twLampLevel(f.decay)));
+    d.innerHTML = '<i class="tw-win"><i class="tw-glyph"></i></i>';
+    el.appendChild(d);
+  });
+  el.appendChild(twEl('div', 'tw-fog tw-fog-a'));
+  el.appendChild(twEl('div', 'tw-fog tw-fog-b'));
+  el.appendChild(twEl('div', 'tw-top', '🏁'));
+  el.appendChild(twEl('div', 'tw-beam'));
+  el.appendChild(twEl('div', 'tw-climber', `<span class="tw-climber-pose">${rumiPose('idle', 34)}</span>`));
+  twUpdateTower(t, 0, true);
+}
+// 지금 층(idx)에 맞춰 층의 상태(통과·현재·안개 속)와 루미 위치, 안개 높이를 맞춘다
+function twUpdateTower(t, idx, first){
+  const el = $('#tw-tower'); if(!el || !t) return;
+  const H = TW_TOWER_STEP(), mask = Number(t.clearedMask) || 0;
+  el.querySelectorAll('.tw-f').forEach(d => {
+    const i = Number(d.dataset.i);
+    d.classList.toggle('done', (mask & (1 << i)) !== 0);
+    d.classList.toggle('now', i === idx);
+    d.classList.toggle('above', i > idx);
+  });
+  el.style.setProperty('--fog-bottom', ((idx + 1) * H + 4) + 'px');
+  const cl = el.querySelector('.tw-climber');
+  if(cl){
+    if(first) cl.style.transition = 'none';
+    cl.style.bottom = (idx * H + 2) + 'px';
+    if(first){ void cl.offsetWidth; cl.style.transition = ''; }
+  }
+}
+// 머리글: 층 번호 · 주말 BOSS 배지 · 오늘 통과한 층 수
+function twRenderHead(t, idx){
+  const fl = $('#tw-floor'); if(!fl) return;
+  const cur = t.floors[idx] || t.floors[t.floors.length - 1];
+  fl.innerHTML = `<span class="tw-count">${t.boss ? '<span class="tw-boss-badge">🌊 안개 BOSS</span>' : ''}<b>${(cur.floor || 0) + 1}층</b> / ${t.floors.length}층 · 통과 ${twCleared(t.clearedMask)}</span>`;
+}
+// 등불 한 줄: «이 등불이 오늘 안개를 견딜 수 있을까» 를 막대로 보여 준다
+function twLampHTML(cur, bright){
+  const lvl = twLampLevel(cur.decay);
+  const word = lvl >= 0.7 ? '환해요' : lvl >= 0.35 ? '흐려지는 중' : '거의 꺼졌어요';
+  return `<div class="tw-lampcard${bright ? ' bright' : ''}"><span class="tw-lamp-name">🪔 «${esc(cur.concept || '')}» 등불</span><span class="tw-lamp-bar"><i style="--lvl:${Math.round(lvl * 100)}%"></i></span><span class="tw-lamp-word">${word}</span></div>`;
+}
+// 안개가 피어오르는 조각 (말풍선 위에서 흩어진다)
+function twWisps(el){
+  if(!el) return;
+  for(let i = 0; i < 6; i++){
+    const w = twEl('span', 'tw-wisp');
+    w.style.left = (8 + Math.random() * 82) + '%';
+    w.style.animationDelay = (Math.random() * 0.4) + 's';
+    el.appendChild(w);
+    setTimeout(() => w.remove(), 1800);
+  }
+}
+
 async function openTower(){
   const modal = $('#game-tower'); if(!modal) return;
   twClearTimers();
@@ -6244,19 +6316,21 @@ async function openTower(){
   let t = null;
   try{ t = await api('/api/tower/today', undefined, 12000, 'GET'); }
   catch(e){
-    // 기다리는 사이 창이 닫혔으면 조용히 물러난다(감춰진 모달에 그리지 않는다)
-    if(modal.classList.contains('hidden')) return;
-    // 404(아직 등불이 없다) · 429(오늘 도전 소진) — 서버 error 문구를 그대로 보여 준다
+    if(modal.classList.contains('hidden')) return;   // 기다리는 사이 창이 닫혔으면 조용히 물러난다
     twShowError(e.message);
     return;
   }
-  if(modal.classList.contains('hidden')) return;   // 닫힌 뒤 도착한 응답은 무시한다
+  if(modal.classList.contains('hidden')) return;     // 닫힌 뒤 도착한 응답은 무시한다
   if(!t || !Array.isArray(t.floors) || !t.floors.length){
     twShowError('지금은 탑이 준비되지 않았어요. 조금 뒤에 다시 올래?');
     return;
   }
-  _tw = { data:t, idx:0, busy:false };
-  // 이미 끝난 탑 — 전부 통과면 축하 화면, 중간에 끝났으면 «여기까지» 화면부터 시작한다
+  // 다시 열면 아직 통과하지 못한 층부터 시작한다(서버도 같은 층만 받는다)
+  _tw = { data:t, idx: Math.min(twCleared(t.clearedMask), t.floors.length - 1), busy:false };
+  twBuildTower(t);
+  // 열릴 때 탑이 안개에서 올라온다
+  const tc = modal.querySelector('.tower-card');
+  if(tc){ tc.classList.remove('rise'); void tc.offsetWidth; tc.classList.add('rise'); _twTimers.push(setTimeout(() => tc.classList.remove('rise'), 1400)); }
   if(twAllDone(t)) twShowVictory();
   else if(t.ended) twShowResult();
   else twRenderFloor();
@@ -6269,24 +6343,20 @@ function twShowError(msg){
 
 function twRenderFloor(){
   const t = _tw && _tw.data; if(!t) return;
-  const fl = $('#tw-floor'), body = $('#tw-question'), fb = $('#tw-feedback');
   const total = t.floors.length;
-  const cur = t.floors[Math.min(_tw.idx, total - 1)] || t.floors[total - 1];
-  const mask = Number(t.clearedMask) || 0;
-  // 층 표시 — 통과한 층 ✅, 지금 층은 번호로 강조, 주말이면 «안개 BOSS» 배지
-  const dots = t.floors.map((f, i)=>{
-    const done = (mask & (1 << i)) !== 0;
-    const now = i === _tw.idx;
-    return `<span class="tw-dot${done ? ' done' : ''}${now ? ' now' : ''}">${done ? '✅' : (now ? (i + 1) : '·')}</span>`;
-  }).join('');
-  if(fl) fl.innerHTML = `<span class="tw-count">${t.boss ? '<span class="tw-boss-badge">🌊 안개 BOSS</span>' : ''}<b>${(cur.floor || 0) + 1}층</b> / 총 ${total}층 · 하루 한 번</span><span class="tw-dots">${dots}</span>`;
-  if(fb) fb.classList.add('hidden');
-  if(!body) return;
-  // 한 층 = «루미가 배운 말» 인지 «안개가 왜곡한 말» 인지 맞히기.
-  // 보기 버튼은 퍼즐의 .pz-options 스타일을 그대로 재사용(correct/wrong 색까지).
+  const idx = Math.min(_tw.idx, total - 1);
+  const cur = t.floors[idx] || t.floors[total - 1];
+  const card = document.querySelector('.tower-card');
+  if(card) card.classList.toggle('boss', !!cur.isBoss);
+  twRenderHead(t, idx);
+  twUpdateTower(t, idx, false);
+  const fb = $('#tw-feedback'); if(fb) fb.classList.add('hidden');
+  const body = $('#tw-question'); if(!body) return;
+  // 한 층 = «루미가 배운 말» 인지 «안개가 왜곡한 말» 인지 맞히기. 문장은 안개에서 천천히 떠오른다.
   body.innerHTML = `
+    ${twLampHTML(cur, false)}
     <p class="tw-concept">«${esc(cur.concept || '')}» 에 대해 루미가 말하는 문장이야</p>
-    <div class="tw-bubble">💬 ${esc(cur.statement || '')}</div>
+    <div class="tw-bubble fog-in">💬 ${esc(cur.statement || '')}</div>
     <div class="pz-options">
       <button type="button" class="tw-choose" data-choice="original">루미가 배운 말이다</button>
       <button type="button" class="tw-choose" data-choice="fogged">안개가 왜곡했어</button>
@@ -6312,7 +6382,6 @@ async function twAnswer(choice){
   let r = null;
   try{ r = await api('/api/tower/answer', { floor: cur.floor, choice }, 12000); }
   catch(e){
-    // 창이 닫혔으면 조용히 — 아니면 통신 실패는 «오답» 이 아니므로 버튼을 되살려 재시도하게 한다
     if(!_tw) return;
     _tw.busy = false;
     btns.forEach(b => { b.disabled = false; });
@@ -6323,51 +6392,77 @@ async function twAnswer(choice){
   if(r && r.clearedMask != null) t.clearedMask = r.clearedMask;
   const concept = (r && r.concept) || cur.concept || '';
   const pick = btns.find(b => b.dataset.choice === choice);
+  const bubble = body ? body.querySelector('.tw-bubble') : null;
+  const card = document.querySelector('.tower-card');
   if(r && r.correct === true){
-    // 정답 — 이 층의 등불이 오늘의 안개를 견뎠다. 0.8초 뒤 다음 층.
+    // 정답 — 등불이 오늘의 안개를 견뎠다. 등불이 밝아지고, 안개가 걷히고, 루미가 한 층 오른다.
     if(pick) pick.classList.add('correct');
-    // ★ v1.72: 정답이면 탑의 안개가 걷힌다.
-    { const card = document.querySelector('.tower-card');
-      if(card){ card.classList.add('fog-clear'); _twTimers.push(setTimeout(()=>card.classList.remove('fog-clear'), 1600)); } }
+    if(card){ card.classList.add('fog-clear'); _twTimers.push(setTimeout(() => card.classList.remove('fog-clear'), 1600)); }
+    const lamp = body ? body.querySelector('.tw-lampcard') : null;
+    if(lamp) lamp.classList.add('bright');
+    let note = `루미의 «${esc(concept)}» 등불이 오늘 안개를 견뎠어! 🛡️`;
+    if(r.fogged){
+      // 안개가 바꾼 말을 알아봤다: 안개 조각이 피어오르고, 원래 말이 옆에 드러난다
+      twWisps(bubble);
+      if(bubble) bubble.insertAdjacentHTML('beforeend', `<div class="tw-compare"><s>${esc(cur.statement || '')}</s><b>${esc(r.original || '')}</b></div>`);
+      note = `안개가 바꾼 말을 알아봤어! 원래 말은 «${esc(r.original || '')}» 였어.`;
+    }else if(bubble){ bubble.classList.add('clear'); }
     try{ robotGesture('bounce'); }catch(e){}
-    twFeedbackShow(`루미의 «${esc(concept)}» 등불이 오늘 안개를 견뎠어! 🛡️`);
-    _twTimers.push(setTimeout(()=>{
-      if(!_tw) return;              // 창이 닫혀 있으면 아무것도 하지 않는다(유령 탑 방지)
+    twFeedbackShow(note);
+    _twTimers.push(setTimeout(() => {
+      if(!_tw) return;
       _tw.busy = false;
-      if(r.done) twShowVictory();
-      else { _tw.idx += 1; twRenderFloor(); }
-    }, 800));
+      if(r.done){ twShowVictory(); return; }
+      _tw.idx += 1;
+      twUpdateTower(t, _tw.idx, false);                 // 먼저 올라가고
+      _twTimers.push(setTimeout(() => { if(_tw) twRenderFloor(); }, 450));   // 잠시 뒤 다음 문장
+    }, 1100));
     return;
   }
-  // 오답 — 고른 쪽 빨강, 진짜 배운 말 초록. 1.5초 뒤 «여기까지» 결과 화면.
+  // 오답 — 고른 쪽 빨강, 진짜 배운 말 초록. 탑이 흔들리고, 루미가 시무룩해진다. 1.5초 뒤 «여기까지».
   if(pick) pick.classList.add('wrong');
-  // ★ v1.72: 오답이면 안개가 짙어진다(실패가 «보이게»).
-  { const card = document.querySelector('.tower-card');
-    if(card){ card.classList.add('fog-heavy'); _twTimers.push(setTimeout(()=>card.classList.remove('fog-heavy'), 2100)); } }
+  if(card){ card.classList.add('fog-heavy'); _twTimers.push(setTimeout(() => card.classList.remove('fog-heavy'), 2100)); }
+  const tower = $('#tw-tower');
+  if(tower){ tower.classList.add('shake'); _twTimers.push(setTimeout(() => tower.classList.remove('shake'), 600)); }
+  const climber = $('#tw-tower .tw-climber-pose');
+  if(climber) climber.innerHTML = rumiPose('sad', 34);
   const okBtn = (r && r.expected) ? btns.find(b => b.dataset.choice === r.expected) : null;
   if(okBtn) okBtn.classList.add('correct');
   try{ robotGesture('nod'); }catch(e){}
   const why = (r && r.why) ? `<span class="tw-why">${esc(r.why)}</span>` : '';
   twFeedbackShow(`앗, 안개가 «${esc(concept)}» 을 더 흐리게 했어…${why}`);
   if(r && r.ended) t.ended = true;
-  _twTimers.push(setTimeout(()=>{
+  _twTimers.push(setTimeout(() => {
     if(!_tw) return;
     _tw.busy = false;
     twShowResult();
   }, 1500));
 }
 
+// 꼭대기 도달: 빛줄기가 올라가고, 오늘 빛난 등불이 하나씩 켜진다. 등불 목록으로 바로 갈 수 있다.
 function twShowVictory(){
   const t = _tw && _tw.data; if(!t) return;
   const body = $('#tw-question'), fb = $('#tw-feedback');
   if(fb) fb.classList.add('hidden');
+  twUpdateTower(t, t.floors.length - 1, false);
+  const tower = $('#tw-tower'); if(tower) tower.classList.add('beam');
+  const concepts = [...new Set(t.floors.map(f => f.concept).filter(Boolean))];
+  const chips = concepts.map((c, i) => `<span class="tw-chip" style="--d:${(0.5 + i * 0.15).toFixed(2)}s">💡 ${esc(c)}</span>`).join('');
   if(body) body.innerHTML = `
     <div class="tw-result">
       <div class="tw-result-emoji">✨🗼</div>
       <p class="tw-result-main">안개를 다 물리쳤어! 루미의 기억이 빛나요 ✨</p>
       ${t.boss ? '<p class="tw-result-boss">안개 BOSS 를 물리쳤어! 🌊→✨</p>' : ''}
       <p class="hint">${twCleared(t.clearedMask)}층 클리어</p>
+      <div class="tw-chips">${chips}</div>
+      <button type="button" class="btn ghost tw-lamps-go">내 등불 보러 가기</button>
     </div>`;
+  const go = body && body.querySelector('.tw-lamps-go');
+  if(go) go.addEventListener('click', () => {
+    closeGame('game-tower');
+    goNav('myroom');
+    setTimeout(() => { const l = $('#lamp-list'); if(l) l.scrollIntoView({ block:'center', behavior:'smooth' }); }, 350);
+  });
   try{ setRobotMode('cheer'); }catch(e){}
 }
 function twShowResult(){
