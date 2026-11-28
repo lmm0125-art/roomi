@@ -7,7 +7,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="style.css?v=20261128e">
+<link rel="stylesheet" href="style.css?v=20261128f">
 </head>
 <body>
 
@@ -30,49 +30,6 @@
     <circle cx="11.6" cy="28" r="1.9" fill="#ffd1dc" opacity=".85"/>
     <circle cx="36.4" cy="28" r="1.9" fill="#ffd1dc" opacity=".85"/>
     <path d="M38 9.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill="#fff" opacity=".85"/>
-  </symbol>
-  <symbol id="mole-char" viewBox="0 0 64 64">
-    <ellipse cx="32" cy="58" rx="20" ry="4" fill="#000" opacity=".18"/>
-    <ellipse cx="32" cy="40" rx="21" ry="20" fill="#8b5a3c"/>
-    <circle cx="12" cy="28" r="7" fill="#a97155"/>
-    <circle cx="52" cy="28" r="7" fill="#a97155"/>
-    <circle cx="12" cy="28" r="3.5" fill="#e7b79a"/>
-    <circle cx="52" cy="28" r="3.5" fill="#e7b79a"/>
-    <ellipse cx="32" cy="42" rx="15" ry="12" fill="#c98d68"/>
-    <circle cx="24" cy="38" r="3" fill="#1a1a1a"/>
-    <circle cx="40" cy="38" r="3" fill="#1a1a1a"/>
-    <circle cx="25" cy="37" r="1" fill="#fff"/>
-    <circle cx="41" cy="37" r="1" fill="#fff"/>
-    <ellipse cx="32" cy="46" rx="4.5" ry="3.2" fill="#f28fa3"/>
-    <path d="M27 51 Q32 55 37 51" stroke="#5a3522" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-    <path d="M12 24c0-11 9-19 20-19s20 8 20 19" fill="#f5c542"/>
-    <rect x="8" y="22" width="48" height="6" rx="3" fill="#e8a92c"/>
-    <rect x="28" y="2" width="8" height="9" rx="3" fill="#e8a92c"/>
-  </symbol>
-  <symbol id="mole-bomb" viewBox="0 0 64 64">
-    <circle cx="32" cy="40" r="18" fill="#2b2b33"/>
-    <circle cx="25" cy="34" r="5" fill="#4a4a55"/>
-    <path d="M40 24l7-8" stroke="#8b5a3c" stroke-width="4" stroke-linecap="round"/>
-    <circle cx="49" cy="14" r="4" fill="#ffb020"/>
-    <path d="M49 5v5M59 14h-5M56 7l-3 3" stroke="#ffb020" stroke-width="2.5" stroke-linecap="round"/>
-  </symbol>
-  <!-- v1.37: 금벌레 — 0.5초만 떠 있는 «지금 25점» 목표 -->
-  <symbol id="mole-gold" viewBox="0 0 64 64">
-    <ellipse cx="32" cy="58" rx="20" ry="4" fill="#000" opacity=".18"/>
-    <ellipse cx="32" cy="40" rx="21" ry="20" fill="#e0a92c"/>
-    <circle cx="12" cy="28" r="7" fill="#f2c65a"/>
-    <circle cx="52" cy="28" r="7" fill="#f2c65a"/>
-    <circle cx="12" cy="28" r="3.5" fill="#fff0b8"/>
-    <circle cx="52" cy="28" r="3.5" fill="#fff0b8"/>
-    <ellipse cx="32" cy="42" rx="15" ry="12" fill="#f7d97e"/>
-    <circle cx="24" cy="38" r="3" fill="#3f2d08"/>
-    <circle cx="40" cy="38" r="3" fill="#3f2d08"/>
-    <circle cx="25" cy="37" r="1" fill="#fff"/>
-    <circle cx="41" cy="37" r="1" fill="#fff"/>
-    <ellipse cx="32" cy="46" rx="4.5" ry="3.2" fill="#ff9ab0"/>
-    <path d="M27 51 Q32 55 37 51" stroke="#6b4a10" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-    <path d="M50 10l1.7 4.6 4.6 1.7-4.6 1.7-1.7 4.6-1.7-4.6-4.6-1.7 4.6-1.7z" fill="#fff6c9"/>
-    <path d="M14 13l1.1 3 3 1.1-3 1.1-1.1 3-1.1-3-3-1.1 3-1.1z" fill="#fff6c9" opacity=".85"/>
   </symbol>
 </svg>
 
@@ -427,7 +384,7 @@
           <div class="gl-head">
             <span class="eyebrow">GAME LOUNGE · 오늘의 놀이</span>
             <h3>게임 라운지</h3>
-            <p>큰 게임 하나와 짧은 연습 네 개. 접힌 곳 없이 전부 바로 열 수 있어요.</p>
+            <p>큰 게임 하나와 짧은 연습 다섯 개. 접힌 곳 없이 전부 바로 열 수 있어요.</p>
           </div>
 
           <!-- 주 게임 : 큰 커버 카드 -->
@@ -542,66 +499,91 @@
                 <span class="mg-reward">+10~120셀</span>
               </span>
             </button>
-            <button class="gl-card mg-card" id="btn-mole" type="button">
-              <span class="gl-cover gl-cover-mole" aria-hidden="true">
+          </div>
+
+          <div class="gl-section-head">
+            <b>루미 연습실</b><span>짧은 연습 · XP와 지식 도감 카드</span>
+          </div>
+          <div class="gl-grid game-menu">
+            <button class="gl-card mg-card" id="btn-roomi" type="button">
+              <span class="gl-cover gl-cover-roomi" aria-hidden="true">
                 <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
-                  <path d="M0 68 Q60 54 120 68 T240 66 V96 H0Z" fill="#7cc47f" opacity=".75"/>
-                  <g fill="#2a3c26" opacity=".9"><ellipse cx="48" cy="74" rx="20" ry="9"/><ellipse cx="120" cy="78" rx="20" ry="9"/><ellipse cx="192" cy="74" rx="20" ry="9"/></g>
-                  <g transform="translate(108,42)">
-                    <ellipse cx="12" cy="20" rx="14" ry="16" fill="#e8564e"/>
-                    <path d="M12 5v30" stroke="#3a1d1d" stroke-width="2"/>
-                    <circle cx="6" cy="12" r="2.6" fill="#3a1d1d"/><circle cx="18" cy="12" r="2.6" fill="#3a1d1d"/>
-                    <circle cx="5" cy="24" r="2.6" fill="#3a1d1d"/><circle cx="19" cy="24" r="2.6" fill="#3a1d1d"/>
-                    <circle cx="12" cy="3" r="7" fill="#3a1d1d"/>
-                  </g>
-                  <g fill="#fff" opacity=".55"><circle cx="36" cy="20" r="2"/><circle cx="206" cy="26" r="2"/><circle cx="72" cy="14" r="1.5"/></g>
+                  <rect x="14" y="16" width="34" height="44" rx="8" fill="#fff" opacity=".92"/>
+                  <text x="31" y="44" text-anchor="middle" font-size="16" font-weight="800" fill="#1f6b5b">4</text>
+                  <circle cx="98" cy="32" r="12" fill="#fff" opacity=".95"/><text x="98" y="37" text-anchor="middle" font-size="14" font-weight="800" fill="#1f6b5b">⭕</text>
+                  <rect x="118" y="16" width="34" height="44" rx="8" fill="#fff" opacity=".55"/>
+                  <text x="135" y="44" text-anchor="middle" font-size="16" font-weight="800" fill="#1f6b5b">7</text>
+                  <circle cx="189" cy="60" r="12" fill="#ffd166"/><text x="189" y="65" text-anchor="middle" font-size="14" font-weight="800" fill="#7a4b00">❌</text>
+                  <rect x="200" y="20" width="26" height="34" rx="6" fill="#fff" opacity=".7"/>
+                  <text x="213" y="42" text-anchor="middle" font-size="13" font-weight="800" fill="#1f6b5b">12</text>
                 </svg>
-                <span class="gl-cover-label">REFLEX</span>
+                <span class="gl-cover-label">TRAIN</span>
               </span>
               <span class="gl-card-body">
-                <span class="mg-tag">손빠르기</span>
-                <b>버그 두더지</b>
-                <span class="mg-desc">30초 안에 구멍에서 나오는 버그를 잡아요.</span>
-                <span class="mg-reward">+10~80셀</span>
+                <span class="mg-tag">가르치기</span>
+                <b>루미 훈련소</b>
+                <span class="mg-desc">규칙을 예시로 가르쳐요. 루미가 틀리면 예시를 고쳐 줘요.</span>
+                <span class="mg-reward">XP · 도감 카드</span>
               </span>
             </button>
-            <button class="gl-card mg-card" id="btn-puzzle" type="button">
-              <span class="gl-cover gl-cover-puzzle" aria-hidden="true">
+            <button class="gl-card mg-card" id="btn-balance" type="button">
+              <span class="gl-cover gl-cover-balance" aria-hidden="true">
                 <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
-                  <g transform="translate(78,12)">
-                    <path d="M0 0h34v10a7 7 0 0 0 14 0V0h34v34h-10a7 7 0 0 0 0 14h10v34H48v-10a7 7 0 0 0-14 0v10H0V48h10a7 7 0 0 0 0-14H0Z" fill="#a9e87c"/>
-                    <path d="M0 0h34v10a7 7 0 0 0 14 0V0h34v34h-10a7 7 0 0 0 0 14h10v34H48v-10a7 7 0 0 0-14 0v10H0V48h10a7 7 0 0 0 0-14H0Z" fill="none" stroke="#6fae4b" stroke-width="2"/>
-                  </g>
-                  <g fill="#fff" opacity=".6"><circle cx="30" cy="26" r="2.4"/><circle cx="210" cy="70" r="2.4"/><circle cx="196" cy="20" r="1.8"/></g>
+                  <path d="M120 22 V80" stroke="#7a4b00" stroke-width="4" stroke-linecap="round"/>
+                  <path d="M96 84 H144" stroke="#7a4b00" stroke-width="5" stroke-linecap="round"/>
+                  <path d="M52 34 L188 26" stroke="#7a4b00" stroke-width="4" stroke-linecap="round"/>
+                  <path d="M40 44 Q52 62 64 44 Z" fill="#fff" opacity=".9"/><path d="M40 44 H64" stroke="#7a4b00" stroke-width="2"/>
+                  <path d="M176 36 Q188 54 200 36 Z" fill="#fff" opacity=".9"/><path d="M176 36 H200" stroke="#7a4b00" stroke-width="2"/>
+                  <rect x="170" y="62" width="14" height="14" rx="3" fill="#ff9f43"/><rect x="186" y="62" width="14" height="14" rx="3" fill="#ffd166"/>
+                  <circle cx="52" cy="22" r="3" fill="#fff"/><circle cx="212" cy="18" r="2.4" fill="#fff"/>
                 </svg>
-                <span class="gl-cover-label">QUIZ</span>
+                <span class="gl-cover-label">BALANCE</span>
               </span>
               <span class="gl-card-body">
-                <span class="mg-tag">3문제</span>
-                <b>오늘의 퍼즐</b>
-                <span class="mg-desc">4지선다 3문제로 개념을 확인해요.</span>
-                <span class="mg-reward">+30셀</span>
+                <span class="mg-tag">분수 · 소수</span>
+                <b>균형 공방</b>
+                <span class="mg-desc">블록을 올려 저울을 맞춰요. 분수와 소수가 같은 무게일 수 있어요.</span>
+                <span class="mg-reward">XP · 도감 카드</span>
               </span>
             </button>
-            <button class="gl-card mg-card" id="btn-shooter" type="button">
-              <span class="gl-cover gl-cover-shooter" aria-hidden="true">
+            <button class="gl-card mg-card" id="btn-estimate" type="button">
+              <span class="gl-cover gl-cover-estimate" aria-hidden="true">
                 <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
-                  <g fill="#fff" opacity=".8"><circle cx="24" cy="18" r="1.6"/><circle cx="58" cy="62" r="1.3"/><circle cx="196" cy="18" r="1.6"/><circle cx="218" cy="70" r="1.2"/><circle cx="150" cy="12" r="1.2"/></g>
-                  <g transform="translate(96,18) rotate(38)">
-                    <path d="M16 0C26 10 30 22 30 38v18H2V38C2 22 6 10 16 0Z" fill="#eaf2ff"/>
-                    <path d="M2 40  -6 56 h10 l4 -10Z" fill="#ff8a4c"/><path d="M30 40l8 16h-10l-4-10Z" fill="#ff8a4c"/>
-                    <circle cx="16" cy="24" r="6" fill="#4f8ff0"/>
-                    <path d="M9 56h14l-4 12h-6Z" fill="#ffc94d"/>
-                  </g>
-                  <path d="M46 84 Q76 70 100 76" stroke="#ffc94d" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>
+                  <path d="M0 62 Q30 52 60 62 T120 62 T180 62 T240 62 V96 H0Z" fill="#2563a8" opacity=".55"/>
+                  <path d="M0 74 Q30 66 60 74 T120 74 T180 74 T240 74 V96 H0Z" fill="#1e4f8c" opacity=".7"/>
+                  <ellipse cx="170" cy="50" rx="34" ry="11" fill="#7ad39b"/>
+                  <path d="M146 34 L162 42 L178 34 L178 46 L146 46Z" fill="#fff" opacity=".0"/>
+                  <path d="M52 66 L82 66 L76 74 L58 74Z" fill="#fff"/><path d="M68 66 V40 L84 60" fill="#ffd166" stroke="#fff" stroke-width="2"/>
+                  <path d="M40 28 H110" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".85"/>
+                  <path d="M80 20 V36" stroke="#fff" stroke-width="2"/><circle cx="110" cy="28" r="3" fill="#ffd166"/>
+                  <circle cx="200" cy="18" r="2.4" fill="#fff"/><circle cx="24" cy="16" r="2" fill="#fff"/>
                 </svg>
-                <span class="gl-cover-label">ACTION</span>
+                <span class="gl-cover-label">ESTIMATE</span>
               </span>
               <span class="gl-card-body">
-                <span class="mg-tag">집중력</span>
-                <b>버그 슈터</b>
-                <span class="mg-desc">60초 동안 콤보를 이어 가는 슈팅 연습이에요.</span>
-                <span class="mg-reward">+10~110셀</span>
+                <span class="mg-tag">어림</span>
+                <b>어림 항해</b>
+                <span class="mg-desc">섬마다 답을 대략 고르고, 얼마나 확신하는지 말해요.</span>
+                <span class="mg-reward">XP · 도감 카드</span>
+              </span>
+            </button>
+            <button class="gl-card mg-card" id="btn-reverse" type="button">
+              <span class="gl-cover gl-cover-reverse" aria-hidden="true">
+                <svg viewBox="0 0 240 96" preserveAspectRatio="xMidYMid slice">
+                  <rect x="18" y="26" width="36" height="36" rx="9" fill="#fff" opacity=".95"/><text x="36" y="51" text-anchor="middle" font-size="18" font-weight="800" fill="#5b21b6">3</text>
+                  <text x="70" y="52" text-anchor="middle" font-size="18" font-weight="800" fill="#fff">×</text>
+                  <rect x="86" y="26" width="36" height="36" rx="9" fill="#fff" opacity=".95"/><text x="104" y="51" text-anchor="middle" font-size="18" font-weight="800" fill="#5b21b6">4</text>
+                  <text x="138" y="52" text-anchor="middle" font-size="18" font-weight="800" fill="#fff">=</text>
+                  <rect x="150" y="22" width="58" height="44" rx="12" fill="#ffd166"/><text x="179" y="52" text-anchor="middle" font-size="22" font-weight="900" fill="#5b21b6">12</text>
+                  <circle cx="222" cy="16" r="2.4" fill="#fff"/><circle cx="16" cy="82" r="2" fill="#fff"/>
+                </svg>
+                <span class="gl-cover-label">REVERSE</span>
+              </span>
+              <span class="gl-card-body">
+                <span class="mg-tag">거꾸로</span>
+                <b>거꾸로 질문소</b>
+                <span class="mg-desc">답을 먼저 보고, 그 답이 나오는 식을 60초 동안 많이 만들어요.</span>
+                <span class="mg-reward">XP · 도감 카드</span>
               </span>
             </button>
           </div>
@@ -975,7 +957,7 @@
         <span id="world-treasure" class="world-chip">🎁 5</span>
         <span id="world-friends" class="world-chip">👥 0</span>
         <!-- ★ span → button : 키보드·스크린리더로도 «의뢰 건너뛰기» 를 누를 수 있게 (world.js 는 같은 addEventListener 바인딩) -->
-        <button id="world-quests" class="world-chip" type="button">🛠 0 / 4</button>
+        <button id="world-quests" class="world-chip" type="button">🛠 0 / 3</button>
       </div>
       <button id="world-close" class="world-close" title="나가기">✕</button>
     </div>
@@ -1080,42 +1062,6 @@
     </div>
   </div>
 
-  <div id="game-reflex" class="modal hidden">
-    <div class="modal-card game-card">
-      <button class="preview-close" data-close="game-reflex" title="닫기">✕</button>
-      <h3>반사 속도</h3>
-      <p class="desc">초록불이면 바로 눌러! 빨간불이면 기다려야 해요.<br>3번 중 가장 빠른 기록이 인정돼요.</p>
-      <div id="reflex-stage" class="game-stage">초록불이 되면<br>아래 버튼을 눌러요!</div>
-      <div class="game-hud"><span id="reflex-tries">시도 0/3</span><span id="reflex-best"></span></div>
-      <button class="btn primary big" id="reflex-go">시작하기</button>
-    </div>
-  </div>
-
-  <div id="game-memory" class="modal hidden">
-    <div class="modal-card game-card">
-      <button class="preview-close" data-close="game-memory" title="닫기">✕</button>
-      <h3>기억 순서</h3>
-      <p class="desc">한 칸씩 차례로 빛나는 순서를<br>기억해서 같은 순서로 눌러요!</p>
-      <div id="memory-stage" class="game-stage seq">준비...</div>
-      <div class="game-hud"><span id="memory-level">단계 1</span><span id="memory-best"></span></div>
-      <button class="btn primary big" id="memory-go">시작하기</button>
-    </div>
-  </div>
-
-  <div id="game-shooter" class="modal hidden">
-    <div class="modal-card game-card shooter-card">
-      <button class="preview-close" data-close="game-shooter" title="닫기">✕</button>
-      <h3>🐞 버그 슈터</h3>
-      <p class="desc">코드 우주를 지켜라! 드래그/방향키로 움직이고, 자동으로 쏴요.</p>
-      <div class="shooter-wrap">
-        <canvas id="shooter-canvas" width="360" height="480"></canvas>
-        <div class="shooter-hud"><span id="sh-score">0</span><span id="sh-combo">x1</span><span id="sh-time">60</span></div>
-        <div id="sh-overlay" class="shooter-overlay">START</div>
-      </div>
-      <button class="btn primary big" id="shooter-go">시작하기</button>
-    </div>
-  </div>
-
   <div id="game-puzzle" class="modal hidden">
     <div class="modal-card game-card">
       <button class="preview-close" data-close="game-puzzle" title="닫기">✕</button>
@@ -1148,22 +1094,46 @@
     </div>
   </div>
 
-  <div id="game-mole" class="modal hidden">
-    <div class="modal-card game-card">
-      <button class="preview-close" data-close="game-mole" title="닫기">✕</button>
-      <h3>🐞 버그 두더지</h3>
-      <p class="desc">30초 안에 구멍에서 나오는 버그를 잡아라! 폭탄은 피해요.</p>
-      <div class="mole-wrap">
-        <div class="mole-hud"><span id="mole-score">0</span><span id="mole-combo">x1</span><span id="mole-time">30</span></div>
-        <div id="mole-grid" class="mole-grid"></div>
-        <div id="mole-overlay" class="shooter-overlay">START</div>
-      </div>
-      <button class="btn primary big" id="mole-go">시작하기</button>
+  <div id="game-roomi" class="modal hidden">
+    <div class="modal-card game-card ng-modal">
+      <button class="preview-close" data-close="game-roomi" title="닫기">✕</button>
+      <span class="ng-kicker">루미 연습실</span>
+      <h3>루미 훈련소</h3>
+      <p class="desc">예시를 골라 주면 루미가 규칙을 추측해요. 한쪽으로 치우친 예시는 엉뚱한 규칙을 낳아요.</p>
+      <div id="ng-roomi-stage" class="ng-stage"></div>
     </div>
   </div>
 
-  <!-- ★ v1.41 «고장 탐정 · 미리 고치기» — 관찰 → 진단(처음 생각) → 복구.
-       오답을 지우지 않고 «제외» 로 남겨 후보를 줄인다. 점수는 줄지 않는다. -->
+  <div id="game-balance" class="modal hidden">
+    <div class="modal-card game-card ng-modal">
+      <button class="preview-close" data-close="game-balance" title="닫기">✕</button>
+      <span class="ng-kicker">루미 연습실</span>
+      <h3>균형 공방</h3>
+      <p class="desc">저울 왼쪽과 똑같아지도록 블록을 올려 줘. 분수와 소수는 같은 무게일 수 있어요.</p>
+      <div id="ng-balance-stage" class="ng-stage"></div>
+    </div>
+  </div>
+
+  <div id="game-estimate" class="modal hidden">
+    <div class="modal-card game-card ng-modal">
+      <button class="preview-close" data-close="game-estimate" title="닫기">✕</button>
+      <span class="ng-kicker">루미 연습실</span>
+      <h3>어림 항해</h3>
+      <p class="desc">답을 대략 고르고, 얼마나 확신하는지 함께 말해 줘. 좁게 말하면 점수가 크지만 빗나가면 0점이에요.</p>
+      <div id="ng-estimate-stage" class="ng-stage"></div>
+    </div>
+  </div>
+
+  <div id="game-reverse" class="modal hidden">
+    <div class="modal-card game-card ng-modal">
+      <button class="preview-close" data-close="game-reverse" title="닫기">✕</button>
+      <span class="ng-kicker">루미 연습실</span>
+      <h3>거꾸로 질문소</h3>
+      <p class="desc">답을 먼저 보고, 그 답이 나오는 식을 만들어 봐. 60초 동안 많이 만들수록 좋아요.</p>
+      <div id="ng-reverse-stage" class="ng-stage"></div>
+    </div>
+  </div>
+
   <div id="game-repair" class="modal hidden">
     <div class="modal-card game-card repair-card">
       <button class="preview-close" data-close="game-repair" title="닫기">✕</button>
@@ -1478,9 +1448,10 @@
     </div>
   </div>
 </div>
-<script src="app.js?v=20261128e"></script>
+<script src="app.js?v=20261128f"></script>
+<script src="minigames.js?v=20261128f"></script>
 <!-- ★ 2026-11-21 (v1.74) C8: world.js 캐시도 함께 bump(index.html 담당) — world.js 본체는 월드 담당이 고친다 -->
-<script src="world.js?v=20261128e"></script>
+<script src="world.js?v=20261128f"></script>
 </body>
 </html>
 

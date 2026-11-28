@@ -78,8 +78,8 @@ latter:
   topic, a synonym table (`CARD_ALIASES`) and tags, so "what is an index?" reaches the *list* card.
 - **Two sentences, 90 characters, one action** in learn mode. `limitSentences()` enforces it after
   the model — saying less is what makes the child think.
-- **Sentence-by-sentence streaming** (`chatAddStream`) so a 20-second answer does not arrive as one
-  wall of text.
+- **Token streaming** (`chatAddLive`, SSE from `/api/chat/stream`) so a 20-second answer does not
+  arrive as one wall of text.
 - **Barge-in** — while 루미 is speaking, the microphone is still monitored (Analyser RMS); if the
   child starts talking, the speech is cancelled and listening resumes.
 
@@ -177,8 +177,9 @@ Most learning games reward reflexes. This one rewards observation and revision.
 Three machines, rising difficulty: 6 → 8 → 9 parts, 2 → 2 → 3 faults, and decoy parts that shake
 slightly even though they are healthy — so the child has to compare evidence, not just react.
 
-The three training games (bug whack, puzzle quiz, bug shooter) are deliberately labelled as practice;
-they are classic genres and are not presented as original work.
+The short practice games are original designs: 루미 훈련소 (teach RooMi a rule with examples),
+균형 공방 (balance a scale with fraction and decimal blocks), 어림 항해 (estimate with a stated confidence
+range), and 거꾸로 질문소 (build an expression from an answer). They give XP and knowledge-codex cards, not cells.
 
 ---
 

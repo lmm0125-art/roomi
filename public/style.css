@@ -558,16 +558,70 @@ h4{font-size:14px;font-weight:800}
 
 /* ───────────── 게임 ───────────── */
 .game-stage{background:var(--surface-2);border:1px solid var(--line);border-radius:16px;padding:20px;margin:12px 0;font-size:14px;font-weight:700;line-height:1.5;min-height:120px;display:flex;align-items:center;justify-content:center;text-align:center}
-.game-stage.seq{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;min-height:auto;padding:12px}
-.pad{aspect-ratio:1;border-radius:12px;background:#dce6f4;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;transition:.12s;cursor:pointer}
-.pad.lit{box-shadow:0 0 0 3px rgba(47,111,237,.4);transform:scale(1.03)}
 .game-hud{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);font-weight:700;margin:8px 0}
-.shooter-card{max-width:400px}
-.shooter-wrap{position:relative;width:100%;aspect-ratio:3/4;background:#0b1220;border-radius:18px;overflow:hidden;margin:8px 0}
-#shooter-canvas{width:100%;height:100%;display:block;touch-action:none}
-.shooter-hud{position:absolute;top:10px;left:10px;right:10px;display:flex;justify-content:space-between;color:#fff;font-size:12px;font-weight:800;text-shadow:0 1px 3px rgba(0,0,0,.5)}
-.shooter-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;font-size:18px;font-weight:800;background:rgba(4,10,20,.55);letter-spacing:.06em;padding:20px}
-.shooter-overlay.hidden{display:none}
+
+/* ───────────── 2026-11-28: 루미 연습실 (새 미니게임 4종) ───────────── */
+.ng-modal{max-width:520px;max-height:92vh;overflow-y:auto;background:linear-gradient(180deg,#fbfcff,#f1f5ff)}
+.ng-kicker{display:inline-block;font-size:10px;font-weight:900;letter-spacing:.14em;color:#4f5fd6;background:#e6ebff;padding:3px 9px;border-radius:999px;margin-bottom:6px}
+.ng-stage{margin-top:10px;min-height:280px;display:flex;flex-direction:column;gap:10px}
+.ng-goal{font-size:13px;font-weight:700;color:#33415c;margin:0;text-align:center;line-height:1.5}
+.ng-status{font-size:12px;color:var(--muted);text-align:center;margin:0}
+.ng-note{font-size:12.5px;line-height:1.55;background:#fff8e6;border:1px solid #ffe1a1;border-radius:12px;padding:9px 12px;margin:0;color:#5b4312}
+.ng-note.ok{background:#e9fbf3;border-color:#a9e7cb;color:#17603f}
+.ng-go{width:100%}
+.ng-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.ng-result{display:flex;flex-direction:column;align-items:center;gap:10px;padding:18px 12px;text-align:center}
+.ng-score{font-size:40px;font-weight:900;color:#4f5fd6;line-height:1}
+.ng-big{font-size:20px;color:#1b8f67}
+.ng-codex{font-size:12.5px;color:#5b4312;background:#fff4d6;padding:8px 12px;border-radius:12px}
+/* 루미 훈련소 */
+.ng-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.rm-card{position:relative;aspect-ratio:1.05;border-radius:14px;border:2px solid #dfe7f5;background:#fff;font-size:20px;font-weight:900;color:#2c3e66;cursor:pointer;transition:transform .12s,box-shadow .12s;box-shadow:0 3px 0 #d7e0ef;padding:0}
+.rm-card:hover:not(:disabled){transform:translateY(-2px)}
+.rm-card:disabled{cursor:default;opacity:.78}
+.rm-card.picked{background:#eef6ff;border-color:#8fb8ff}
+.rm-card i{position:absolute;top:3px;right:5px;font-size:12px;font-style:normal}
+.rm-card em{position:absolute;bottom:3px;left:0;right:0;font-size:10px;font-style:normal;font-weight:800;color:#5b6b88}
+.rm-card.right{border-color:#2fbf8b;background:#e9fbf3}
+.rm-card.wrong{border-color:#ff7b7b;background:#fff0f0}
+/* 균형 공방 */
+.bal-scale{--tilt:0deg;position:relative;height:150px;margin-top:4px}
+.bal-beam{position:absolute;left:6%;right:6%;top:30px;height:10px;border-radius:8px;background:linear-gradient(90deg,#b77a33,#f0b35a,#b77a33);transform:rotate(var(--tilt));transform-origin:50% 50%;transition:transform .45s cubic-bezier(.3,1.4,.5,1)}
+.bal-post{position:absolute;left:50%;bottom:0;width:10px;height:96px;margin-left:-5px;background:linear-gradient(90deg,#8a5a24,#b77a33);border-radius:6px}
+.bal-pan{position:absolute;top:12px;width:132px;min-height:58px;border-radius:0 0 64px 64px;background:#fff;border:2px solid #e2c489;display:flex;align-items:flex-end;justify-content:center;padding:6px 6px 8px;box-sizing:border-box;text-align:center}
+.bal-pan span{font-size:12px;font-weight:800;color:#5b3c10;line-height:1.35;transform:rotate(calc(var(--tilt) * -1));transition:transform .45s cubic-bezier(.3,1.4,.5,1)}
+.bal-pan.left{left:-4px}
+.bal-pan.right{right:-4px}
+.bal-tray{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.bal-block{border:none;border-radius:12px;padding:8px 12px;min-width:66px;font-weight:900;font-size:14px;color:#fff;cursor:pointer;box-shadow:0 4px 0 rgba(0,0,0,.16);transition:transform .1s}
+.bal-block:active:not(:disabled){transform:translateY(2px)}
+.bal-block i{display:block;font-style:normal;font-size:10px;font-weight:800;opacity:.92;margin-top:2px}
+.bal-block:disabled{opacity:.4;cursor:default;box-shadow:none}
+.bal-v1{background:#ff7fa0}
+.bal-v2{background:#4f9cff}
+.bal-v4{background:#ffb938;color:#3b2a00}
+/* 어림 항해 */
+.est-value{text-align:center;font-size:36px;color:#1e3f7a;line-height:1.1}
+.est-value b{font-weight:900}
+.est-slider{width:100%;accent-color:#2563a8}
+.est-widths{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.est-w{border:2px solid #cfe0f5;background:#fff;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:800;color:#2c4f7c;cursor:pointer}
+.est-w.on{background:#2563a8;border-color:#2563a8;color:#fff}
+/* 거꾸로 질문소 */
+.rev-target{font-size:58px;font-weight:900;text-align:center;color:#5b21b6;line-height:1}
+.rev-slot{display:flex;justify-content:center;gap:10px;align-items:center;font-size:22px;font-weight:900;color:#2d2350}
+.rev-slot span{min-width:46px;height:46px;display:inline-flex;align-items:center;justify-content:center;border-radius:12px;background:#f2ecff;border:2px dashed #b9a6ea;padding:0 6px}
+.rev-slot span.empty{color:#8a7bb8}
+.rev-slot span:last-child{background:none;border:none;min-width:auto}
+.rev-ops{display:flex;gap:8px;justify-content:center}
+.rev-op{width:52px;height:44px;border-radius:12px;border:none;background:#ece6ff;color:#4c2fb0;font-size:20px;font-weight:900;cursor:pointer}
+.rev-op.on{background:#7c3aed;color:#fff}
+.rev-tiles{display:grid;grid-template-columns:repeat(9,1fr);gap:5px}
+.rev-tile{aspect-ratio:1;border-radius:10px;border:none;background:#fff;box-shadow:0 3px 0 #d8cdf5;font-weight:900;font-size:16px;color:#3b2a7a;cursor:pointer;padding:0}
+.rev-tile.used{background:#f0e9ff;box-shadow:none;color:#8a7bb8}
+.rev-list{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.rev-chip{font-size:12px;font-weight:800;background:#f0e9ff;color:#4c2fb0;padding:4px 9px;border-radius:999px}
+@media (max-width:520px){ .ng-cards{grid-template-columns:repeat(3,1fr)} .rev-tiles{grid-template-columns:repeat(5,1fr)} .bal-pan{width:112px} }
 .pz-q{font-size:15px;font-weight:800;margin:10px 0;line-height:1.5}
 .pz-options{display:grid;gap:8px;margin:10px 0}
 .pz-options button{border:1.5px solid var(--line);background:#fff;border-radius:12px;padding:12px;font-size:13px;text-align:left;cursor:pointer;transition:.15s}
@@ -806,19 +860,6 @@ h4{font-size:14px;font-weight:800}
   .rp-node small{font-size:7px}
 }
 
-/* ───────────── 버그 두더지 ───────────── */
-.mole-wrap{position:relative;background:linear-gradient(180deg,#e8f7f1,#dff2ff);border-radius:18px;
-  padding:12px;margin:8px 0;overflow:hidden}
-.mole-hud{display:flex;justify-content:space-between;font-size:12px;font-weight:800;color:var(--ink-2);margin-bottom:8px}
-.mole-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.mole-hole{aspect-ratio:1;border-radius:50%;background:radial-gradient(circle at 50% 35%,#fff,#dbe8f5);
-  border:2px solid #c9d9ea;position:relative;overflow:hidden;
-  box-shadow:inset 0 6px 12px rgba(15,27,45,.08);transition:.12s}
-.mole-hole .mole-bug{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  font-size:34px;opacity:0;transform:translateY(24px);transition:.12s}
-.mole-hole.show .mole-bug{opacity:1;transform:none}
-.mole-hole.bomb{background:radial-gradient(circle at 50% 35%,#ffe3e3,#ffc9c9);border-color:#ffa8a8}
-.mole-hole.hit{transform:scale(.92);box-shadow:0 0 0 4px rgba(79,195,161,.35)}
 @media (max-width:900px){ .game-menu{grid-template-columns:1fr} }
 
 /* ───────────── 2026-10-28: 토스트/설정/보호자/필터/음성 ───────────── */
@@ -936,33 +977,6 @@ body.cb .bar{background:linear-gradient(180deg,#4c8bf5,#f5a623)}
 .friend-actions{display:flex;gap:4px;flex:none}
 .friend-actions .btn{min-height:30px;padding:4px 8px;font-size:10.5px;border-radius:8px}
 @media (max-width:900px){ .friends-layout{grid-template-columns:1fr} .friend-code{font-size:26px} }
-
-/* 2026-10-29: 버그 두더지 비주얼 */
-.mole-wrap{background:
-  radial-gradient(circle at 84% 12%, #ffe58a 0 22px, transparent 23px),
-  linear-gradient(180deg,#c9ecff 0 38%, #9bd36b 38% 100%);
-  position:relative;
-}
-.mole-wrap::before{content:'';position:absolute;left:7%;top:9%;width:64px;height:20px;border-radius:999px;
-  background:#fff;opacity:.85;box-shadow:34px -9px 0 -4px #fff, 34px 2px 0 -2px #fff;pointer-events:none}
-.mole-hole{background:radial-gradient(circle at 50% 38%, #3a2417 0 30%, #1a0f08 75%);
-  border:6px solid #7fae4a;
-  box-shadow:inset 0 8px 16px rgba(0,0,0,.6), 0 5px 0 #5c8a35;
-}
-.mole-hole .mole-bug{inset:5%;display:flex;align-items:flex-end;justify-content:center;
-  font-size:0;opacity:0;transform:translateY(45%) scale(.8);transition:.14s}
-.mole-hole .mole-bug svg{width:100%;height:100%}
-.mole-hole.show .mole-bug{opacity:1;transform:translateY(0) scale(1)}
-.mole-hole.hit .mole-bug{opacity:.35;transform:scale(.7)}
-.mole-hole.bomb{background:radial-gradient(circle at 50% 38%, #5a1f1f 0 30%, #2a0c0c 75%);border-color:#c94141}
-/* v1.37 금벌레 — «지금 25점» 이라는 게 보이도록 금빛 테두리 + 발광 */
-.mole-hole.gold{background:radial-gradient(circle at 50% 38%, #5a4a12 0 30%, #2a2006 75%);border-color:#f0c419;
-  box-shadow:inset 0 8px 16px rgba(0,0,0,.55), 0 5px 0 #b58f10, 0 0 18px rgba(240,196,25,.45)}
-.mole-hole.gold .mole-bug{filter:drop-shadow(0 0 9px rgba(255,214,102,.9))}
-.mole-pop{position:absolute;left:50%;top:10%;transform:translateX(-50%);font-size:14px;font-weight:900;
-  color:#ffd43b;opacity:0;pointer-events:none;text-shadow:0 2px 3px rgba(0,0,0,.55);z-index:3}
-.mole-pop.show{animation:molePop .7s ease-out}
-@keyframes molePop{0%{opacity:0;transform:translate(-50%,6px) scale(.8)}20%{opacity:1}100%{opacity:0;transform:translate(-50%,-26px) scale(1.1)}}
 
 /* 2026-10-29: 채팅 힌트 단계/타이핑/모드 안내 */
 .chat-mode-hint{font-size:10.5px;color:var(--muted);padding:0 16px 6px}
@@ -1726,12 +1740,13 @@ button.world-chip{font-family:inherit;line-height:inherit;letter-spacing:inherit
 .gl-cover{display:block;height:96px;position:relative;overflow:hidden}
 .gl-cover svg{display:block;width:100%;height:100%}
 .gl-cover-repair{background:linear-gradient(135deg,#0d4457,#102b47)}
-.gl-cover-mole{background:linear-gradient(135deg,#8fd3a0,#4f9d78)}
-.gl-cover-puzzle{background:linear-gradient(135deg,#dff5c8,#a8d98c)}
-.gl-cover-shooter{background:linear-gradient(135deg,#241b58,#0b1130)}
 .gl-cover-label{position:absolute;right:10px;bottom:8px;font-size:9px;font-weight:900;letter-spacing:.14em;
   color:rgba(255,255,255,.88);text-shadow:0 1px 3px rgba(0,0,0,.45)}
-.gl-cover-puzzle .gl-cover-label,.gl-cover-mole .gl-cover-label{color:rgba(24,52,34,.75);text-shadow:none}
+.gl-cover-roomi{background:linear-gradient(135deg,#43c9a6,#1f7a6b)}
+.gl-cover-balance{background:linear-gradient(135deg,#ffd27a,#f5a524)}
+.gl-cover-estimate{background:linear-gradient(135deg,#7cc8ff,#1d4f9c)}
+.gl-cover-reverse{background:linear-gradient(135deg,#c084fc,#6d28d9)}
+.gl-cover-balance .gl-cover-label{color:rgba(90,50,0,.72);text-shadow:none}
 .gl-card-body{display:flex;flex-direction:column;gap:7px;padding:14px 16px 16px;min-height:152px}
 .gl-card .mg-tag{position:static;align-self:flex-start;font-size:9.5px;padding:3px 8px}
 .gl-card .mg-reward{margin-top:auto}
@@ -2411,7 +2426,7 @@ body.focus-live #chat-fab{z-index:105}
   .tower-card::before,
   body::before{animation:none}
   /* 등장·피드백 애니메이션(화면·모달·토스트·월드 카드 전환 등)은 모션 없이 즉시 표시 */
-  .screen,.bubble,.modal-card,.toast,.mole-pop.show,.cellbadge.pop,.cell-gain,.coin-fly,
+  .screen,.bubble,.modal-card,.toast,.cellbadge.pop,.cell-gain,.coin-fly,
   .world-prompt,.world-peer-tip,.wq-card,.ws-card,.chat-panel.in-world,
   .sort-bottle.pour-in .sort-layer:last-child,.sort-board-wrap.surge,
   .empty-art,.rumi-pose{animation:none}

@@ -13,7 +13,7 @@ let state = { user:null, robot:null, template:'roundy', palette:{}, color:'#e74c
               goals:null, goalToastShown:false, prefs:null, friendsChatEnabled:true, memories:[],
               reviewDue:0, reviewCards:[], reviewIndex:0,
               growth:{ level:1, exp:0, expNeeded:100, stage:1, streak:0 },
-              room:null, chatMode:'chat', chatBusy:false, pz:null, shooter:null, explainMode:null,
+              room:null, chatMode:'chat', chatBusy:false, pz:null, explainMode:null,
               // ★ 2026-11-21 (v1.71): 기억 등불(/api/lamps) 스냅샷 + 루미가 건넨 «오늘의 한 걸음».
               //   두 값 모두 overplay(40분 종료) 잠금 화면에서 «내일 약속» 문장을 조립할 때 쓰인다.
               //   lamps 는 성장 탭에서만 다시 불러오고, nextAction 은 넛지가 렌더될 때 기억한다.
@@ -367,7 +367,7 @@ function replaceStaticIcons(){
 // ---------- 자주 쓰는 모달 제목 앞에 루미 얼굴 달기 ----------
 // 잠금 화면(overplay)은 «단정한 화면» 으로 남겨 둔다 — 여기엔 절대 얼굴을 붙이지 않는다.
 function injectModalFaces(){
-  ['game-puzzle','game-tower','game-mole','game-sort','game-shooter','game-memory'].forEach(id=>{
+  ['game-puzzle','game-tower','game-sort'].forEach(id=>{
     const m = document.getElementById(id);
     if(!m) return;
     const h = m.querySelector('.modal-card > h3');
@@ -474,7 +474,7 @@ const SFX = (()=>{
 // 모든 버튼 클릭에 가벼운 소리(캡처 단계라 기존 핸들러를 방해하지 않는다)
 document.addEventListener('click', e=>{
   const t = e.target;
-  const b = t && t.closest ? t.closest('.btn, .navbtn, .tpl, .sw, .pad, [data-close]') : null;
+  const b = t && t.closest ? t.closest('.btn, .navbtn, .tpl, .sw, [data-close]') : null;
   if(b) SFX.click();
 }, true);
 
@@ -492,7 +492,7 @@ $('#btn-sfx').addEventListener('click', ()=>{
 const SCREEN_META = {
   start:['',''], create:['로봇 만들기','나만의 친구를 만들어요'],
   myroom:['마이룸','로봇이 살아있는 나의 공간'],
-  games:['미니게임','버그 두더지 · 퍼즐 · 슈터'],
+  games:['미니게임','루미 연습실 · 고장 탐정 · 정렬'],
   workshop:['공작소','다시 칠하고, 성격을 만들고, 물어보기'],
   shop:['상점','부품과 스킨을 구경해요'],
   mail:['우편함','선생님과 루미의 편지'],
@@ -517,7 +517,7 @@ function show(id){
   }
   if(id==='games'){
     // 요일별 추천 게임(주간 순환)
-    const rec = ['btn-mole','btn-puzzle','btn-shooter'][new Date().getDay() % 3];
+    const rec = ['btn-roomi','btn-balance','btn-estimate','btn-reverse'][new Date().getDay() % 4];
     $$('.mg-card').forEach(c=>c.classList.toggle('recommend', c.id===rec));
   }
   if(!guest) syncSidebar();
@@ -680,7 +680,6 @@ function checkStudy(){
   }
   robotGesture('stretch');
 }
-function breakNow(){ checkStudy(); }   // 테스트용
 
 // ★ 2026-10-28: 화면 어디서든 보이는 짧은 알림
 function toast(text, ms=3500){
@@ -3814,30 +3813,7 @@ $$('.interact-row .btn, .room-dock [data-act]').forEach(b=>b.addEventListener('c
   finally{ b.disabled = false; }
 }));
 
-// ---------- 미니게임: 반사 속도 + 기억 순서 (남은 위험 3: 난이도 커브) ----------
-// 두 게임 모두 '클라이언트에서 플레이 → 서버로 성적 제출 → 서버가 보상 지급'.
-// 보상 계산은 전부 서버가 하므로 클라이언트를 조작해 셀을 늘릴 수 없다.
-// 12색(9단계 11칸까지 커버). 8색이었을 때 6단계에서 상한에 걸려
-// 7~9단계가 같은 난이도로 반복되고, 수열 길이만 커져 클리어가 불가능해졌다.
-const MEM_COLORS = ['#ff6b6b','#ffa94d','#ffe066','#63e6be','#74c0fc','#b197fc','#ffa8d5','#8ce99a','#ffc078','#a5d8ff','#d0bfff','#99e9f2'];
-// ★ v5-b: 모양 12개(최대 칸 수) — 예전엔 memShow 함수 «안쪽» 에 선언돼 있었다.
-//   memShow 위쪽의 팔레트 크기 계산이 MEM_SHAPES 를 이 선언 «앞» 에서 참조했기 때문에
-//   TDZ(Temporal Dead Zone) 로 ReferenceError 가 나, «시작하기» 를 누르는 순간
-//   게임이 통째로 죽었다. 어떤 참조 지점보다 먼저 초기화되도록 모듈 최상위로 옮긴다.
-const MEM_SHAPES = ['●','▲','■','◆','★','','▶','◀','◉','△','▽',''];
-const MEM_MAX_LEVEL = 9;   // 클리어 가능한 최종 단계(서버 보상 상한과 동일)
-let _rxTimer = null, _rxNext = null, _mmTimer = null;
 function closeGame(id){
-  clearTimeout(_rxTimer); clearTimeout(_rxNext); clearTimeout(_mmTimer);
-  _rxTimer = _rxNext = _mmTimer = null;
-  // ★ 닫을 때 게임 상태도 반드시 초기화한다.
-  //   rx.running 이 true 로 남으면 다음에 다시 열었을 때
-  //   "진행 중" 인 척하며 타이머만 도는 유령 상태가 된다.
-  rx.running = false; mm.running = false;
-  // ★ 2026-10-27: 슈터는 rAF 루프라 닫을 때 반드시 취소한다.
-  if(id==='game-shooter') stopShooter();
-  // ★ 2026-10-28: 두더지도 interval 을 반드시 정리한다.
-  if(id==='game-mole') stopMole();
   // ★ v1.41: 고장 탐정은 interval(전체 시계) + setTimeout(관찰/다음 기계) 두 종류를 쓴다.
   //   창을 중간에 닫아도 타이머가 살아 있으면 «유령 판» 이 계속 점수를 만든다.
   if(id==='game-repair') rpStop();
@@ -3849,11 +3825,10 @@ function closeGame(id){
   //   감춰진 모달 안에서 혼자 다음 층을 그리는 «유령 탑» 이 된다.
   //   세션(_tw)도 함께 지운다 — 진행 중 요청이 늦게 도착해도 아무것도 그리지 않게.
   if(id==='game-tower'){ twClearTimers(); _tw = null; }
+  // ★ 2026-11-28: 새 미니게임(루미 연습실)의 타이머도 창을 닫을 때 같이 멈춘다
+  if(window.MiniGames) window.MiniGames.stop(id);
   // ★ 2026-10-29: 친구 채팅 폴링 정리 + 읽음 배지 갱신
   if(id==='friend-chat'){ stopFriendChat(); loadFriends(); }
-  // 버튼 복구(다음 실행에서 '계속하기' 등으로 굳지 않도록)
-  const rg = $('#reflex-go'); if(rg){ rg.disabled = false; }
-  const mg = $('#memory-go'); if(mg){ mg.disabled = false; }
   $('#'+id).classList.add('hidden');
   // ★ 2026-11-21 (v1.74) C2: «자연스러운 마무리 지점» — 게임/퀴즈/타탑 창을 닫는 행위.
   //   pendingLock(4분 유예) 중이면 바로 여기서 잠근다. 아니면 아무 일도 없다.
@@ -3863,7 +3838,7 @@ function closeGame(id){
 // ★ 어떤 경우에도 버튼이 '제출 중' 으로 굳지 않도록 finally 에서 반드시 복구한다.
 //   (예전에는 catch 에서 bubble 만 띄우고 버튼을 돌려주지 않아 화면이 영구히 멈췄다)
 // ── v1.37 «대세계 의뢰» 브리지: 세계 → 게임 → 세계 ──
-const QUEST_KIND = { well:'mole', mill:'shooter', bell:'puzzle', light:'teach' };
+const QUEST_KIND = { well:'estimate', mill:'balance', light:'teach' };
 try{ state.quest = JSON.parse(sessionStorage.getItem('roomi_quest') || 'null'); }
 catch(e){ state.quest = null; }
 
@@ -3903,9 +3878,8 @@ function startWorldQuest(key){
   if(window.World && window.World.close) window.World.close();
   // closeWorld() 가 씬을 dispose 할 시간을 0.18초 벌어준다
   setTimeout(()=>{
-    if(key === 'well') openMole();
-    else if(key === 'mill') openShooter();
-    else openPuzzle();
+    if(key === 'well') openEstimate();
+    else openBalance();
   }, 180);
 }
 window.startWorldQuest = startWorldQuest;
@@ -3939,295 +3913,34 @@ async function submitGameResult(kind, payload, btn){
     state.user.cell_balance = r.balance; setBalance(r.balance);
     if(r.growth) state.growth = { ...state.growth, ...r.growth, partBonus: state.growth.partBonus||0 };
     await refreshGrowth();     // ★ V9: 단계가 바뀌면 3D 가 눈앞에서 자란다
-    const detail = r.ms != null ? `${r.ms}ms`
-                 : (r.level != null ? `${r.level}단계`
-                 : (r.score != null ? `${r.score}점` : '완료'));
-    const stageMap = { reaction:'#reflex-stage', memory:'#memory-stage', shooter:'#sh-overlay', puzzle:'#pz-hint', mole:'#mole-overlay', repair:'#repair-result' };
-    const modalMap = { reaction:'game-reflex', memory:'game-memory', shooter:'game-shooter', puzzle:'game-puzzle', mole:'game-mole', repair:'game-repair' };
-    const stage = $(stageMap[kind] || '#reflex-stage');
+    const detail = r.score != null ? `${r.score}점` : '완료';
+    const stageMap = { puzzle:'#pz-hint', repair:'#repair-result' };
+    const modalMap = { puzzle:'game-puzzle', repair:'game-repair' };
+    const stage = $(stageMap[kind] || '#repair-result');
     if(stage) stage.innerHTML = `🎉 보상 받음!<br>+${r.reward}셀 · +${r.growth.exp}XP`;
     bubble(`${r.label} ${detail}! +${r.reward}셀 +${r.growth.exp}XP`);
     // 1.6초 뒤에 창을 스스로 닫아 다음 판으로 이어지게 한다
     setTimeout(()=>{
-      closeGame(modalMap[kind] || 'game-reflex');
+      closeGame(modalMap[kind] || 'game-repair');
       if(state.robot) renderMyroom();
     }, 1600);
   }catch(e){
     // 실패: 사유를 화면에 분명히 남기고 버튼을 되살린다(재시도 가능)
-    const stageMap = { reaction:'#reflex-stage', memory:'#memory-stage', shooter:'#sh-overlay', puzzle:'#pz-hint', mole:'#mole-overlay', repair:'#repair-result' };
-    const stage = $(stageMap[kind] || '#reflex-stage');
+    const stageMap = { puzzle:'#pz-hint', repair:'#repair-result' };
+    const stage = $(stageMap[kind] || '#repair-result');
     if(stage) stage.innerHTML = `<span style="color:#c92a2a">${esc(e.message)}</span>`;
     bubble(e.message);
     if(btnRef){
       btnRef.disabled = false;
-      btnRef.textContent = kind==='reaction' ? '다시 시작' : '다시 시작';
+      btnRef.textContent = '다시 시작';
     }
-    const other = kind==='reaction' ? $('#memory-go') : $('#reflex-go');
-    if(other) other.disabled = false;
   }finally{
     // ★ v1.37: 오늘 이미 이 게임 보상을 받았으면 /api/game/result 가 400 이지만,
     //   «두 번째 판» 에서 의뢰 조건을 달성할 수 있다. 판정은 try 가 아니라 finally.
     if(state.quest) await tryClaimQuest(Object.assign({ kind }, payload));
   }
 }
-// ── 반사 속도 ──
-const rx = { tries:0, best:null, armedAt:0, running:false, skipped:0 };
-function openReflex(){
-  rx.tries = 0; rx.best = null; rx.running = false; rx.skipped = 0;
-  clearTimeout(_rxNext); _rxNext = null;
-  $('#reflex-tries').textContent = '시도 0/3';
-  $('#reflex-best').textContent = '';
-  $('#reflex-stage').textContent = '초록불이 되면 아래 버튼을 눌러요!';
-  $('#reflex-stage').className = 'game-stage';
-  $('#reflex-go').textContent = '시작하기';
-  $('#reflex-go').disabled = false;
-  $('#game-reflex').classList.remove('hidden');
-}
-function reflexArm(){
-  const stage = $('#reflex-stage'), btn = $('#reflex-go');
-  clearTimeout(_rxNext); _rxNext = null;   // 예약된 다음 판이 있으면 취소(중복 발동 방지)
-  stage.className = 'game-stage wait'; stage.textContent = '빨간불… 기다려요!';
-  btn.textContent = '기다리는 중…';
-  const delay = 1200 + Math.random()*3200;
-  _rxTimer = setTimeout(()=>{
-    stage.className = 'game-stage go'; stage.textContent = ' 지금!';
-    rx.armedAt = performance.now();
-    btn.textContent = '지금 누르기!';
-  }, delay);
-}
-// 반사 속도 종료 처리(유효 기록이 있을 때만 서버에 제출)
-// 세 판을 모두 실수/이동으로 흘렸다면 best 가 null 이므로 제출하지 않고 되돌린다.
-function finishReflex(){
-  const stage = $('#reflex-stage'), btn = $('#reflex-go');
-  rx.running = false;
-  clearTimeout(_rxNext); _rxNext = null;
-  btn.disabled = false; btn.textContent = '시작하기';
-  if(rx.best == null){
-    stage.className = 'game-stage';
-    stage.textContent = '아이번엔 한 번도 성공하지 못했어요  다시 도전해 볼래요?';
-    return;
-  }
-  btn.disabled = true; btn.textContent = '결과 제출 중...';
-  stage.className = 'game-stage';
-  stage.textContent = `최고 기록 ${rx.best}ms!`;
-  submitGameResult('reaction', { ms: rx.best }, btn);
-}
-function reflexClick(){
-  if(!rx.running) return;
-  const stage = $('#reflex-stage'), btn = $('#reflex-go');
-  if(stage.classList.contains('wait')){          // 빨간불에 눌림 = 실수
-    SFX.wrong();
-    clearTimeout(_rxTimer);
-    // ★ 실수도 한 판만 버리고 다음 판으로 진행(게임 전체를 초기화하지 않는다)
-    stage.className = 'game-stage next';
-    stage.textContent = '아직 빨간불이야!  이 판은 넘어갈게요';
-    rx.skipped++; rx.tries++; $('#reflex-tries').textContent = `시도 ${rx.tries}/3`;
-    btn.textContent = '계속하기'; btn.disabled = false;
-    if(rx.tries>= 3){ finishReflex(); return; }
-    _rxNext = setTimeout(()=>{ if(rx.running) reflexArm(); }, 1000);
-    return;
-  }
-  if(!stage.classList.contains('go')) return;
-  const ms = Math.round(performance.now() - rx.armedAt);
-  // 방어: 비정상적으로 큰 값(비보호 상태에서의 클릭 등)은 기록하지 않는다.
-  // 서버도 99999ms 상한과 '너무 빨랐어' 하한 검증을 함께 쓰므로 이중 안전장치다.
-  // ★ 이때 게임을 끝내지 않는다 — 한 판만 건너뛰고 다음 판으로 진행시킨다.
-  //   (이전처럼 rx.running=false 로 두면 시도 횟수까지 초기화되어 아이가 좌절한다)
-  if(ms <0 || ms> 9000){
-    stage.className = 'game-stage next';
-    stage.textContent = '아까 누른 것 같아! 이 판은 넘어갈게요';
-    rx.skipped++; rx.tries++; $('#reflex-tries').textContent = `시도 ${rx.tries}/3`;
-    btn.textContent = '계속하기'; btn.disabled = false;
-    if(rx.tries>= 3){ finishReflex(); return; }
-    _rxNext = setTimeout(()=>{ if(rx.running) reflexArm(); }, 1000);
-    return;
-  }
-  rx.tries++;
-  $('#reflex-tries').textContent = `시도 ${rx.tries}/3`;
-  if(rx.best == null || ms <rx.best){ rx.best = ms; $('#reflex-best').textContent = `최고 ${ms}ms`; }
-  if(rx.tries>= 3){
-    finishReflex();
-    return;
-  }else{
-    // ★ 이전 버전의 버그: 여기서 stage 에 'go' 클래스를 제거한 뒤
-    //   rx.running 을 true 로 남겨 두었는데, '계속하기' 를 누르면
-    //   reflexClick() 이 'go' 가 아니라는 이유로 즉시 return 하여
-    //   버튼이 완전히 죽었다(아무 반응 없음).
-    //   해결: 잠시 결과를 보여준 뒤 다음 판을 자동으로 시작하고,
-    //   '계속하기' 버튼은 그 대기 중 눌러 즉시 다음 판을 진행시킨다.
-    stage.className = 'game-stage next';
-    stage.textContent = `${ms}ms! ${1000}ms 후에 다음 판…`;
-    btn.textContent = '계속하기'; btn.disabled = false;
-    _rxNext = setTimeout(()=>{ if(rx.running) reflexArm(); }, 1000);
-  }
-}
-// ── 기억 순서 ──
-// ★ 1단계부터 '기억할 만한' 개수(3개)로 시작해야 한다.
-//   1개만 보여주면 기억 게임이 아니라 운 게임이 되어 게임이 성립하지 않는다.
-const MEM_BASE_PAD = 2;      // 단계 1 에 보여줄 개수 = 1 + 2 = 3
-const MEM_SHOW_MS  = 700;     // 칸 하나를 보여주는 시간(너무 짧으면 따라갈 수 없다)
-const mm = { seq:[], input:[], colorOf:[], level:1, running:false };
-function openMemory(){
-  mm.level = 1; mm.seq = []; mm.input = []; mm.running = false;
-  $('#memory-level').textContent = '단계 1';
-  $('#memory-best').textContent = '';
-  $('#memory-stage').className = 'game-stage seq';
-  $('#memory-stage').textContent = '준비...';
-  $('#memory-go').textContent = '시작하기';
-  $('#memory-go').disabled = false;
-  $('#game-memory').classList.remove('hidden');
-}
-function memShow(){
-  const stage = $('#memory-stage');
-  // ★ 칸 수는 팔레트 크기를 넘을 수 없다.
-  //   show 가 팔레트보다 크면 화면에는 8칸만 나오는데
-  //   수열에는 8번 인덱스까지 들어가고, 그 칸은 존재하지 않아
-  //   영영 꺼지지 않는다 → 7단계부터 수학적으로 클리어 불가(실측 확인된 버그).
-  // ★ 칸 수는 (색 수, 모양 수) 둘 다 넘을 수 없다.
-  //   색/모양 중 하나라도 부족하면 구별이 불가능해진다(색각 보조가 무의미해짐).
-  const show = Math.min(MEM_COLORS.length, MEM_SHAPES.length, mm.level + MEM_BASE_PAD);
-  // ★ 아래 두 가지가 치명적이었다:
-  //   (a) 수열이 0,1,2 오름차순 고정 → 아이가 '왼쪽부터 차례로' 누르면 끝
-  //   (b) 모든 칸을 한 번에 칠함 → '차례대로 켜지는' 동작 자체가 없음
-  //   → 기억 게임이 아니었다.
-  // 이제: 칸마다 서로 다른 색을 섞어 배정하고, 0..show-1 을 임의 순서로 섞은 뒤
-  //       한 칸씩 MEM_SHOW_MS 동안 켜고 다음 칸으로 넘어간다.
-  const palette = MEM_COLORS.slice(0, show);
-  for(let i=palette.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [palette[i],palette[j]]=[palette[j],palette[i]];
-  }
-  mm.colorOf = palette;
-  mm.seq = [];
-  for(let i=0;i<show;i++) mm.seq.push(i);
-  for(let i=mm.seq.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [mm.seq[i],mm.seq[j]]=[mm.seq[j],mm.seq[i]];
-  }
-  // ★ V5: 색각 보조(색만으로 구분할 때 필요한 도형 단서).
-//   색만 구분하면 적록색약이 있는 아이(남학생 약 8%)는 이 게임을 못 한다.
-//   그래서 각 칸에 '모양'을 함께 입힌다. 색 + 모양 이중 단서이므로
-//   어느 한쪽을 못 알아도 나머지로 구별할 수 있다.
-//   (모양은 유니코드 기호 문자열 — 이미지 에셋 없이 CSS 없이 동작한다)
-// ★ V5-b: 모양은 '칸 수'보다 적으면 안 된다.
-//   예전엔 8개짜리 배열을 % 8 로 돌려 써서, 7단계(9칸)부터 ●가 두 번 등장했다.
-//   색각 보조의 목적이 '색 못 보는 아이가 구분하는 것' 인데,
-//   같은 모양이 겹치면 그 아이에게 오히려 더 혼란 → 접근성 기능이 무의미해진다.
-//   그래서 12개(최대 칸 수)를 확보하고, 그래도 부족하면 칸 수 자체를 줄인다.
-//   (MEM_SHAPES 는 모듈 최상위에서 선언 — 이 함수 안에 두면 위쪽 참조가 TDZ 에 걸린다)
-  // 칸마다 서로 다른 모양 배정(색과 같은 방식으로 섞는다)
-  mm.shapeOf = mm.colorOf.map((_, i)=>MEM_SHAPES[i % MEM_SHAPES.length]);
-  // 각 칸 안에 모양 span 을 넣는다. 'showing' 동안만 보이며, 입력 단계에서는 숨겨진다
-  // → 아이가 '몇 번째 칸인지' 를 위치로 외우는 것을 막는다.
-  stage.innerHTML = mm.colorOf.map((c,i)=>
-    `<i class="pad"><b class="sym">${mm.shapeOf[i]}</b></i>`).join('');
-  stage.classList.remove('input');
-  stage.classList.add('showing');
-  $('#memory-level').textContent = `단계 ${mm.level} · ${show}칸`;
-  const pads = [...stage.querySelectorAll('.pad')];
-  let k = 0;
-  const step = ()=>{
-    if(k> 0){ const prev = pads[mm.seq[k-1]]; if(prev){ prev.style.background = ''; prev.classList.remove('lit'); } }
-    if(k>= mm.seq.length){
-      stage.classList.remove('showing');
-      stage.classList.add('input');
-      mm.input = [];
-      return;
-    }
-    const cur = pads[mm.seq[k]];
-    if(cur){ cur.style.background = mm.colorOf[mm.seq[k]]; cur.classList.add('lit'); }
-    k++;
-    _mmTimer = setTimeout(step, MEM_SHOW_MS);
-  };
-  _mmTimer = setTimeout(step, MEM_SHOW_MS);
-}
-function memPick(i){
-  if(!mm.running) return;
-  const stage = $('#memory-stage');
-  if(stage.classList.contains('showing')) return;    // 보여주는 중엔 입력 불가
-  // ★ 이미 이번 판을 다 맞힌 상태면 더 받지 않는다.
-  //   정답 후 620ms 안에 연타하면 mm.input 이 길어져
-  //   mm.seq[나머지] === undefined 비교가 항상 실패 → 방금 이긴 판이 실패로 바뀐다.
-  //   아이들은 연타가 많으므로 반드시 막아야 한다.
-  if(mm.input.length>= mm.seq.length) return;
-  const pads = stage.querySelectorAll('.pad');
-  // V5: 클릭한 칸은 색뿐 아니라 모양도 함께 보여준다(색각 보조)
-  if(pads[i]){ pads[i].style.background = mm.colorOf[i]; pads[i].classList.add('lit'); }
-  mm.input.push(i);
-  const n = mm.input.length;
-  // 즉시 판정(위치와 위치 비교 → 값 범위가 일치하므로 반드시 성립한다)
-  if(mm.input[n-1] !== mm.seq[n-1]){ memFail(n-1); return; }
-  if(n === mm.seq.length){
-    // 다음 판이 시작되기 전에 입력을 비운다(연타 대비)
-    mm.input = [];
-    mm.level++;
-    if(mm.level>= MEM_MAX_LEVEL){
-      mm.running = false;
-      stage.classList.remove('input');
-      stage.innerHTML = ' 완성!';
-      $('#memory-level').textContent = `${MEM_MAX_LEVEL}단계 도달!`;
-      $('#memory-go').textContent = '결과 제출 중...'; $('#memory-go').disabled = true;
-      submitGameResult('memory', { level: MEM_MAX_LEVEL }, $('#memory-go'));
-      return;
-    }
-    $('#memory-level').textContent = `단계 ${mm.level}`;
-    setTimeout(memShow, 620);
-  }
-}
-function memFail(i){
-  SFX.wrong();
-  mm.running = false;
-  const stage = $('#memory-stage');
-  stage.classList.add('input');
-  stage.classList.remove('showing');
-  const pads = stage.querySelectorAll('.pad');
-  if(pads[i]) pads[i].style.background = '#ff8787';
-  // ★ 정답을 함께 보여준다 — '틀렸다' 만으로는 아이가 배우지 못한다.
-  //   틀린 칸은 빨강 테두리, 나머지는 실제 색으로 잠깐 공개해 주어 답을 기억하게 한다.
-  //   V5: 모양도 함께 표시(색 못 보는 아이가 '기억한 순서' 를 확인하게 해준다)
-  const answer = mm.seq.map((_, k)=>
-    `<i class="pad${k===i?' wrong':''} lit" style="background:${mm.colorOf[k]}"><b class="sym">${mm.shapeOf[k]||''}</b></i>`).join('');
-  stage.innerHTML = answer +
-    `<div class="fail">앗! ${i+1}번째부터 달라요 <br>` +
-    `도달 단계 ${mm.level} · 다음에 다시 도전해 볼래요?</div>`;
-  $('#memory-go').textContent = '다시 도전'; $('#memory-go').disabled = false;
-  if(mm.level>= 3) submitGameResult('memory', { level: mm.level }, $('#memory-go'));
-}
-
 // 미니게임 버튼 연결
-$("#btn-shooter")?.addEventListener("click", openShooter);
-$("#btn-puzzle")?.addEventListener("click", openPuzzle);
-$("#reflex-go").addEventListener("click", ()=>{
-  const stage = $('#reflex-stage'), btn = $('#reflex-go');
-  if(!rx.running){
-    // 게임 시작(또는 '아직 빨간불'/'기록 이상' 후 재시작)
-    rx.running = true; rx.tries = 0;
-    $('#reflex-tries').textContent = '시도 0/3';
-    btn.textContent = '지금 누르기!';
-    reflexArm();
-    return;
-  }
-  // 다음 판 대기 중이면 예약된 타이머를 취소하고 즉시 시작한다
-  if(stage.classList.contains('next')){
-    clearTimeout(_rxNext); _rxNext = null;
-    btn.textContent = '지금 누르기!';
-    reflexArm();
-    return;
-  }
-  reflexClick();
-});
-$("#memory-go").addEventListener("click", ()=>{
-  if(!mm.running){ mm.running=true; mm.level=1; $("#memory-level").textContent="단계 1"; memShow(); }
-  else { mm.running=false; $("#memory-go").textContent="시작하기"; $("#memory-go").disabled=false; memShow(); }
-});
-// 반사 속도: 스테이지 클릭으로도 눌러볼 수 있게 한다(버튼만 보면 못 알아듣는 아이용)
-$('#reflex-stage').addEventListener('click', ()=>{ if(!$('#reflex-go').disabled) $('#reflex-go').click(); });
-// 기억 게임 패드 클릭 위임
-$("#memory-stage").addEventListener("click", (e)=>{
-  const pad = e.target.closest(".pad"); if(!pad) return;
-  const all = [...$("#memory-stage").querySelectorAll(".pad")];
-  memPick(all.indexOf(pad));
-});
 // 부모 승인 게이트 버튼 (P0-4)
 $("#gate-ok").addEventListener("click", verifyParent);
 // ★ 2026-11-27 (v1.83) A5: 게이트에서 돌아가기 → 시간 초과 오버레이로
@@ -4254,7 +3967,7 @@ $$('.modal').forEach(m=>{
   if(m.id === 'preview-modal' || m.id === 'modal' || m.id === 'overplay') return;   // 기존 모달은 별도 처리
   m.addEventListener('click', e=>{ if(e.target === m) closeGame(m.id); });
 });
-document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-reflex"); closeGame("game-memory"); closeGame("game-shooter"); closeGame("game-puzzle"); closeGame("game-tower"); closeGame("game-mole"); closeGame("game-repair"); closeGame("game-sort"); } });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-puzzle"); closeGame("game-tower"); closeGame("game-repair"); closeGame("game-sort"); } });
 // ---------- 상점 ----------
 const ITEM_KIND = { part:'로봇 부품', decor:'방 장식', skin:'색칠 스킨', shard:'부품 조각' };
 async function loadShop(){
@@ -4768,18 +4481,6 @@ async function loadShardTargets(){
 // 초기화: 계정 지우고 처음 화면으로 (데모/재시작용)
 // ★ P0-4 서버에서도 내 계정 데이터를 실제로 삭제한다(개인정보 리셋).
 // ---------- 3D 리소스 해제 ----------
-// ★ V3: 주 엔진(마이룸)이 한 번도 dispose 된 적이 없었다.
-//   재접속으로 canvas 를 다시 만들면 이전 Engine/장면/타이머가 남는다.
-//   previewEngine 처럼 여기도 명시적으로 정리한다.
-function disposeRoom3D(){
-  if(bjs.wanderTimer){ clearInterval(bjs.wanderTimer); bjs.wanderTimer = null; }
-  if(bjs.engine){
-    try{ bjs.engine.stopRenderLoop(); }catch(e){}
-    try{ bjs.engine.dispose(); }catch(e){}
-  }
-  if(bjs.scene){ try{ bjs.scene.dispose(); }catch(e){} }
-  bjs = { engine:null, scene:null, root:null, bob:null, model:null, ready:false, _t:0, wanderTimer:null, _starting:false };
-}
 // 페이지를 벗어날 때(새로고침/탭 종료 전) 남은 자원을 정리
 // ★ bfcache 대응: pagehide 에서 장면을 통째로 파괴하지 않는다.
 //   모바일 브라우저는 페이지를 bfcache 에 넣고 «뒤로» 하면 그대로 복원하는데,
@@ -5000,9 +4701,6 @@ async function openRank(){
       return `<div class="rk-block"><h4>${emoji} ${title} · 주간</h4>${list}</div>`;
     };
     $('#rank-body').innerHTML =
-      block('버그 두더지', '🐞', r.mole, s=>`${s}점`) +
-      block('버그 슈터', '🚀', r.shooter, s=>`${s}점`) +
-      (w ? week(w.mole, '버그 두더지', '🐞') + week(w.shooter, '버그 슈터', '🚀') : '') +
       `<div class="rk-note">${esc(r.note || '')}</div>`;
   }catch(e){ $('#rank-body').innerHTML = '<div class="none">랭킹을 불러오지 못했어요</div>'; }
 }
@@ -5836,26 +5534,6 @@ function chatAdd(role, text, hint){
   log.scrollTop = log.scrollHeight;
   return d;
 }
-// ★ v1.51 «한 문장씩» — 20초를 기다렸다가 한 덩어리로 쏟아내면 읽을 엄두가 안 난다.
-//   서버는 한 번에 만들지만 화면에는 문장 단위로 흘려보낸다(첫 문장이 먼저 도착한 것처럼 보인다).
-function chatAddStream(role, text, hint){
-  const d = chatAdd(role, '', hint);
-  const span = d.querySelector('span');
-  const full = String(text || '');
-  const parts = full.match(/[^.!?\n]+[.!?]?/g) || [full];
-  let i = 0;
-  d.classList.add('streaming');
-  const tick = ()=>{
-    if(i >= parts.length){ d.classList.remove('streaming'); return; }
-    span.textContent += (i ? ' ' : '') + parts[i++].trim();
-    const log = $('#chat-log'); if(log) log.scrollTop = log.scrollHeight;
-    setTimeout(tick, 85);
-  };
-  tick();
-  const sp = d.querySelector('.msg-speak');
-  if(sp) sp.onclick = ()=>speak(full);
-  return d;
-}
 // ★ v1.54 «진짜 토큰 스트리밍» — SSE 의 delta 를 받는 즉시 화면에 붙인다.
 //   기존 chatAddStream 은 «다 만든 뒤 85ms 간격으로 흉내» 였고, 이건 모델이 쓰는 대로 나온다.
 function chatAddLive(role, hint){
@@ -6658,542 +6336,6 @@ function startMic(auto){
   }catch(e){ _rec = null; toast('마이크를 시작하지 못했어요.'); }
 }
 
-// ---- 버그 슈터 (Canvas 2D) ----
-const SH_TIPS = [
-  '반복문 = 같은 일을 여러 번 시키는 명령',
-  '변수 = 값을 담아 두는 이름 붙은 상자',
-  '조건문 = 만약 ~이면 이렇게 해',
-  '함수 = 이름 붙인 명령 묶음',
-  '디버깅 = 틀린 조각을 하나씩 찾는 일',
-  '리스트 = 여러 값을 순서대로 담는 그릇',
-];
-const sh = { raf:null, running:false, submitted:false, last:0, time:60, score:0, combo:1, comboT:0,
-  kills:0, tips:0, tip:'', tipT:0, lastTip:'',
-  // v1.37 «생존» 축 — 목숨 3 + 피격 무적 1.5초 + 보스 1회 제한
-  lives:3, invuln:0, bossSpawned:false, over:false,
-  player:{x:180,y:430,r:14}, bullets:[], enemies:[], parts:[], pops:[], fireT:0, spawnT:0, boss:null, keys:{}, pointer:null };
-const SH_W=360, SH_H=480;
-const SH_LIVES = 3, SH_INVULN = 1.5;
-function shReset(){
-  sh.running=false; sh.submitted=false; sh.last=0; sh.time=60; sh.score=0; sh.combo=1; sh.comboT=0;
-  sh.lives=SH_LIVES; sh.invuln=0; sh.bossSpawned=false; sh.over=false;
-  sh.player={x:SH_W/2,y:SH_H-50,r:14}; sh.bullets=[]; sh.enemies=[]; sh.parts=[]; sh.pops=[]; sh.fireT=0; sh.spawnT=0; sh.boss=null; sh.keys={};
-  sh.kills=0; sh.tips=0; sh.tip=''; sh.tipT=0; sh.lastTip='';
-  shDraw();
-}
-function openShooter(){
-  $('#game-shooter').classList.remove('hidden');
-  shReset();
-  $('#sh-overlay').classList.remove('hidden'); $('#sh-overlay').textContent='START';
-  $('#shooter-go').textContent='시작하기';
-}
-function stopShooter(){
-  sh.running=false;
-  if(sh.raf){ cancelAnimationFrame(sh.raf); sh.raf=null; }
-}
-function shStart(){
-  stopShooter();
-  shReset(); sh.running=true;
-  $('#sh-overlay').classList.add('hidden');
-  $('#shooter-go').textContent='다시 시작';
-  sh.last = performance.now();
-  sh.raf = requestAnimationFrame(shLoop);
-}
-function shLoop(ts){
-  if(!sh.running) return;
-  const dt = Math.min(0.05, (ts - sh.last)/1000 || 0.016); sh.last = ts;
-  shUpdate(dt);
-  if(!sh.running) return;      // v1.37: shUpdate 안에서 목숨 0 → shEnd('dead') 됐을 수 있다
-  shDraw();
-  if(sh.time <= 0){ shEnd('time'); return; }
-  sh.raf = requestAnimationFrame(shLoop);
-}
-function shUpdate(dt){
-  sh.time -= dt;
-  if(sh.invuln > 0) sh.invuln -= dt;
-  const p = sh.player;
-  if(sh.keys.ArrowLeft) p.x -= 260*dt;
-  if(sh.keys.ArrowRight) p.x += 260*dt;
-  if(sh.pointer != null) p.x += (sh.pointer - p.x) * Math.min(1, dt*12);
-  p.x = Math.max(18, Math.min(SH_W-18, p.x));
-
-  // 자동 사격
-  sh.fireT -= dt;
-  if(sh.fireT <= 0){ sh.fireT = 0.16; sh.bullets.push({x:p.x, y:p.y-18, vy:-430}); }
-
-  // 적 생성 — 진행도가 오르면 «방벽형 / 분열형» 비율이 올라간다
-  sh.spawnT -= dt;
-  if(sh.spawnT <= 0 && sh.time > 2){
-    sh.spawnT = Math.max(0.34, 0.8 - (60-sh.time)*0.007);
-    const prog = Math.max(0, Math.min(1, 1 - sh.time/60));
-    const r = Math.random();
-    let type = 1;                                   // 1=추격
-    if(r < 0.06 + prog*0.06) type = 4;              // 4=방벽형(총알을 막는다)
-    else if(r < 0.16 + prog*0.14) type = 2;         // 2=분열형(죽으면 2마리)
-    const spec = type===4 ? {r:18, hp:5} : type===2 ? {r:15, hp:3} : {r:12, hp:1};
-    sh.enemies.push({x:24+Math.random()*(SH_W-48), y:-20, vy:60+Math.random()*50+(60-sh.time)*0.7,
-      r:spec.r, hp:spec.hp, maxHp:spec.hp, type, hitT:0});
-  }
-  // 보스 — «한 판에 한 번만» (v1.37: 무한 재소환 제거)
-  if(!sh.bossSpawned && sh.time <= 30){
-    sh.bossSpawned = true;
-    sh.boss = {x:SH_W/2, y:-50, vy:28, r:38, hp:48, maxHp:48, hitT:0, boss:true, shootT:1.2, phase:1};
-    sh.enemies.push(sh.boss);
-  }
-
-  // 탄 이동/충돌
-  for(let i=sh.bullets.length-1;i>=0;i--){
-    const b=sh.bullets[i]; b.y += b.vy*dt;
-    if(b.y < -10){ sh.bullets.splice(i,1); continue; }
-    for(let j=sh.enemies.length-1;j>=0;j--){
-      const e=sh.enemies[j];
-      if(Math.hypot(b.x-e.x, b.y-e.y) < e.r+3){
-        sh.bullets.splice(i,1); e.hp--; e.hitT=0.08;
-        if(e.hp<=0){
-          sh.enemies.splice(j,1);
-          if(e.boss){
-            sh.boss=null; sh.score += 200;
-            shBurst(e.x,e.y,36,'#ff6b6b'); shPop(e.x,e.y,'+200','#ffd43b');
-          } else {
-            // type: 1 추격 / 2 분열 / 0 분열 자식 / 4 방벽
-            const base = e.type===4 ? 30 : e.type===2 ? 20 : e.type===0 ? 5 : 10;
-            const total = base * sh.combo;
-            sh.score += total;
-            const col = e.type===4 ? '#ffa94d' : (e.type===2 ? '#b197fc' : '#63e6be');
-            shBurst(e.x,e.y, e.type===4?16:10, col);
-            shPop(e.x,e.y,`+${total}`, '#ffe066');
-            sh.kills++;
-            // 분열형은 죽으면 자식 2마리 — «한 번에 쓸어담기» 를 막아 우선순위를 만든다
-            if(e.type===2 && e.r > 10){
-              for(const dx of [-15, 15]){
-                sh.enemies.push({x:Math.max(16,Math.min(SH_W-16,e.x+dx)), y:e.y, vy:e.vy*1.15,
-                  r:9, hp:1, maxHp:1, type:0, hitT:0});
-              }
-            }
-            if(sh.kills % 10 === 0){
-              sh.tip = SH_TIPS[sh.tips % SH_TIPS.length]; sh.tips++;
-              sh.tipT = 2.4; sh.lastTip = sh.tip;
-            }
-          }
-          sh.combo = Math.min(5, sh.combo + 1); sh.comboT = 2.2;
-        } else if(e.boss && e.phase === 1 && e.hp <= e.maxHp*0.5){
-          e.phase = 2;                              // 2페이즈: 3방향탄 + 이동 가속
-          shBurst(e.x,e.y,24,'#ffd43b'); shPop(e.x,e.y-30,'PHASE 2','#ffd43b');
-        }
-        break;
-      }
-    }
-  }
-  // 적 이동 / 플레이어 충돌
-  for(let i=sh.enemies.length-1;i>=0;i--){
-    const e=sh.enemies[i];
-    e.y += e.vy*dt;
-    if(e.vx){ e.x += e.vx*dt; if(e.x < 6 || e.x > SH_W-6) e.vx = -e.vx; }
-    if(e.hitT>0) e.hitT-=dt;
-    if(e.boss){
-      const sp = e.phase===2 ? 1.3 : 1;
-      e.x += Math.sin(performance.now()/700)*40*dt*sp;
-      e.x = Math.max(50, Math.min(SH_W-50, e.x));
-      e.shootT -= dt;
-      if(e.shootT <= 0){
-        e.shootT = e.phase===2 ? 1.0 : 1.4;
-        if(e.phase===2){
-          for(const ang of [-0.38, 0, 0.38]){
-            sh.enemies.push({x:e.x, y:e.y+30, vy:150, vx:Math.sin(ang)*95, r:7, hp:1, type:3, hitT:0, bullet:true});
-          }
-        } else {
-          sh.enemies.push({x:e.x, y:e.y+30, vy:150, r:7, hp:1, type:3, hitT:0, bullet:true});
-        }
-      }
-    }
-    if(e.y > SH_H+40){ sh.enemies.splice(i,1); continue; }
-
-    // ★ v1.37: 피격 = «목숨 −1 + 연쇄 초기화» 하나로 통일 (−30점 삭제)
-    if(Math.hypot(e.x-p.x, e.y-p.y) < e.r+p.r-4){
-      if(sh.invuln > 0) continue;                   // 무적 중엔 적도 사라지지 않는다
-      sh.lives--; sh.invuln = SH_INVULN; sh.combo = 1;
-      shBurst(p.x,p.y,18,'#ff6b6b'); shPop(p.x,p.y-18,'-1','#ff6b6b');
-      if(!e.boss) sh.enemies.splice(i,1);
-      if(sh.lives <= 0){ shEnd('dead'); return; }
-    }
-  }
-  // 콤보 타이머
-  if(sh.comboT>0){ sh.comboT-=dt; if(sh.comboT<=0) sh.combo=1; }
-  if(sh.tipT>0) sh.tipT -= dt;
-  // 파티클
-  for(let i=sh.parts.length-1;i>=0;i--){
-    const q=sh.parts[i]; q.x+=q.vx*dt; q.y+=q.vy*dt; q.life-=dt;
-    if(q.life<=0) sh.parts.splice(i,1);
-  }
-  // 점수 팝업
-  for(let i=sh.pops.length-1;i>=0;i--){
-    const q=sh.pops[i]; q.y -= 28*dt; q.life -= dt;
-    if(q.life<=0) sh.pops.splice(i,1);
-  }
-  $('#sh-score').textContent = sh.score;
-  $('#sh-combo').textContent = 'x'+sh.combo;
-  $('#sh-time').textContent = Math.max(0, Math.ceil(sh.time));
-}
-function shBurst(x,y,n,col='#ffd43b'){
-  for(let i=0;i<n;i++){
-    const a=Math.random()*Math.PI*2, s=40+Math.random()*160;
-    sh.parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,
-      col, size:1.5+Math.random()*2.5});
-  }
-}
-function shPop(x,y,text,col='#ffe066'){
-  sh.pops.push({x,y,text,col,life:0.75});
-}
-function shDraw(){
-  const cv = $('#shooter-canvas'); if(!cv) return;
-  const g = cv.getContext('2d');
-  const t = performance.now()/1000;
-  // 깊은 우주 배경
-  const grd = g.createLinearGradient(0,0,0,SH_H);
-  grd.addColorStop(0,'#070b18'); grd.addColorStop(.45,'#0d1630'); grd.addColorStop(1,'#151034');
-  g.fillStyle=grd; g.fillRect(0,0,SH_W,SH_H);
-  // 성운
-  const neb1 = g.createRadialGradient(280,110,10,280,110,170);
-  neb1.addColorStop(0,'rgba(126,224,192,.18)'); neb1.addColorStop(1,'rgba(126,224,192,0)');
-  g.fillStyle=neb1; g.fillRect(0,0,SH_W,SH_H);
-  const neb2 = g.createRadialGradient(60,360,10,60,360,180);
-  neb2.addColorStop(0,'rgba(177,151,252,.16)'); neb2.addColorStop(1,'rgba(177,151,252,0)');
-  g.fillStyle=neb2; g.fillRect(0,0,SH_W,SH_H);
-  // 행성
-  g.save(); g.translate(74,96); g.rotate(-.22);
-  g.fillStyle='#24345f'; g.beginPath(); g.arc(0,0,34,0,Math.PI*2); g.fill();
-  g.fillStyle='rgba(126,224,192,.18)'; g.beginPath(); g.arc(-8,-8,20,0,Math.PI*2); g.fill();
-  g.strokeStyle='rgba(126,224,192,.28)'; g.lineWidth=5;
-  g.beginPath(); g.ellipse(0,0,54,15,0,0,Math.PI*2); g.stroke();
-  g.restore();
-  // 별
-  for(let i=0;i<70;i++){
-    const x=(i*83)%SH_W;
-    const y=((i*47)+t*(10+(i%4)*9))%SH_H;
-    const sz=(i%7===0)?2:1;
-    g.globalAlpha=.25+(i%5)*.13;
-    g.fillStyle='#fff'; g.fillRect(x,y,sz,sz);
-  }
-  g.globalAlpha=1;
-  // 속도선
-  g.strokeStyle='rgba(126,224,192,.08)'; g.lineWidth=1;
-  for(let i=0;i<5;i++){ const y=((i*97)+t*40)%SH_H; g.beginPath(); g.moveTo(0,y); g.lineTo(SH_W,y); g.stroke(); }
-  // 플레이어 로켓
-  const p=sh.player;
-  g.save(); g.translate(p.x,p.y);
-  const flame=10+Math.sin(t*28)*3;
-  const fg=g.createLinearGradient(0,10,0,12+flame);
-  fg.addColorStop(0,'rgba(255,224,102,.95)'); fg.addColorStop(.5,'rgba(255,107,107,.7)'); fg.addColorStop(1,'rgba(255,107,107,0)');
-  g.fillStyle=fg; g.beginPath(); g.moveTo(-5,10); g.quadraticCurveTo(0,14+flame,5,10); g.closePath(); g.fill();
-  g.fillStyle='#2f6fed';
-  g.beginPath(); g.moveTo(-10,4); g.lineTo(-19,16); g.lineTo(-7,12); g.closePath(); g.fill();
-  g.beginPath(); g.moveTo(10,4); g.lineTo(19,16); g.lineTo(7,12); g.closePath(); g.fill();
-  g.shadowColor='#7ee0c0'; g.shadowBlur=16;
-  g.fillStyle='#e9f7f2';
-  g.beginPath(); g.moveTo(0,-21); g.bezierCurveTo(14,-12,14,8,0,14); g.bezierCurveTo(-14,8,-14,-12,0,-21); g.fill();
-  g.shadowBlur=0;
-  g.fillStyle='#2f6fed'; g.beginPath(); g.arc(0,-5,6.2,0,Math.PI*2); g.fill();
-  g.fillStyle='rgba(255,255,255,.85)'; g.beginPath(); g.arc(-2,-7,1.8,0,Math.PI*2); g.fill();
-  g.strokeStyle='#9adfff'; g.lineWidth=1; g.beginPath(); g.arc(0,-3,2.4,.15*Math.PI,.85*Math.PI); g.stroke();
-  g.restore();
-  // 탄환
-  g.save(); g.shadowColor='#ffe066'; g.shadowBlur=14; g.fillStyle='#ffe066';
-  sh.bullets.forEach(b=>{
-    g.beginPath(); g.ellipse(b.x,b.y,2.4,7,0,0,Math.PI*2); g.fill();
-    g.globalAlpha=.28; g.fillRect(b.x-1.5,b.y+4,3,10); g.globalAlpha=1;
-  });
-  g.restore();
-  // 적
-  sh.enemies.forEach(e=>{
-    if(e.type===3 && e.bullet){
-      g.save(); g.shadowColor='#ff922b'; g.shadowBlur=14; g.fillStyle='#ff922b';
-      g.beginPath(); g.arc(e.x,e.y,e.r,0,Math.PI*2); g.fill();
-      g.fillStyle='#fff3bf'; g.beginPath(); g.arc(e.x-2,e.y-2,e.r*.35,0,Math.PI*2); g.fill();
-      g.restore(); return;
-    }
-    g.save(); g.translate(e.x,e.y);
-    const col = e.hitT>0 ? '#ffffff' : (e.boss ? '#ff6b6b' : (e.type===2 ? '#b197fc' : '#63e6be'));
-    g.shadowColor=col; g.shadowBlur=14;
-    if(e.boss){
-      g.fillStyle=col; g.beginPath(); g.ellipse(0,0,e.r,e.r*.82,0,0,Math.PI*2); g.fill();
-      g.fillStyle='rgba(255,255,255,.18)'; g.beginPath(); g.ellipse(-10,-10,e.r*.45,e.r*.3,-.4,0,Math.PI*2); g.fill();
-      g.strokeStyle=col; g.lineWidth=4; g.lineCap='round';
-      g.beginPath(); g.moveTo(-18,-20); g.lineTo(-30,-38); g.stroke();
-      g.beginPath(); g.moveTo(18,-20); g.lineTo(30,-38); g.stroke();
-      g.fillStyle='#1a1a1a'; g.beginPath(); g.arc(-12,-4,5,0,Math.PI*2); g.fill();
-      g.beginPath(); g.arc(12,-4,5,0,Math.PI*2); g.fill();
-      g.fillStyle='#fff'; g.beginPath(); g.arc(-13,-6,2,0,Math.PI*2); g.fill();
-      g.beginPath(); g.arc(11,-6,2,0,Math.PI*2); g.fill();
-      g.strokeStyle='#4a1010'; g.lineWidth=2; g.beginPath(); g.arc(0,10,8,.1*Math.PI,.9*Math.PI); g.stroke();
-    } else {
-      g.fillStyle='rgba(255,255,255,.16)';
-      g.beginPath(); g.ellipse(-e.r*.9,0,e.r*.55,e.r*.28,-.5,0,Math.PI*2); g.fill();
-      g.beginPath(); g.ellipse(e.r*.9,0,e.r*.55,e.r*.28,.5,0,Math.PI*2); g.fill();
-      g.fillStyle=col; g.beginPath(); g.arc(0,0,e.r,0,Math.PI*2); g.fill();
-      g.strokeStyle=col; g.lineWidth=2; g.lineCap='round';
-      g.beginPath(); g.moveTo(-4,-e.r+1); g.lineTo(-8,-e.r-6); g.stroke();
-      g.beginPath(); g.moveTo(4,-e.r+1); g.lineTo(8,-e.r-6); g.stroke();
-      g.fillStyle='#0b1220'; g.beginPath(); g.arc(-4,-2,2.2,0,Math.PI*2); g.fill();
-      g.beginPath(); g.arc(4,-2,2.2,0,Math.PI*2); g.fill();
-      g.fillStyle='#fff'; g.beginPath(); g.arc(-4.5,-2.8,.8,0,Math.PI*2); g.fill();
-      g.beginPath(); g.arc(3.5,-2.8,.8,0,Math.PI*2); g.fill();
-    }
-    g.restore();
-  });
-  // 파티클
-  sh.parts.forEach(q=>{
-    g.globalAlpha=Math.max(0,q.life*1.6);
-    g.fillStyle=q.col||'#ffd43b';
-    g.beginPath(); g.arc(q.x,q.y,q.size||2,0,Math.PI*2); g.fill();
-  });
-  g.globalAlpha=1;
-  // 점수 팝업
-  sh.pops.forEach(q=>{
-    g.globalAlpha=Math.max(0,q.life);
-    g.fillStyle=q.col||'#ffe066'; g.font='bold 14px sans-serif'; g.textAlign='center';
-    g.fillText(q.text,q.x,q.y);
-  });
-  g.globalAlpha=1;
-  // 보스 HP
-  if(sh.boss){
-    const w=SH_W-90, hp=Math.max(0,sh.boss.hp/sh.boss.maxHp);
-    g.fillStyle='rgba(4,10,20,.72)'; g.fillRect(45,40,w,9);
-    g.fillStyle='#ff6b6b'; g.fillRect(45,40,w*hp,9);
-    g.strokeStyle='rgba(255,255,255,.25)'; g.lineWidth=1; g.strokeRect(45,40,w,9);
-    g.fillStyle='#fff'; g.font='9px sans-serif'; g.textAlign='center'; g.fillText('BUG BOSS',SH_W/2,37);
-  }
-  // v1.37: 목숨 3개 — canvas 로 직접 그린다(이모지·폰트 의존 없이 크기가 일정)
-  for(let i=0;i<SH_LIVES;i++){
-    const on = i < sh.lives;
-    g.save(); g.translate(15 + i*17, 20); g.scale(.9,.9);
-    g.beginPath();
-    g.moveTo(0,4);
-    g.bezierCurveTo(-9,-2,-9,-9,0,-5.5);
-    g.bezierCurveTo(9,-9,9,-2,0,4);
-    g.closePath();
-    g.fillStyle = on ? '#ff6b6b' : 'rgba(255,255,255,.16)';
-    if(on){ g.shadowColor='#ff6b6b'; g.shadowBlur=9; }
-    g.fill(); g.restore();
-  }
-  // 비네트
-  const vg=g.createRadialGradient(SH_W/2,SH_H/2,SH_H*.32,SH_W/2,SH_H/2,SH_H*.78);
-  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,.4)');
-  g.fillStyle=vg; g.fillRect(0,0,SH_W,SH_H);
-  // 팁 카드
-  if(sh.tipT>0 && sh.tip){
-    g.fillStyle='rgba(4,10,20,.82)'; g.beginPath();
-    if(g.roundRect) g.roundRect(10,SH_H-66,SH_W-20,50,10); else g.rect(10,SH_H-66,SH_W-20,50);
-    g.fill();
-    g.fillStyle='#ffe066'; g.font='11px sans-serif'; g.textAlign='left';
-    g.fillText('📘 ' + sh.tip, 20, SH_H-38);
-  }
-}
-function shEnd(reason){
-  stopShooter();
-  sh.over = true;
-  $('#sh-overlay').classList.remove('hidden');
-  const tipLine = sh.lastTip ? `<br><small style="font-size:12px;font-weight:600;opacity:.9">📘 ${sh.lastTip}</small>` : '';
-  const head = reason === 'dead'
-    ? `GAME OVER · 쓰러졌어! ${sh.score}점`
-    : (sh.score >= 50 ? `GAME OVER · ${sh.score}점` : 'GAME OVER');
-  $('#sh-overlay').innerHTML = head + tipLine;
-  // P3: 실패해도 «이미 얻은 점수» 는 몰수하지 않는다
-  if(sh.score >= 50 && !sh.submitted){
-    sh.submitted = true;
-    setTimeout(()=>submitGameResult('shooter',{score:sh.score, lives:sh.lives}, $('#shooter-go')), sh.lastTip ? 1800 : 800);
-  }
-}
-
-// ---- 버그 두더지 (30초 «우선순위» 게임) — v1.37 ----
-//   v1.37: «반응 테스트» → «0.3초 안에 무엇을 먼저 칠지» 결정하는 게임.
-//   단일 슬롯(active)을 slots[] 로 바꾸고, 금벌레·폭탄을 섞어 «먼저 칠 대상» 을 만든다.
-//   ※ active / activeT / next / bomb 같은 옛 필드는 «남기지 않는다» — 두 벌 상태가 서로 싸운다.
-const mole = {
-  running:false, submitted:false,
-  score:0, combo:1, comboGrace:0,
-  time:30, spawnT:0, lastTick:0,
-  slots:[],                       // [{hole:0..8, kind:'bug'|'gold'|'bomb', life}]
-  lastHole:-1,
-  timer:null, holes:[]
-};
-// §4-3 상수표 — 조정은 여기서만
-const MOLE_DURATION = 30;
-const MOLE_CAP_EARLY = 2, MOLE_CAP_RUSH = 3, MOLE_RUSH_FROM = 22;
-const MOLE_LIFE = { bug:0.85, gold:0.50, bomb:0.95 };
-const MOLE_P_GOLD = 0.10, MOLE_P_BOMB = 0.16;
-const MOLE_PENALTY_BOMB = 40, MOLE_COMBO_GRACE = 1.4;
-const MOLE_GAP = () => 0.45 + Math.random() * 0.25;
-
-function initMoleGrid(){
-  const grid = $('#mole-grid'); if(!grid) return;
-  if(grid.dataset.ready === '1'){ mole.holes = [...grid.children]; return; }
-  grid.innerHTML = '';
-  for(let i=0;i<9;i++){
-    const b = document.createElement('button');
-    b.className = 'mole-hole'; b.dataset.i = i;
-    b.innerHTML = '<span class="mole-bug"><svg viewBox="0 0 64 64"><use href="#mole-char"/></svg></span><span class="mole-pop"></span>';
-    b.addEventListener('click', ()=>moleHit(i));
-    grid.appendChild(b);
-  }
-  grid.dataset.ready = '1';
-  mole.holes = [...grid.children];
-}
-function moleReset(){
-  stopMole();
-  mole.running = false; mole.submitted = false; mole.score = 0; mole.combo = 1;
-  mole.comboGrace = 0; mole.time = MOLE_DURATION; mole.spawnT = 0; mole.lastTick = 0;
-  mole.slots = []; mole.lastHole = -1;
-  mole.holes.forEach(h => {
-    h.classList.remove('show','gold','bomb','hit');
-    const use = h.querySelector('.mole-bug use');
-    if(use) use.setAttribute('href','#mole-char');
-  });
-  const s = $('#mole-score'); if(s) s.textContent = '0';
-  const c = $('#mole-combo'); if(c) c.textContent = 'x1';
-  const t = $('#mole-time'); if(t) t.textContent = String(MOLE_DURATION);
-}
-function stopMole(){
-  mole.running = false;
-  if(mole.timer){ clearInterval(mole.timer); mole.timer = null; }
-  // §3-2 DOM 찌꺼기 클래스 정리: 창을 중간에 닫아도 «보이던 두더지» 가 남지 않게
-  if(mole.holes && mole.holes.length){
-    mole.holes.forEach(h => h.classList.remove('show','gold','bomb','hit'));
-  }
-  mole.slots = [];
-}
-function openMole(){
-  $('#game-mole').classList.remove('hidden');
-  initMoleGrid();
-  moleReset();
-  $('#mole-overlay').classList.remove('hidden');
-  $('#mole-overlay').textContent = 'START';
-  $('#mole-go').textContent = '시작하기';
-}
-function moleStart(){
-  initMoleGrid();
-  moleReset();
-  mole.running = true;
-  $('#mole-overlay').classList.add('hidden');
-  $('#mole-go').textContent = '다시 시작';
-  mole.lastTick = Date.now();
-  mole.timer = setInterval(moleTick, 100);
-}
-function moleCap(){
-  // 마지막 8초에만 3마리 — «압박 구간» 이 생겨 한 판 안에 난이도 곡선이 생긴다
-  return mole.time <= MOLE_DURATION - MOLE_RUSH_FROM ? MOLE_CAP_RUSH : MOLE_CAP_EARLY;
-}
-function moleTick(){
-  if(!mole.running) return;
-  // v1.37 §12-1 권고(a): 백그라운드 탭에서 setInterval 이 1초로 스로틀돼도
-  //   «한 판이 늘어나지 않도록» 실제 경과 시간으로 보정한다.
-  //   단 한 번에 최대 1초만 소모시켜, 탭 복귀 직후 30초가 한꺼번에 날아가지 않게 한다.
-  const now = Date.now();
-  const dt = mole.lastTick ? Math.max(0, Math.min(1.0, (now - mole.lastTick) / 1000)) : 0.1;
-  mole.lastTick = now;
-
-  // ① 시간
-  mole.time = Math.max(0, mole.time - dt);
-  const tEl = $('#mole-time'); if(tEl) tEl.textContent = String(Math.ceil(mole.time));
-  if(mole.time <= 0){ moleEnd(); return; }
-
-  // ② 수명이 다한 슬롯 정리 (뒤에서부터 splice)
-  for(let i=mole.slots.length-1; i>=0; i--){
-    mole.slots[i].life -= dt;
-    if(mole.slots[i].life <= 0) moleExpire(i);
-  }
-
-  // ③ 생성 — cap 이어도 spawnT 는 리셋해 «해제 순간 연쇄 폭발» 을 막는다
-  mole.spawnT -= dt;
-  if(mole.spawnT <= 0){
-    if(mole.slots.length < moleCap()) moleSpawn();
-    mole.spawnT = MOLE_GAP();
-  }
-
-  // ④ 콤보 유예
-  if(mole.comboGrace > 0){
-    mole.comboGrace -= dt;
-    if(mole.comboGrace <= 0){
-      mole.comboGrace = 0;
-      if(mole.combo > 1){ mole.combo = 1; const c=$('#mole-combo'); if(c) c.textContent='x1'; }
-    }
-  }
-}
-function moleSpawn(){
-  const used = new Set(mole.slots.map(s => s.hole));
-  const free = [];
-  for(let i=0;i<9;i++){ if(!used.has(i) && i !== mole.lastHole) free.push(i); }
-  if(!free.length) return;
-  const hole = free[Math.floor(Math.random()*free.length)];
-  const roll = Math.random();
-  const kind = roll < MOLE_P_GOLD ? 'gold' : (roll < MOLE_P_GOLD + MOLE_P_BOMB ? 'bomb' : 'bug');
-  mole.slots.push({ hole, kind, life: MOLE_LIFE[kind] });
-  mole.lastHole = hole;
-
-  const h = mole.holes[hole];
-  if(!h) return;
-  h.classList.add('show');
-  h.classList.toggle('gold', kind === 'gold');
-  h.classList.toggle('bomb', kind === 'bomb');
-  const use = h.querySelector('.mole-bug use');
-  if(use) use.setAttribute('href', kind === 'gold' ? '#mole-gold' : (kind === 'bomb' ? '#mole-bomb' : '#mole-char'));
-}
-function moleExpire(index){
-  const slot = mole.slots[index];
-  if(!slot) return;
-  mole.slots.splice(index, 1);
-  const h = mole.holes[slot.hole];
-  if(h) h.classList.remove('show','gold','bomb');
-  // «놓침» 은 즉시 콤보 0 이 아니라 1.4초 유예 — 폭탄을 피하려다 놓친 것을 벌하지 않는다
-  if(slot.kind !== 'bomb') mole.comboGrace = MOLE_COMBO_GRACE;
-}
-function moleHit(i){
-  if(!mole.running) return;
-  const idx = mole.slots.findIndex(s => s.hole === i);
-  if(idx < 0) return;                       // 빈 구멍은 벌하지 않는다(8~15세의 오터치)
-  const slot = mole.slots[idx];
-  mole.slots.splice(idx, 1);
-
-  let gain = 0;
-  if(slot.kind === 'bomb'){
-    gain = -MOLE_PENALTY_BOMB;
-    mole.score = Math.max(0, mole.score - MOLE_PENALTY_BOMB);
-    mole.combo = 1; mole.comboGrace = 0;
-  } else if(slot.kind === 'gold'){
-    gain = 25;                              // 금벌레는 콤보 배율을 받지 않는다 → «지금 25 vs 지키는 40»
-    mole.score += gain;
-    mole.combo = Math.min(5, mole.combo + 1); mole.comboGrace = 0;
-  } else {
-    gain = 10 * mole.combo;
-    mole.score += gain;
-    mole.combo = Math.min(5, mole.combo + 1); mole.comboGrace = 0;
-  }
-
-  const h = mole.holes[i];
-  if(h){
-    h.classList.remove('show','gold','bomb');
-    h.classList.add('hit');
-    setTimeout(()=>{ if(h) h.classList.remove('hit'); }, 120);
-    const pop = h.querySelector('.mole-pop');
-    if(pop){
-      pop.textContent = (gain > 0 ? '+' : '') + gain;
-      pop.classList.remove('show');
-      void pop.offsetWidth;
-      pop.classList.add('show');
-    }
-  }
-  const s = $('#mole-score'); if(s) s.textContent = String(mole.score);
-  const c = $('#mole-combo'); if(c) c.textContent = 'x' + mole.combo;
-}
-function moleEnd(){
-  stopMole();
-  $('#mole-overlay').classList.remove('hidden');
-  $('#mole-overlay').textContent = mole.score >= 20 ? `GAME OVER · ${mole.score}점` : 'GAME OVER · 조금만 더!';
-  if(mole.score >= 20 && !mole.submitted){
-    mole.submitted = true;
-    setTimeout(()=>submitGameResult('mole', { score:mole.score }, $('#mole-go')), 800);
-  }
-}
-
 // ---- 오늘의 퍼즐 (3문제 세트) ----
 function pzRender(){
   const pz = state.pz;
@@ -7382,8 +6524,6 @@ async function openParentDashboard(){
       <div class="pd-stat"><b>${r.understanding}</b><span>이해도</span></div>
       <div class="pd-stat"><b>${r.solved}개</b><span>스스로 해결</span></div>
       <div class="pd-stat"><b>${r.chats}회</b><span>루미와 대화</span></div>
-      <div class="pd-stat"><b>${(g.mole && g.mole.best) || 0}점</b><span>두더지 최고</span></div>
-      <div class="pd-stat"><b>${(g.shooter && g.shooter.best) || 0}점</b><span>슈터 최고</span></div>
       <div class="pd-stat pd-wide pd-switch-row">
         <div><b>친구 채팅</b><span>끄면 친구 채팅을 막을 수 있어요</span></div>
         <label class="switch"><input type="checkbox" id="pd-fchat" ${r.friendChatEnabled?'checked':''}><i></i></label>
@@ -7616,15 +6756,6 @@ async function submitCampaignRepair(){
 //   «어느 가지를 살릴지» 선택해야 한다. 화면의 정보는 사라지지 않으므로 기억력은 쓰이지 않는다.
 const RP_TOTAL = 90;
 const RP_LAMP_SCORE = 150, RP_CLEAR_SCORE = 120, RP_SPARE_SCORE = 60, RP_TIME_SCORE = 2;
-
-// ★ v1.46 난이도: «초록 구간» 안에서 손을 떼야 성공. 레벨이 오를수록 구간이 좁고 빨라진다.
-//   speed = 100ms 당 충전량(6 = 초당 60) · heat = 초당 과열 · power = 전력 상한
-const RP_ZONES = [
-  { lo:55, hi:95, speed:6,  heat:5,  power:100 },   // Lv.1 — 넓고 느림(학습)
-  { lo:68, hi:92, speed:8,  heat:8,  power:85  },   // Lv.2 — 좁아지고 빨라짐
-  { lo:75, hi:90, speed:10, heat:12, power:70  }    // Lv.3 — 좁고 빠르고 뜨거움
-];
-function rpCfg(){ return RP_ZONES[Math.max(0, Math.min(2, rp.idx))] || RP_ZONES[0]; }
 
 const RP_MACHINES = [
   {
@@ -8007,8 +7138,6 @@ function rpLoadMachine() {
   rpNote(`전력 100 · 등 ${res.lamps.length}개 · 빨간 부품을 «꾹 눌러» 고쳐요.`);
   rpSym();
 }
-// v1.45: 예전 «한 번 클릭» 호출과의 호환용. 실제 수리는 «꾹 누르기» 로만 진행된다.
-function rpTap(id) { rpPressStart(id); }
 function rpMachineClear() {
   if (rp.phase !== 'play') return;
   rp.phase = 'machineDone';
@@ -8017,14 +7146,6 @@ function rpMachineClear() {
   rpNote(`남은 전력 ${Math.round(rp.power)} · 다음 기계도 «꾹 눌러» 고쳐요.`);
   rpUpdateHud(); rpSym();
   rpChime();
-  rp.timers.push(setTimeout(rpNext, 1600));
-}
-function rpMachineGiveUp() {
-  if (rp.phase !== 'play') return;
-  rp.phase = 'machineDone';
-  rpBanner(`전력이 바닥났어요 · ${rpMachine().name}`, 'warn');
-  rpNote('다음 기계에서는 «가장 위» 부품부터, 전력을 아끼며 고쳐 보세요.');
-  rpUpdateHud(); rpSym();
   rp.timers.push(setTimeout(rpNext, 1600));
 }
 function rpNext() {
@@ -8819,11 +7940,8 @@ $('#chat-send')?.addEventListener('click', ()=>sendChat(false));
 $('#chat-text')?.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendChat(false); } });
 $$('.chat-modes .chip').forEach(b=>b.addEventListener('click', ()=>chatModeSet(b.dataset.mode)));
 $('#chat-solved')?.addEventListener('click', chatSolved);
-$('#shooter-go')?.addEventListener('click', shStart);
 $('#pz-hint-btn')?.addEventListener('click', showPzHint);
 $('#btn-games')?.addEventListener('click', ()=>goNav('games'));
-$('#btn-mole')?.addEventListener('click', openMole);
-$('#mole-go')?.addEventListener('click', moleStart);
 $('#btn-repair')?.addEventListener('click', openRepair);
 $('#repair-go')?.addEventListener('click', rpStart);
 // ★ v1.46 빛의 병 정리
@@ -8924,17 +8042,6 @@ $$('#shop-filters .fchip').forEach(b=>b.addEventListener('click', ()=>{
 }));
 applySettings();
 
-(function bindShooterInputs(){
-  const cv = $('#shooter-canvas'); if(!cv) return;
-  const toX = (clientX)=>{ const r=cv.getBoundingClientRect(); return (clientX-r.left)/r.width*SH_W; };
-  cv.addEventListener('pointerdown', e=>{ sh.pointer=toX(e.clientX); cv.setPointerCapture?.(e.pointerId); });
-  cv.addEventListener('pointermove', e=>{ if(e.buttons || e.pointerType==='touch') sh.pointer=toX(e.clientX); });
-  cv.addEventListener('pointerup', ()=>{ sh.pointer=null; });
-  document.addEventListener('keydown', e=>{
-    if(e.key==='ArrowLeft'||e.key==='ArrowRight'){ sh.keys[e.key]=true; if(sh.running) e.preventDefault(); }
-  });
-  document.addEventListener('keyup', e=>{ if(e.key==='ArrowLeft'||e.key==='ArrowRight') sh.keys[e.key]=false; });
-})();
 
 // 시작 화면의 대표 로봇을 그린다(로그인 전 장식).
 renderHeroBot();

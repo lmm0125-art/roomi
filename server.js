@@ -472,6 +472,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS world_lessons(
   created_at TEXT DEFAULT (datetime('now','+9 hours')),
   UNIQUE(user_id, day, station)
 )`);
+// ★ 2026-11-28: 새 미니게임(루미 훈련소·균형 공방·어림 항해·거꾸로 질문소) 점수로 여는 지식 도감 카드
+//   world_lessons(역 학습 전용)와 섞지 않으려고 따로 둔다. 셀은 지급하지 않는다(XP·도감만).
+db.exec(`CREATE TABLE IF NOT EXISTS game_codex(
+  user_id INTEGER NOT NULL,
+  card_id INTEGER NOT NULL,
+  game TEXT,
+  created_at TEXT DEFAULT (datetime('now','+9 hours')),
+  PRIMARY KEY(user_id, card_id)
+)`);
 // ★ 2026-10-31: AI 전용 장기 기억(사용자별 1개, 대화 기록과 별도로 증류 저장)
 db.exec(`CREATE TABLE IF NOT EXISTS user_memories(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2698,7 +2707,7 @@ app.post('/api/demo/seed', (req,res)=>{
   }
 
   // 6) 게임 기록(오늘은 비워 두어 데모에서 직접 플레이 가능)
-  const games = [['puzzle',3,30,2],['mole',320,30,3],['shooter',520,50,4],['mole',180,20,5],['shooter',780,80,6]];
+  const games = [['puzzle',3,30,2],['estimate',150,30,3],['balance',70,20,4],['estimate',110,20,5],['balance',80,30,6]];
   for(const [kind,score,reward,off] of games){
     try{
       db.prepare('INSERT INTO game_logs(user_id,day,kind,score,reward,ts) VALUES(?,?,?,?,?,?)')
@@ -2748,7 +2757,7 @@ app.post('/api/demo/seed', (req,res)=>{
   }
   try{
     db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(fids[0], did, '오늘 같이 퍼즐 풀래?');
-    db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(fids[0], did, '나 두더지 300점 넘었어!');
+    db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(fids[0], did, '나 어림 항해 120점 넘었어!');
     db.prepare('INSERT INTO friend_messages(from_user,to_user,body) VALUES(?,?,?)').run(fids[1], did, '이번 주 목표 같이 달성하자!');
   }catch(e){ console.warn('[demo/seed] friend_messages:', e.message); }
   // ★ 2026-11-04: 이번 주 '친구 응원 1번'도 채워 시즌 보상 수령까지 시연 가능하게
@@ -3625,8 +3634,6 @@ app.get('/api/shop/exchange-info', (req,res)=>{
 
 // ★ 미니게임 결과 제출 (난이도 커브)
 //   게임 자체는 클라이언트에서 돌고, 여기는 '성적 검증 + 보상 지급'만 한다.
-//   - reaction : 반응속도(밀리초). 낮을수록 높은 보상
-//   - memory   : 기억 순서(도달 단계). 높을수록 높은 보상
 //   하루 1회만 인정. quest_logs 에 섞지 않고 game_logs 를 쓰므로
 //   '과제 완료 수' 통계가 게임 기록으로 오염되지 않는다.
 app.post('/api/game/result', (req,res)=>{
@@ -3638,41 +3645,8 @@ app.post('/api/game/result', (req,res)=>{
   const used = db.prepare('SELECT kind FROM game_logs WHERE user_id=? AND day=?').all(u.id, day).map(r=>r.kind);
   if (used.includes(String(kind)))
     return res.status(400).json({error:'오늘은 이미 이 게임을 했어! 내일 또 도전해 봐 😊'});
-  if (kind === 'reaction'){
-    const ms = Math.max(0, Math.min(99999, Number(req.body.ms)||0));
-    if (ms < 120) return res.status(400).json({error:'너무 빨랐어! 다시 도전해 봐'});
-    // 비정상적으로 느린 값은 조작/버그로 보고 보상을 주지 않는다(상한 9초).
-    if (ms > 9000) return res.status(400).json({error:'기록이 이상해요! 다시 도전해 봐'});
-    // ★ 보상 공식: 빠를수록 높고(400ms → 50셀 상한), 느릴수록 낮아진다(하한 10셀).
-    //   ⚠️ 주의: 이전 식(50-(ms-1500)/60)은 ms 가 작을수록 값이 커지는
-    //   역전되어 있어 "천천히 눌러야 이득" 이었다. 지금 식은 단조 감소다.
-    const reward = Math.max(10, Math.min(50, Math.round(50 - (ms-400)/22)));
-    return grantGameReward(u, 'reaction', reward, '반사속도', { ms, res });
-  }
-  if (kind === 'memory'){
-    const lv = Math.max(1, Math.min(9, Number(req.body.level)||1));
-    if (lv < 3) return res.status(400).json({error:'조금만 더 성공해 볼래?'});
-    const reward = Math.round(20 + lv*10);   // 3단계 50셀 ~ 9단계 110셀
-    return grantGameReward(u, 'memory', reward, '기억력', { level: lv, res });
-  }
-  // ★ 2026-10-27: 버그 슈터 — 점수 기반 보상. 하루 1회만 지급(위 used 검사).
-  if (kind === 'shooter'){
-    const score = Math.max(0, Math.min(99999, Number(req.body.score)||0));
-    if (score < 50) return res.status(400).json({error:'조금 더 도전해 볼래?'});
-    // v1.37: 보스 무한 재소환을 막았으므로 «5000점» 기준은 도달 불가 → 구간을 다시 잡았다.
-    //   500/1200/2000/2800/3500 → 20/30/50/80/110 (설계 §5-3)
-    const reward = score >= 3500 ? 110 : score >= 2800 ? 80 : score >= 2000 ? 50
-                 : score >= 1200 ? 30 : score >= 500 ? 20 : 10;
-    return grantGameReward(u, 'shooter', reward, '버그 슈터', { score, res });
-  }
-  // ★ 2026-10-28: 버그 두더지 — 30초 안에 버그를 잡는 다른 장르. 점수 기반 보상.
-  if (kind === 'mole'){
-    const score = Math.max(0, Math.min(99999, Number(req.body.score)||0));
-    if (score < 20) return res.status(400).json({error:'조금 더 도전해 볼래?'});
-    const reward = score >= 800 ? 80 : score >= 500 ? 50 : score >= 300 ? 30
-                 : score >= 150 ? 20 : 10;
-    return grantGameReward(u, 'mole', reward, '버그 두더지', { score, res });
-  }
+  // ★ 2026-11-28: 새 미니게임 4종 — 점수 검증 후 XP·도감 카드만 준다(셀 없음).
+  if (MINI_GAMES[String(kind)]) return grantMiniGame(u, String(kind), req.body, res);
   // ★ v1.41 «고장 탐정 · 미리 고치기» — 관찰·진단·복구 게임.
   //   교수 피드백 «미니게임이 전부 유명한 장르» 에 대한 응답으로 만든 자체 장르다.
   //   핵심: 오답은 감점이 아니라 «제외» 이며, 첫 판단에만 보너스를 준다.
@@ -3687,6 +3661,32 @@ app.post('/api/game/result', (req,res)=>{
   }
   res.status(400).json({error:'알 수 없는 게임이야'});
 });
+// ★ 2026-11-28: 새 미니게임 정의. max = 서버가 받아들이는 최고 점수, unlock = 도감 카드를 여는 점수, card = 해금되는 지식 카드 주제
+const MINI_GAMES = {
+  roomi:    { label:'루미 훈련소',   max:60,  unlock:30,  card:'조건문' },
+  balance:  { label:'균형 공방',     max:90,  unlock:45,  card:'약분·통분' },
+  estimate: { label:'어림 항해',     max:180, unlock:90,  card:'소수' },
+  reverse:  { label:'거꾸로 질문소', max:300, unlock:120, card:'산술 연산' },
+};
+const MINI_GAME_KINDS = Object.keys(MINI_GAMES);
+function grantMiniGame(u, kind, body, res){
+  const g = MINI_GAMES[kind];
+  const score = Number(body.score);
+  if (!Number.isInteger(score) || score < 0 || score > g.max)
+    return res.status(400).json({error:'기록이 이상해요! 다시 도전해 봐'});
+  db.prepare('INSERT INTO game_logs(user_id,day,kind,score,reward) VALUES(?,?,?,?,0)').run(u.id, today(), kind, score);
+  const growth = addExp(u.id, 5 + Math.floor(score / 10));
+  let codexUnlocked = null;
+  if (score >= g.unlock){
+    const card = db.prepare('SELECT id, topic FROM knowledge_cards WHERE topic=?').get(g.card);
+    if (card){
+      const ins = db.prepare("INSERT OR IGNORE INTO game_codex(user_id,card_id,game) VALUES(?,?,?)").run(u.id, card.id, kind);
+      if (ins.changes) codexUnlocked = card.topic;
+    }
+  }
+  res.json({ ok:true, reward:0, label:g.label, score, growth, codexUnlocked,
+    balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
+}
 // 게임 보상 공통 처리(로그를 먼저 남겨 중복 지급 방지)
 function grantGameReward(u, kind, reward, label, extra){
   const scoreVal = extra.ms != null ? extra.ms
@@ -4272,10 +4272,6 @@ app.get('/api/rank/daily', (req,res)=>{
   };
   res.json({
     day,
-    reaction: mk('reaction', 'ASC',  'ms',    'low'),   // 반사속도: 낮을수록 좋다
-    memory:   mk('memory',   'DESC', '단계',  'high'),  // 기억순서: 높을수록 좋다
-    shooter:  mk('shooter',  'DESC', '점',    'high'),  // 버그 슈터: 높을수록 좋다
-    mole:     mk('mole',     'DESC', '점',    'high'),  // 버그 두더지: 높을수록 좋다
     note: '닉네임은 개인정보 보호를 위해 일부 가립니다',
   });
 });
@@ -4287,12 +4283,7 @@ app.get('/api/rank/weekly', (req,res)=>{
   const d = new Date(Date.now() + 9*3600*1000);
   d.setUTCDate(d.getUTCDate() - 6);
   const since = d.toISOString().slice(0,10);
-  const mk = (kind)=>db.prepare(`SELECT u.nickname, MAX(g.score) score
-    FROM game_logs g JOIN users u ON u.id=g.user_id
-    WHERE g.kind=? AND g.day>=? AND ${TEST_USER_SQL}
-    GROUP BY g.user_id ORDER BY score DESC LIMIT 5`).all(kind, since)
-    .map((r,i)=>({rank:i+1, name:RANK_MASK(r.nickname), score:r.score}));
-  res.json({ ok:true, since, mole:mk('mole'), shooter:mk('shooter') });
+  res.json({ ok:true, since });
 });
 
 // ★ 운영자가 우편으로 공지·보상을 보낸다 — 평가 체크리스트 "운영자가 내용·보상을 추가/수정할 수 있는가"
@@ -4907,7 +4898,7 @@ function normalizePlanSteps(steps){
     if(!title) continue;
     const step = { type, title, desc, minutes };
     if(type === 'puzzle'){ /* message 없음 */ }
-    else if(type === 'game'){ step.game = (s.game === 'shooter' ? 'shooter' : 'mole'); }
+    else if(type === 'game'){ step.game = MINI_GAME_KINDS.includes(s.game) ? s.game : 'balance'; }
     else { step.message = String(s.message||title).trim().slice(0,120); }
     clean.push(step);
     if(clean.length >= 4) break;
@@ -4959,7 +4950,7 @@ ${lowMood ? '0-1) 오늘 기분이 가라앉았다. **2단계로 줄이고**, 1�
 2) type은 concept / puzzle / review / game / chat 중 하나.
 3) concept·review는 message에 아이가 채팅에 그대로 보낼 한 문장(존댓말, 60자 이내).
 4) puzzle은 오늘의 퍼즐 3문제.
-5) game은 game에 mole 또는 shooter.
+5) game은 game에 roomi · balance · estimate · reverse 중 하나(루미 훈련소·균형 공방·어림 항해·거꾸로 질문소).
 6) JSON만 출력: {"steps":[{"type":"concept","title":"...","desc":"...","minutes":2,"message":"..."},...]}
 `;
     const pr = await callLLM(prompt, { temperature:0.4, maxTokens:380, json:true });
@@ -5176,7 +5167,7 @@ function goalProgress(u, week){
     concept: q("SELECT COUNT(DISTINCT subject) c FROM learning_help_logs WHERE user_id=? AND solved=1 AND day>=?"),
     puzzle: q("SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND kind='puzzle' AND day>=?"),
     solve: q("SELECT COUNT(*) c FROM learning_help_logs WHERE user_id=? AND solved=1 AND day>=?"),
-    game: q("SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND kind IN ('mole','shooter') AND day>=?"),
+    game: q("SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND kind IN ('roomi','balance','estimate','reverse') AND day>=?"),
     plan: q("SELECT COUNT(*) c FROM game_logs WHERE user_id=? AND kind='plan' AND day>=?"),
   };
 }
@@ -5264,12 +5255,10 @@ function parsePalette(p){ try{ return p ? JSON.parse(p) : {}; }catch(e){ return 
 //   조건은 기존 보상 기준과 맞춰 «따로 연습하지 않아도» 도전할 수 있게 잡았다.
 //   보상은 15셀(설계 §9: 20 → 15, 하루 수입 330 → 375로 억제).
 const WORLD_QUESTS = [
-  { key:'well', prop:'well',      kind:'mole',    label:'우물',
-    cond:{ score:300 },              text:'우물이 버그로 막혔어. 두더지 300점을 넘겨 봐!' },
-  { key:'mill', prop:'mill',      kind:'shooter', label:'풍차',
-    cond:{ score:800, lives:1 },     text:'풍차 날개가 멈췄어. 목숨 1개 이상 남기고 800점!' },
-  { key:'bell', prop:'belltower', kind:'puzzle',  label:'종탑',
-    cond:{ firstTry:3 },             text:'종탑이 잠들었어. 퍼즐 3문제를 한 번에 맞혀 봐!' },
+  { key:'well', prop:'well',      kind:'estimate', label:'우물',
+    cond:{ score:120 },              text:'우물 물이 흐려졌어. 어림 항해에서 120점을 모아 봐!' },
+  { key:'mill', prop:'mill',      kind:'balance',  label:'풍차',
+    cond:{ score:60 },               text:'풍차 저울이 기울었어. 균형 공방에서 60점 이상 맞춰 봐!' },
   // ★ v1.84 «기억의 등대» — 미니게임이 아닌 학습 의뢰. 오늘 루미에게 설명(teach-back)을 1번 이상 했으면 완료.
   //   설명 화면은 채점하지 않으므로 «검증된» 설명이 아니라 «설명한 사실» 만 본다(시간 초과 미검증도 인정).
   //   판정은 서버 DB(chat_messages explain 기록)로만 한다 — 클라이언트가 보낸 점수는 쓰지 않는다.
@@ -7341,8 +7330,10 @@ app.get('/api/codex', (req,res)=>{
   const u = authUser(req);
   if(!u) return res.status(401).json({ error:'로그인이 필요해요' });
   const rows = db.prepare('SELECT id,topic,chapter,concept,analogy,example FROM knowledge_cards ORDER BY chapter, id').all();
-  const got = new Set(db.prepare('SELECT DISTINCT card_id FROM world_lessons WHERE user_id=? AND solved=1')
-    .all(u.id).map(r => r.card_id));
+  const got = new Set([
+    ...db.prepare('SELECT DISTINCT card_id FROM world_lessons WHERE user_id=? AND solved=1').all(u.id).map(r => r.card_id),
+    ...db.prepare('SELECT card_id FROM game_codex WHERE user_id=?').all(u.id).map(r => r.card_id)
+  ]);
   const cards = rows.map(r => ({
     id:r.id, topic:r.topic, chapter:r.chapter,
     concept:r.concept || '', analogy:r.analogy || '', example:r.example || '',

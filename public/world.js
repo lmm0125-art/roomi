@@ -93,7 +93,7 @@
     sway: null,      // 바람 흔들림(CustomMaterial) 레지스트리 { mats:[], saved:[[mesh, 원본재질]] }
     pillars: null,   // 의뢰 광기둥 + 탑 빛기둥(emissive — 라이트 아님)
     fish: null,      // 호수 물고기 그림자 + 물결 링
-    butterflies: null, flags: null, springFog: null,
+    butterflies: null, springFog: null,
     petals: null,    // 계절 흩날림 파티클(≤120)
     prints: null,    // 발자국 링 버퍼(24장)
     sparkle: null,   // 수집 흡입 광휘 파티클(≤40)
@@ -1172,8 +1172,8 @@
           break;
         }
         case 'cloth': {
-          // ★ L4-6 — 깃발 천은 CPU 정점파. 꺼지면 updateFlags 의 W.fx.cloth 가드가
-          //    파동 업데이트를 멈춰 «정적 천» 으로 회귀한다(재질 교체 없음).
+          // ★ L4-6 — 깃발 천 정점파용 플래그. 2026-11-28: 한 번도 불리지 않던 깃발 생성·갱신 코드를 지워서
+          //    지금은 이 값을 읽는 곳이 없다(프리셋 표 호환을 위해 키만 남긴다).
           break;
         }
         case 'fish': {
@@ -2280,7 +2280,6 @@
   const QUEST_SPOTS = [
     { key:'well', x:0.5,   z:-8.5,  label:'우물' },
     { key:'mill', x:26.5,  z:-13.5, label:'풍차' },
-    { key:'bell', x:-20.0, z:-2.0,  label:'종탑' },
     // ★ v1.84 «기억의 등대» — 미니게임이 아니라 «루미에게 설명하기» 로 푸는 학습 의뢰.
     //   좌표는 호수 중심(27,12)에서 마을 반대편(24°) 물가. heightAt 으로 미리 계산한 값이다:
     //   등대 탑은 수심 0.4m 얕은 물(물가 8.0m 안쪽 7.4m), 상호작용 자리는 마른 땅(10.0m, 높이 0.6).
@@ -2289,9 +2288,8 @@
   ];
   const LIGHTHOUSE = { x: 33.76, z: 15.01 };
   const QUEST_PROMPT = {
-    well:'우물이 버그로 막혔어 · 두더지 300점',
-    mill:'풍차가 멈췄어 · 슈터 800점 + 목숨 1개',
-    bell:'종탑이 잠들었어 · 퍼즐 3문제 한 번에',
+    well:'우물 물이 흐려졌어 · 어림 항해 120점',
+    mill:'풍차 저울이 기울었어 · 균형 공방 60점',
     light:'등대 불이 흐려졌어 · 루미에게 개념 하나 설명하기'
   };
 
@@ -4310,64 +4308,6 @@
     }
   }
 
-  // ── L4-6. 깃발 — 풍차 옆·시장 옆·마을 입구 3면(기둥+천). 첫 물결은 CPU 정점파
-  //    (CustomMaterial 예산을 바람 흔들림에 쓰므로 천은 7×7 격자 정점을 직접 흔든다 — 81점×3면 무시 가능).
-  //    천 재질은 광장 수정구 «plazaOrbM» 을 재사용(새 재질 0) — 마을 깃발이 은은한 금빛.
-  function ensureFlags(scene) {
-    if (W.flags || !scene) return;
-    try {
-      const poleM = scene.getMaterialByName('signWoodMat');
-      const clothM = scene.getMaterialByName('plazaOrbM');
-      const spots = [
-        { x: 23.8, z: -11.2, ry: -0.9 },    // 풍차 옆
-        { x: -10.8, z: 0.6, ry: 0.7 },      // 시장 뒤편
-        { x: 2.6, z: 13.6, ry: Math.PI }    // 마을 입구
-      ];
-      const list = [];
-      spots.forEach((sp, i) => {
-        if (blockReason(sp.x, sp.z)) return;   // 기존 소품과 겹치면 이 깃발은 생략
-        const y = heightAt(sp.x, sp.z);
-        const node = new BABYLON.TransformNode('wFlag' + i, scene);
-        node.position.set(sp.x, y, sp.z);
-        node.rotation.y = sp.ry;
-        const pole = BABYLON.MeshBuilder.CreateCylinder('wFlagPole' + i,
-          { height: 2.7, diameter: 0.075, tessellation: 8 }, scene);
-        pole.position.set(0, 1.35, 0);
-        pole.parent = node;
-        pole.material = poleM || null;
-        pole.isPickable = false; pole.receiveShadows = true; pole.castShadow = true;
-        const cloth = BABYLON.MeshBuilder.CreateGround('wFlagCloth' + i,
-          { width: 1.15, height: 0.62, subdivisions: 7, updatable: true,
-            sideOrientation: BABYLON.Mesh.DOUBLESIDE }, scene);
-        cloth.position.set(0.6, 2.56, 0);
-        cloth.parent = node;
-        cloth.material = clothM || null;
-        cloth.isPickable = false;
-        list.push({ node, cloth, x0: -0.575, wInv: 1 / 1.15, phase: nz(i, 81) * 6.28 });
-        COLL.push({ x: sp.x, z: sp.z, r: 0.22 });
-      });
-      W.flags = list;
-    } catch (e) { W.flags = null; }
-  }
-  function updateFlags(dt) {
-    const FL = W.flags;
-    if (!FL || !FL.length || !W.fx.cloth) return;   // fx.cloth 꺼짐 = «정적 천» 회귀
-    const wind = W.weather ? W.weather.windStrength : 0.3;
-    for (let fi = 0; fi < FL.length; fi++) {
-      const f = FL[fi];
-      f.phase += dt * (2.0 + wind * 3.2);
-      const pos = f.cloth.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-      if (!pos) continue;
-      const n = pos.length / 3;
-      for (let i = 0; i < n; i++) {
-        const lx = pos[i * 3];
-        const k = clamp((lx - f.x0) * f.wInv, 0, 1);   // 깃대 0 → 끝 1
-        pos[i * 3 + 1] = Math.sin(f.phase + lx * 4.5 + fi) * (0.03 + wind * 0.08) * k;
-        pos[i * 3 + 2] = Math.cos(f.phase * 0.83 + lx * 3.4 + fi * 2) * (0.015 + wind * 0.05) * k;
-      }
-      f.cloth.updateVerticesData(BABYLON.VertexBuffer.PositionKind, pos);
-    }
-  }
 
   // ── L5-8. 의뢰 광기둥 + 탑 빛기둥 — emissive «원기둥 3단» (가시성 계단식 하강 = 상단 소멸).
   //    의뢰 3곳(우물·풍차·종탑)은 «오늘 의뢰가 남아 있을 때» 만 호박빛, 완료/미발급일 소등.
@@ -4707,8 +4647,6 @@
     if (W.fx.petals && W.petals) updatePetals(dt, dn, wx);
     // ⑦ 발자국
     if (W.fx.footprints && W.prints && W.root) updatePrints(dt, wx);
-    // ⑧ 깃발 천파
-    if (W.fx.cloth) updateFlags(dt);
     // ⑨ 화면 펄스 — 블룸(수집) + DOF(입장·수정화)
     if (W.bloomT > 0 && W.pipe) {
       W.bloomT -= dt;
@@ -5859,7 +5797,7 @@
     // ★ 2026-11-21 (v1.73) L4/L5/L6 — 생명감·스토리·마감 레이어 상태 전부 리셋(v1.69 수명 규율).
     //    메시·재질·파티클·텍스처는 씬 dispose 를 따라가고, 참조·버퍼·리스너만 여기서 끊는다.
     //    (W.sway 의 CustomMaterial 은 applyFeature('windSway',false) 경로와 씬 dispose 양쪽으로 회수)
-    W.sway = null; W.pillars = null; W.fish = null; W.butterflies = null; W.flags = null;
+    W.sway = null; W.pillars = null; W.fish = null; W.butterflies = null;
     W.springFog = null; W.petals = null; W.prints = null; W.sparkle = null; W.rippleTex = null;
     W.bloomT = 0; W.dofT = 0; W.__lastInput = 0;
     // ★ 2026-11-21 (v1.74) 빛의 조각 + 빠른 이동 정리 — v1.69 수명 규율: 새 상태는 전부 닫는다.
@@ -6351,7 +6289,6 @@
     { id: 'st1',   label: '📖 지혜의 샘 · 전망대 남서',     mark: stationMarkFor(1), pick: () => warpPoint(STATION_SPOTS[1].x, STATION_SPOTS[1].z) },
     { id: 'st2',   label: '📖 지혜의 샘 · 버드나무숲 북쪽', mark: stationMarkFor(2), pick: () => warpPoint(STATION_SPOTS[2].x, STATION_SPOTS[2].z) },
     { id: 'mill',  label: '🌬️ 풍차',        mark: questMarkFor('mill'), pick: () => warpPoint(26.5, -13.5) },
-    { id: 'bell',  label: '🔔 종탑',        mark: questMarkFor('bell'), pick: () => warpPoint(-20.0, -2.0) },
     // 탑 좌표로 찾으면 물·충돌체를 피한 가장 가까운 뭍 자리에 내려 «탑을 바라보며» 선다
     { id: 'light', label: '🗼 기억의 등대',  mark: questMarkFor('light'), pick: () => warpPoint(LIGHTHOUSE.x, LIGHTHOUSE.z, 4) },
     { id: 'vault', label: '🏮 별빛 저장고',  mark: () => '', pick: () => warpPoint(VAULT_SPOT.x, VAULT_SPOT.z) },

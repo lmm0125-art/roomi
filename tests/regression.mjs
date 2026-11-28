@@ -413,6 +413,69 @@ async function extras() {
 // ============================================================
 // v1.84 «기억의 등대» 의뢰 — 오늘 루미에게 설명했는지로만 판정(클라이언트 점수 무시)
 // ============================================================
+// ============================================================
+// 2026-11-28 새 미니게임 4종(루미 연습실) — XP·도감만, 셀 없음, 하루 1번, 범위 검사
+// 두더지·슈터는 제거됐다. 우물·풍차 의뢰는 어림 항해·균형 공방으로 연결된다.
+// ============================================================
+async function minigames() {
+  await test('미니게임: 두더지·슈터 기록은 더 이상 받지 않는다(알 수 없는 게임)', async () => {
+    const u = await newUser('mg0');
+    for (const kind of ['mole', 'shooter']) {
+      const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind, score: 100 } });
+      assert(r.status === 400, `${kind} 가 거절돼야 함: ${r.status}`);
+    }
+  });
+
+  await test('미니게임: 범위를 벗어난 점수는 거절한다(루미 훈련소 최고 60점)', async () => {
+    const u = await newUser('mg1');
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 61 } });
+    assert(r.status === 400, `61점이 거절돼야 함: ${r.status}`);
+    const r2 = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: -1 } });
+    assert(r2.status === 400, `음수가 거절돼야 함: ${r2.status}`);
+  });
+
+  await test('미니게임: 셀은 주지 않고 XP 와 도감 카드만 준다(같은 날 두 번째는 거절)', async () => {
+    const u = await newUser('mg2');
+    const before = await api('/api/user', { token: u.token });
+    const bal0 = before.data.user.cell_balance;
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 30 } });
+    assert(r.status === 200 && r.data.ok === true, `기록 실패 ${r.status} ${JSON.stringify(r.data)}`);
+    assert(r.data.reward === 0, `셀 보상이 0 이어야 함: ${r.data.reward}`);
+    assert(r.data.growth && typeof r.data.growth.exp === 'number', 'XP(growth) 가 와야 함');
+    assert(r.data.codexUnlocked === '조건문', `도감 카드 해금 기대 '조건문', 실제 ${r.data.codexUnlocked}`);
+    assert(r.data.balance === bal0, `잔액이 변하면 안 된다: ${bal0} → ${r.data.balance}`);
+    const again = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 40 } });
+    assert(again.status === 400, `같은 날 두 번째 기록은 거절돼야 함: ${again.status}`);
+  });
+
+  await test('미니게임: 점수가 낮으면 도감 카드가 열리지 않는다', async () => {
+    const u = await newUser('mg3');
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'reverse', score: 30 } });
+    assert(r.status === 200 && r.data.codexUnlocked === null, `낮은 점수에 카드가 열리면 안 됨: ${JSON.stringify(r.data)}`);
+  });
+
+  await test('미니게임: 해금된 카드는 지식 도감에서 unlocked 로 보인다', async () => {
+    const u = await newUser('mg4');
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'estimate', score: 120 } });
+    assert(r.status === 200 && r.data.codexUnlocked === '소수', `어림 항해 해금 기대 '소수', 실제 ${r.data.codexUnlocked}`);
+    const cx = await api('/api/codex', { token: u.token });
+    const card = (cx.data.cards || []).find(c => c.topic === '소수');
+    assert(card && card.unlocked === true, `도감에서 소수 카드가 열려 있어야 함`);
+    assert(cx.data.unlocked >= 1, `열린 카드 수 기대 1 이상, 실제 ${cx.data.unlocked}`);
+  });
+
+  await test('세계 의뢰: 우물은 어림 항해(120점 이상), 풍차는 균형 공방(60점 이상)으로 청구된다', async () => {
+    const u = await newUser('mg5');
+    const list = await api('/api/world/quest', { token: u.token });
+    const well = (list.data.quests || []).find(x => x.key === 'well');
+    const mill = (list.data.quests || []).find(x => x.key === 'mill');
+    assert(well && well.kind === 'estimate', `우물 kind 기대 estimate: ${JSON.stringify(well)}`);
+    assert(mill && mill.kind === 'balance', `풍차 kind 기대 balance: ${JSON.stringify(mill)}`);
+    const low = await api('/api/world/quest/claim', { method: 'POST', token: u.token, body: { quest: 'well', score: 100 } });
+    assert(low.data.ok === false && /score>=120/.test(low.data.need || ''), `120 미만은 거절돼야 함: ${JSON.stringify(low.data)}`);
+  });
+}
+
 async function lighthouse() {
   await test('등대 의뢰: 목록에 teach 의뢰로 나오고 처음에는 미완료다', async () => {
     const u = await newUser('lh1');
@@ -420,7 +483,8 @@ async function lighthouse() {
     assert(r.status === 200, `quest 목록 실패 ${r.status}`);
     const q = (r.data.quests || []).find((x) => x.key === 'light');
     assert(q && q.kind === 'teach' && q.done === false, `등대 의뢰 이상: ${JSON.stringify(q)}`);
-    assert(r.data.quests.length === 4, `의뢰 수 기대 4, 실제 ${r.data.quests.length}`);
+    // 2026-11-28: 종탑(퍼즐) 의뢰 삭제 → 우물·풍차·등대 3개
+    assert(r.data.quests.length === 3, `의뢰 수 기대 3, 실제 ${r.data.quests.length}`);
   });
 
   await test('등대 의뢰: 설명 전에는 점수를 부풀려 보내도 완료되지 않는다', async () => {
@@ -448,7 +512,7 @@ async function lighthouse() {
   try {
     await waitReady();
     console.log(`RooMi 회귀 테스트 · 서버 ${BASE} · DB ${DB_FILE}`);
-    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse();
+    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse(); await minigames();
   } catch (e) {
     console.log('\n[실행 오류] ' + e.message);
     code = 1;
