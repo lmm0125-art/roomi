@@ -16,7 +16,7 @@ const DB_FILE = path.join(os.tmpdir(), `roomi-regression-${process.pid}-${Date.n
 const CONCEPT = '분수의 덧셈';   // knowledge_cards 에 있는 실제 개념명
 
 // ---------- 서버 기동 ----------
-const env = { ...process.env, PORT: String(PORT), DB_PATH: DB_FILE, ROOMI_TEST_NO_LLM: '1', ADMIN_KEY: 'test-admin' };
+const env = { ...process.env, PORT: String(PORT), DB_PATH: DB_FILE, ROOMI_TEST_NO_LLM: '1', ADMIN_KEY: 'test-admin', ROOMI_DEMO: '1' };
 const nodeBin = process.execPath;
 const server = spawn(nodeBin, ['--experimental-sqlite', 'server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';
@@ -35,16 +35,22 @@ async function waitReady() {
 const db = () => new DatabaseSync(DB_FILE);
 const kstDay = (offset = 0) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' })
   .format(new Date(Date.now() + offset * 86400000));
-async function api(p, { method = 'GET', token, body } = {}) {
+async function api(p, { method = 'GET', token, body, parent } = {}) {
   const r = await fetch(BASE + p, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Token': token } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Token': token } : {}), ...(parent ? { 'X-Parent': parent } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   let data = null; try { data = await r.json(); } catch {}
   return { status: r.status, data };
 }
 let seq = 0;
+// 보호자 확인(곱셈 문제)을 통과해 보호자 세션 토큰을 받는다
+async function parentSession(u) {
+  const q = await api('/api/parent/quiz');
+  const v = await api('/api/parent/verify', { method: 'POST', token: u.token, body: { a: q.data.a, b: q.data.b, token: q.data.token, answer: q.data.a * q.data.b } });
+  return v.data.parentToken;
+}
 async function newUser(tag) {
   const nickname = `t_${tag}_${Date.now().toString(36)}_${seq++}`;
   const r = await api('/api/user', { method: 'POST', body: { nickname } });
@@ -210,6 +216,18 @@ async function bug5() {
     assert(m, 'concept_mastery 행이 없음(bumpMastery lesson 미호출)');
     assert(Math.abs(m.score - 0.40) < 0.001, `점수 기대 0.40, 실제 ${m.score}`);
   });
+  await test('버그5: 같은 개념을 같은 날 두 번 설명해도 마스터리는 한 번만 오른다', async () => {
+    const u = await newUser('b5once');
+    const body = { concept: CONCEPT, text: '분모가 같으면 분자끼리 더하면 돼요' };
+    const r1 = await api('/api/chat/explain', { method: 'POST', token: u.token, body });
+    const r2 = await api('/api/chat/explain', { method: 'POST', token: u.token, body });
+    assert(r1.data && r1.data.verdict && r1.data.verdict.credited === true, '첫 설명은 가점되어야 함');
+    assert(r2.data && r2.data.verdict && r2.data.verdict.credited === false, '두 번째 설명은 가점되지 않아야 함');
+    const d = db();
+    const m = d.prepare('SELECT score FROM concept_mastery WHERE user_id=? AND topic=?').get(u.id, CONCEPT);
+    d.close();
+    assert(m && Math.abs(m.score - 0.40) < 0.001, `점수 기대 0.40(1회), 실제 ${m && m.score}`);
+  });
   await test('버그5: 틀린 teach-back 은 마스터리를 올리지 않는다', async () => {
     const u = await newUser('b5n');
     await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 클수록 더 큰 수야' } });
@@ -324,7 +342,7 @@ async function extras() {
     const u = await newUser('letter');
     await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 같으면 분자끼리 더하면 돼요' } });
     shiftLamp(u.id, CONCEPT, 5);   // 5일 전 → decay 65 → 편지 미리보기 대상
-    const r = await api('/api/parent/dashboard', { token: u.token });
+    const r = await api('/api/parent/dashboard', { token: u.token, parent: await parentSession(u) });
     const body = r.data && r.data.letterPreview && r.data.letterPreview.body;
     assert(body, '편지 미리보기가 없음');
     assert(body.includes(`«${CONCEPT}»을 한 번 다시`), `조사 오류: ${body.split('\n')[2]}`);
@@ -400,7 +418,7 @@ async function extras() {
     const u = await newUser('dash');
     await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 같으면 분자끼리 더하면 돼요' } });
     await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: '소수', text: '분모가 클수록 더 큰 수야' } });
-    const r = await api('/api/parent/dashboard', { token: u.token });
+    const r = await api('/api/parent/dashboard', { token: u.token, parent: await parentSession(u) });
     assert(r.status === 200, `대시보드 실패 ${r.status}`);
     const taught = (r.data.taughtThisWeek || []).map(x => x.topic);
     assert(taught.includes(CONCEPT), `검증된 가르침이 안 보임: ${taught}`);
@@ -426,10 +444,10 @@ async function minigames() {
     }
   });
 
-  await test('미니게임: 범위를 벗어난 점수는 거절한다(루미 훈련소 최고 60점)', async () => {
+  await test('미니게임: 범위를 벗어난 점수는 거절한다(루미 훈련소 최고 90점)', async () => {
     const u = await newUser('mg1');
-    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 61 } });
-    assert(r.status === 400, `61점이 거절돼야 함: ${r.status}`);
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 91 } });
+    assert(r.status === 400, `91점이 거절돼야 함: ${r.status}`);
     const r2 = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: -1 } });
     assert(r2.status === 400, `음수가 거절돼야 함: ${r2.status}`);
   });
@@ -438,13 +456,13 @@ async function minigames() {
     const u = await newUser('mg2');
     const before = await api('/api/user', { token: u.token });
     const bal0 = before.data.user.cell_balance;
-    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 30 } });
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 45 } });
     assert(r.status === 200 && r.data.ok === true, `기록 실패 ${r.status} ${JSON.stringify(r.data)}`);
     assert(r.data.reward === 0, `셀 보상이 0 이어야 함: ${r.data.reward}`);
     assert(r.data.growth && typeof r.data.growth.exp === 'number', 'XP(growth) 가 와야 함');
     assert(r.data.codexUnlocked === '조건문', `도감 카드 해금 기대 '조건문', 실제 ${r.data.codexUnlocked}`);
     assert(r.data.balance === bal0, `잔액이 변하면 안 된다: ${bal0} → ${r.data.balance}`);
-    const again = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 40 } });
+    const again = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'roomi', score: 50 } });
     assert(again.status === 400, `같은 날 두 번째 기록은 거절돼야 함: ${again.status}`);
   });
 
@@ -473,6 +491,115 @@ async function minigames() {
     assert(mill && mill.kind === 'balance', `풍차 kind 기대 balance: ${JSON.stringify(mill)}`);
     const low = await api('/api/world/quest/claim', { method: 'POST', token: u.token, body: { quest: 'well', score: 100 } });
     assert(low.data.ok === false && /score>=120/.test(low.data.need || ''), `120 미만은 거절돼야 함: ${JSON.stringify(low.data)}`);
+  });
+}
+
+// 2026-11-28 발표 도우미: 오늘 기록한 게임 목록 · 데모 전용 예열 경계
+// 2026-11-28 보안 회귀: 닉네임만으로 PIN 계정 탈취 불가 · 보호자 데이터는 세션 필요 · 데모 이름 예약 · 데모 스위치
+// 2026-11-28 내구성: 보호자 세션·도전 출제 기록은 데이터베이스에 남는다(서버 재시작에도 살아 있다)
+async function durability() {
+  await test('내구성: 보호자 세션 토큰은 데이터베이스에 저장된다', async () => {
+    const u = await newUser('dur1');
+    const tok = await parentSession(u);
+    const d = db();
+    const row = d.prepare('SELECT user_id, exp FROM parent_sessions WHERE token=?').get(tok);
+    d.close();
+    assert(row && row.user_id === u.id && row.exp > Date.now(), '보호자 세션이 DB 에 없다');
+  });
+
+  await test('내구성: 도전 출제 기록은 데이터베이스에 남는다(서버 메모리 Map 아님)', async () => {
+    const u = await newUser('dur2');
+    await api('/api/chat/explain', { method: 'POST', token: u.token, body: { concept: CONCEPT, text: '분모가 같으면 분자끼리 더하면 돼요' } });
+    const r = await api('/api/teach/challenge', { token: u.token });
+    if (r.status !== 200) { console.log('    (도전 출제 생략: ' + r.status + ')'); return; }
+    const d = db();
+    const row = d.prepare('SELECT user_id FROM teach_pending WHERE user_id=?').get(u.id);
+    d.close();
+    assert(row && row.user_id === u.id, '출제 기록이 DB 에 없다');
+  });
+}
+
+async function security() {
+  await test('보안: PIN 계정은 닉네임만으로 들어갈 수 없다(PIN 없으면 needPin, 틀리면 거절, 맞으면 통과)', async () => {
+    const u = await newUser('sec1');
+    await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '2468' } });
+    const none = await api('/api/user', { method: 'POST', body: { nickname: u.nickname } });
+    assert(none.status === 401 && none.data.needPin === true, `닉네임만으로 들어가면 안 된다: ${none.status} ${JSON.stringify(none.data)}`);
+    const bad = await api('/api/user', { method: 'POST', body: { nickname: u.nickname, pin: '0000' } });
+    assert(bad.status === 401, `틀린 PIN 은 거절돼야 함: ${bad.status}`);
+    const ok = await api('/api/user', { method: 'POST', body: { nickname: u.nickname, pin: '2468' } });
+    assert(ok.status === 200 && ok.data.user.id === u.id, `맞는 PIN 은 통과해야 함: ${ok.status}`);
+  });
+
+  await test('보안: 같은 계정의 기존 토큰(자동 로그인)은 PIN 없이 통과한다', async () => {
+    const u = await newUser('sec2');
+    await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '1122' } });
+    const r = await api('/api/user', { method: 'POST', token: u.token, body: { nickname: u.nickname } });
+    assert(r.status === 200, `자동 로그인이 막히면 안 된다: ${r.status}`);
+  });
+
+  await test('보안: 보호자 데이터·플레이 시간 조절은 보호자 세션 없이는 403', async () => {
+    const u = await newUser('sec3');
+    const d = await api('/api/parent/dashboard', { token: u.token });
+    assert(d.status === 403 && d.data.needParent === true, `대시보드가 열리면 안 된다: ${d.status}`);
+    const p = await api('/api/parent/playtime', { method: 'POST', token: u.token, body: { delta: 10 } });
+    assert(p.status === 403, `플레이 시간이 아이 토큰만으로 늘면 안 된다: ${p.status}`);
+    const w = await api('/api/parent/weekly', { token: u.token });
+    assert(w.status === 403, `주간 요약이 열리면 안 된다: ${w.status}`);
+    const fc = await api('/api/parent/friend-chat', { method: 'POST', token: u.token, body: { enabled: false } });
+    assert(fc.status === 403, `친구 채팅 설정이 바뀌면 안 된다: ${fc.status}`);
+    const withSession = await api('/api/parent/playtime', { method: 'POST', token: u.token, parent: await parentSession(u), body: { delta: 10 } });
+    assert(withSession.status === 200, `보호자 세션이 있으면 통과해야 함: ${withSession.status}`);
+  });
+
+  await test('보안: 보호자 세션은 다른 계정에서 못 쓴다', async () => {
+    const a = await newUser('sec4a');
+    const b = await newUser('sec4b');
+    const tokA = await parentSession(a);
+    const r = await api('/api/parent/dashboard', { token: b.token, parent: tokA });
+    assert(r.status === 403, `다른 계정의 보호자 세션이 통과하면 안 된다: ${r.status}`);
+  });
+
+  await test('보안: PIN 을 바꾸려면 현재 PIN 이 필요하다', async () => {
+    const u = await newUser('sec5');
+    await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '3579' } });
+    const steal = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '9999' } });
+    assert(steal.status === 403 && steal.data.needCurrent === true, `현재 PIN 없이 바뀌면 안 된다: ${steal.status}`);
+    const ok = await api('/api/account/pin', { method: 'POST', token: u.token, body: { pin: '9999', currentPin: '3579' } });
+    assert(ok.status === 200, `현재 PIN 이 맞으면 바뀌어야 함: ${ok.status}`);
+  });
+
+  await test('보안: 데모 이름은 일반 가입으로 만들 수 없다', async () => {
+    const r = await api('/api/user', { method: 'POST', body: { nickname: '데모_흉내' } });
+    assert(r.status === 400, `데모 이름 가입이 막혀야 함: ${r.status}`);
+    const r2 = await api('/api/user', { method: 'POST', body: { nickname: 'demo_fake' } });
+    assert(r2.status === 400, `영문 데모 이름도 막혀야 함: ${r2.status}`);
+  });
+
+  await test('보안: 데모 계정이 아닌 계정은 데모 예열을 쓸 수 없다', async () => {
+    const u = await newUser('sec6');
+    const r = await api('/api/demo/warm', { method: 'POST', token: u.token, body: {} });
+    assert(r.status === 403, `일반 계정 예열은 403: ${r.status}`);
+    const st = await api('/api/demo/status');
+    assert(st.status === 200 && st.data.enabled === true, '테스트 서버에서는 데모가 켜져 있어야 함');
+  });
+}
+
+async function presenterTools() {
+  await test('발표 도우미: 오늘 기록한 게임이 /api/game/today 에 보인다', async () => {
+    const u = await newUser('pt1');
+    const before = await api('/api/game/today', { token: u.token });
+    assert(before.status === 200 && Array.isArray(before.data.kinds) && before.data.kinds.length === 0, '처음에는 비어 있어야 함: ' + JSON.stringify(before.data));
+    const r = await api('/api/game/result', { method: 'POST', token: u.token, body: { kind: 'estimate', score: 60 } });
+    assert(r.status === 200, '기록 실패 ' + r.status);
+    const after = await api('/api/game/today', { token: u.token });
+    assert(after.data.kinds.includes('estimate'), 'estimate 가 보여야 함: ' + JSON.stringify(after.data));
+  });
+
+  await test('발표 도우미: 예열 호출은 데모 계정만 쓸 수 있다(일반 계정은 403)', async () => {
+    const u = await newUser('pt2');
+    const r = await api('/api/demo/warm', { method: 'POST', token: u.token, body: {} });
+    assert(r.status === 403, '일반 계정은 403 이어야 함: ' + r.status);
   });
 }
 
@@ -512,7 +639,7 @@ async function lighthouse() {
   try {
     await waitReady();
     console.log(`RooMi 회귀 테스트 · 서버 ${BASE} · DB ${DB_FILE}`);
-    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse(); await minigames();
+    await bug1(); await bug2(); await bug3(); await bug4(); await bug5(); await extras(); await lighthouse(); await minigames(); await presenterTools(); await security(); await durability();
   } catch (e) {
     console.log('\n[실행 오류] ' + e.message);
     code = 1;

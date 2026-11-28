@@ -106,6 +106,12 @@ try{ db.exec('ALTER TABLE users ADD COLUMN last_visit TEXT'); }catch{}
 try{ db.exec('ALTER TABLE users ADD COLUMN revive_streak INTEGER'); }catch{}
 try{ db.exec('ALTER TABLE users ADD COLUMN revive_until TEXT'); }catch{}
 try{ db.exec('ALTER TABLE users ADD COLUMN parent_ok INTEGER NOT NULL DEFAULT 0'); }catch{}
+// ★ 2026-11-28 보안: 데모 계정 표시는 is_demo 플래그로만 판정한다(닉네임 접두사로 판정하면 아이가 이름만 바꿔 무제한 플레이를 얻는다).
+try{ db.exec('ALTER TABLE users ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0'); }catch{}
+const DEMO_NICK = '데모_루미';
+// ★ 2026-11-28 정리: 정보성 로그(준비 상태·집계)는 ROOMI_LOG=1 일 때만 찍는다. 경고(⚠️)와 오류는 항상 찍는다.
+const logInfo = (...a) => { if(process.env.ROOMI_LOG === '1') console.log(...a); };
+const DEMO_ENABLED = process.env.ROOMI_DEMO === '1';   // 발표용 데모 경로는 명시적으로 켠 서버에서만 열린다
 
 // ★ P0-5 경제 확장: 소지품(1회 보유) / 소모품(반복 구매) 구분
 try{ db.exec('ALTER TABLE items ADD COLUMN consumable INTEGER NOT NULL DEFAULT 0'); }catch{}
@@ -1422,7 +1428,7 @@ try{ db.exec("ALTER TABLE knowledge_cards ADD COLUMN prereq TEXT DEFAULT ''"); }
     const r = ins.run(c.topic,c.chapter,c.concept,c.analogy,c.example,c.h1,c.h2,c.h3,JSON.stringify(c.quiz),c.tags,c.topic);
     if (r && r.changes) added++;
   }
-  if (added) console.log('🧠 knowledge_cards 추가:', added, '개');
+  if (added) logInfo('🧠 knowledge_cards 추가:', added, '개');
 }
 
 // ★ 2026-11-21 (v1.74) D1 지식 카드 24장 추가(컴퓨터개론 12 + 초등 수학·과학 12) — 멱등 INSERT.
@@ -1660,7 +1666,7 @@ try{ db.exec("ALTER TABLE knowledge_cards ADD COLUMN prereq TEXT DEFAULT ''"); }
       JSON.stringify(c.quiz), c.tags, c.prereq || '', c.topic);
     if (r && r.changes) added74++;
   }
-  if (added74) console.log('🧠 knowledge_cards (v1.74) 추가:', added74, '개');
+  if (added74) logInfo('🧠 knowledge_cards (v1.74) 추가:', added74, '개');
 }
 
 // ---------- 2. 시드 데이터: 성격 대사(아동용 한국어) + 상점 아이템 ----------
@@ -1793,8 +1799,8 @@ const LLM_FORCE_FAST = process.env.LLM_FORCE_FAST !== '0';
 if(process.env.ROOMI_TEST_NO_LLM === '1') LLM_PROVIDERS.length = 0;
 const llmDown = {};
 let lastLLMModel = DEEPSEEK_MODEL;
-if(!PRIMARY_READY) console.log('ℹ️ [LLM] 1차 모델 미설정(주소·모델명 필요) → DeepSeek 단독');
-else console.log(LLM_FORCE_FAST
+if(!PRIMARY_READY) logInfo('ℹ️ [LLM] 1차 모델 미설정(주소·모델명 필요) → DeepSeek 단독');
+else logInfo(LLM_FORCE_FAST
   ? `ℹ️ [LLM] 1차 ${DEEPSEEK_MODEL} → 2차 ${PRIMARY_MODEL}`
   : `ℹ️ [LLM] 1차 ${PRIMARY_MODEL} → 2차 ${DEEPSEEK_MODEL}`);
 
@@ -2295,6 +2301,40 @@ function authUser(req){
   if(!t) return null;
   return db.prepare('SELECT * FROM users WHERE token=?').get(String(t)) || null;
 }
+// ★ 2026-11-28 정합성: 여러 쓰기를 한 덩어리로 묶는다. 중간에 실패하면 전부 되돌린다(BEGIN IMMEDIATE).
+function withTx(fn){
+  db.exec('BEGIN IMMEDIATE');
+  try{
+    const r = fn();
+    db.exec('COMMIT');
+    return r;
+  }catch(e){
+    try{ db.exec('ROLLBACK'); }catch(_){}
+    throw e;
+  }
+}
+// ★ 2026-11-28 보안: 보호자 전용 세션. 보호자 확인(PIN·곱셈 문제)을 통과한 뒤에만 발급되고, 계정에 묶여 20분 뒤 만료된다.
+//   보호자 데이터·플레이 시간 조절·친구 채팅 설정 같은 경로는 아이의 로그인 토큰만으로는 열리지 않는다.
+// ★ 2026-11-28 내구성: 보호자 세션은 데이터베이스에 둔다(서버를 다시 켜도 20분 안에서는 유지).
+try{ db.exec('CREATE TABLE IF NOT EXISTS parent_sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, exp INTEGER NOT NULL)'); }catch(e){ console.log('⚠️ parent_sessions:', e.message); }
+function issueParentToken(uid){
+  const now = Date.now();
+  try{ db.prepare('DELETE FROM parent_sessions WHERE exp < ?').run(now); }catch(e){}
+  const t = crypto.randomUUID();
+  db.prepare('INSERT INTO parent_sessions(token,user_id,exp) VALUES(?,?,?)').run(t, uid, now + 20 * 60 * 1000);
+  return t;
+}
+function parentOk(req, u){
+  if(!u) return false;
+  const t = String(req.get('X-Parent') || '');
+  if(!t) return false;
+  const e = db.prepare('SELECT user_id, exp FROM parent_sessions WHERE token=?').get(t);
+  if(!e || e.user_id !== u.id || e.exp < Date.now()){
+    if(e && e.exp < Date.now()) db.prepare('DELETE FROM parent_sessions WHERE token=?').run(t);
+    return false;
+  }
+  return true;
+}
 // ---------- 5-C. ★ P0-4 LLM 출력 안전 필터 ----------
 // 프롬프트에 "안전한 표현만" 을 지시해 두지만, LLM 은 이를 보장하지 않는다.
 // 실제로 화면에 노출되는 모든 LLM 결과는 이 필터를 통과해야 한다(강제 레이어).
@@ -2432,6 +2472,21 @@ app.post('/api/user', async (req,res)=>{
   if (!nickname) return res.status(400).json({error:'닉네임을 입력하세요'});
   const token = crypto.randomUUID(); // 로그인마다 재발급
   let u = db.prepare('SELECT * FROM users WHERE nickname=?').get(nickname);
+  // ★ 2026-11-28 보안: 데모 이름은 발표용 시드만 만든다(아이가 같은 이름으로 데모 권한을 얻지 못하게).
+  if (!u && /^(데모|demo)/i.test(nickname)) return res.status(400).json({error:'그 이름은 쓸 수 없어요. 다른 이름으로 해 볼래요?'});
+  // ★ 2026-11-28 보안: PIN 을 만든 계정은 닉네임만으로 들어갈 수 없다(예전엔 닉네임 하나로 누구의 계정이든 토큰을 바꿔 들어갈 수 있었다).
+  //   같은 계정의 기존 토큰(자동 로그인)이면 통과. 아니면 PIN 이 맞아야 하고, 하루 10번까지만 틀릴 수 있다.
+  if (u && u.pin_hash && req.get('X-Token') !== u.token) {
+    const day0 = today();
+    if (dailyCounterOf(u.id, day0, 'login_pin_fail') >= 10)
+      return res.status(429).json({error:'오늘은 PIN 시도가 너무 많아요. 내일 다시 해 볼래요?'});
+    const pin0 = String((req.body && req.body.pin) || '').trim();
+    if (!pin0) return res.status(401).json({error:'PIN 으로 들어가 주세요', needPin:true});
+    if (!/^\d{4}$/.test(pin0) || !safeHashEqual(sha256Hex(pin0), u.pin_hash)) {
+      try{ bumpDailyCounter(u.id, day0, 'login_pin_fail'); }catch(e){}
+      return res.status(401).json({error:'PIN 이 맞지 않아요', needPin:true});
+    }
+  }
   if (!u) {
     db.prepare('INSERT INTO users(nickname) VALUES(?)').run(nickname);
     u = db.prepare('SELECT * FROM users WHERE nickname=?').get(nickname);
@@ -2461,7 +2516,7 @@ app.post('/api/user', async (req,res)=>{
   // ★ 2026-10-28: 부모 승인 보너스(+20/회, 최대 +40) + 시연 계정은 제한 없음
   // ★ 2026-11-21 (v1.74) C2: 부모가 조절한 하루 한도 오프셋(play_limit_delta)도 판정에 반영한다.
   //   서버 판정(40+보너스+delta)과 화면 계산(40+delta)이 갈라지면 «열렸는데 잠긴» 모순이 생긴다.
-  const isDemo = /^(데모|demo)/i.test(u.nickname || '');
+  const isDemo = u.is_demo === 1;
   const limit = DAILY_PLAY_LIMIT + (u.play_bonus || 0) + (u.play_limit_delta || 0);
   const overLimit = !isDemo && played >= limit;
   const revive = (u.revive_streak && u.revive_until === today())
@@ -2531,7 +2586,7 @@ app.post('/api/visit/playtime', (req,res)=>{
   if (sec < 3) return res.json({ok:true, playMinutes: u.play_minutes || 0});
   // ★ 매일 0으로 리셋(날짜가 바뀌면 초기화) — 누적값/보너스/승인 모두 리셋
   const day = today();
-  const isDemo = /^(데모|demo)/i.test(u.nickname || '');
+  const isDemo = u.is_demo === 1;
   if(u.play_day !== day){
     db.prepare('UPDATE users SET play_minutes=0, play_bonus=0, parent_ok=0, play_day=? WHERE id=?').run(day, u.id);
     u.play_day = day; u.play_minutes = 0; u.play_bonus = 0; u.parent_ok = 0;
@@ -2554,6 +2609,29 @@ app.post('/api/visit/playtime', (req,res)=>{
 //   브라우저에서 바로 '데모 계정' 버튼을 눌러 전환할 수 있게 한다.
 // ★ v1.72 «데모 바로 체험» — 발표/시연에서 5분 걸리던 «등불 켜기» 를 한 번에.
 //   실제 사용자 흐름(학습→설명)을 건너뛰고, 등불 3개를 심는다. 데모 전용.
+// ★ 2026-11-28 보안: 데모 라우트 스위치. ROOMI_DEMO=1 인 서버에서만 동작하고, 나머지는 없는 주소처럼 404 를 돌려준다.
+app.get('/api/demo/status', (_req,res)=>{ res.json({ enabled: DEMO_ENABLED }); });
+app.use('/api/demo', (req,res,next)=>{
+  if(!DEMO_ENABLED) return res.status(404).json({error:'없는 주소예요'});
+  next();
+});
+// ★ 2026-11-28 A4: 데모 계정 전용 LLM 예열 — 한 단어짜리 짧은 호출. 학습 기록·일일 한도에 남기지 않는다.
+let lastWarmAt = 0;
+app.post('/api/demo/warm', async (req,res)=>{
+  const u = authUser(req);
+  if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if (u.is_demo !== 1) return res.status(403).json({error:'데모 계정에서만 쓸 수 있어요'});
+  // 호출 횟수 제한: 20초에 한 번만 모델을 깨운다(비용·남용 방지)
+  if (Date.now() - lastWarmAt < 20000) return res.json({ ok:true, cooling:true, ms:0 });
+  lastWarmAt = Date.now();
+  const t0 = Date.now();
+  try{
+    await callLLM('한 단어로만 답해: 준비', { temperature:0, maxTokens:8 });
+    res.json({ ok:true, ms: Date.now() - t0 });
+  }catch(e){
+    res.json({ ok:false, ms: Date.now() - t0 });
+  }
+});
 app.post('/api/demo/lamps', (req,res)=>{
   const u = authUser(req);
   if(!u) return res.status(401).json({error:'로그인이 필요해요'});
@@ -2580,12 +2658,14 @@ app.post('/api/demo/lamps', (req,res)=>{
 app.post('/api/demo/seed', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
-  const nickname = '데모_루미';
+  const nickname = DEMO_NICK;
   let demo = db.prepare('SELECT * FROM users WHERE nickname=?').get(nickname);
   if(!demo){
     db.prepare('INSERT INTO users(nickname) VALUES(?)').run(nickname);
     demo = db.prepare('SELECT * FROM users WHERE nickname=?').get(nickname);
   }
+  // 데모 표시는 이 시드만 붙인다(이름이 같은 일반 계정도 이 자리에서 데모가 된다 — 이 이름은 새로 가입할 수 없게 막아 두었다).
+  db.prepare('UPDATE users SET is_demo=1 WHERE id=?').run(demo.id);
   const did = demo.id;
   // 1) 데모 계정의 모든 학습/게임/친구 데이터를 먼저 비운다(멱등).
   // ★ wipeUserData 는 guestbook 처럼 user_id 가 없는 표(to_user/from_user)까지 정확히 지운다 —
@@ -2833,6 +2913,12 @@ app.post('/api/account/pin', (req,res)=>{
   if(!u) return res.status(401).json({error:'로그인이 필요해요'});
   const pin = String((req.body && req.body.pin) || '').trim();
   if(!/^\d{4}$/.test(pin)) return res.status(400).json({error:'PIN 은 숫자 4자리예요'});
+  // ★ 2026-11-28 보안: 기존 PIN 을 아이가 몰래 바꾸지 못하게, 바꾸려면 현재 PIN 이나 보호자 세션이 필요하다.
+  if(u.pin_hash && !parentOk(req, u)){
+    const cur = String((req.body && req.body.currentPin) || '').trim();
+    if(!/^\d{4}$/.test(cur) || !safeHashEqual(sha256Hex(cur), u.pin_hash))
+      return res.status(403).json({error:'지금 PIN 을 먼저 입력해 주세요', needCurrent:true});
+  }
   db.prepare('UPDATE users SET pin_hash=? WHERE id=?').run(sha256Hex(pin), u.id);
   res.json({ ok:true });
 });
@@ -2937,7 +3023,7 @@ app.post('/api/parent/verify', (req,res)=>{
   const row = db.prepare('SELECT play_bonus FROM users WHERE id=?').get(u.id);
   const nextBonus = Math.min(40, (row && row.play_bonus ? row.play_bonus : 0) + 20);
   db.prepare('UPDATE users SET parent_ok=1, play_bonus=? WHERE id=?').run(nextBonus, u.id);
-  res.json({ ok:true, playBonus: nextBonus, limit: DAILY_PLAY_LIMIT + nextBonus });
+  res.json({ ok:true, playBonus: nextBonus, limit: DAILY_PLAY_LIMIT + nextBonus, parentToken: issueParentToken(u.id) });
 });
 // ★ 2026-11-27 (v1.81) 보호자 게이트 — PIN 방식(users.pin_hash 재사용, 새 컬럼 없음).
 //   · PIN 을 만든 계정만 이 경로를 쓴다(GET /api/parent/status 의 pinSet). 나머지는 곱셈 문제 그대로.
@@ -2962,7 +3048,7 @@ app.post('/api/parent/verify-pin', (req,res)=>{
   const row = db.prepare('SELECT play_bonus FROM users WHERE id=?').get(u.id);
   const nextBonus = Math.min(40, (row && row.play_bonus ? row.play_bonus : 0) + 20);
   db.prepare('UPDATE users SET parent_ok=1, play_bonus=? WHERE id=?').run(nextBonus, u.id);
-  res.json({ ok:true, playBonus: nextBonus, limit: DAILY_PLAY_LIMIT + nextBonus });
+  res.json({ ok:true, playBonus: nextBonus, limit: DAILY_PLAY_LIMIT + nextBonus, parentToken: issueParentToken(u.id) });
 });
 // 부모 승인 상태 조회 (클라이언트가 진입 조건 판단에 사용)
 app.get('/api/parent/status', (req,res)=>{
@@ -3005,6 +3091,7 @@ function letterPreviewFor(u){
 app.get('/api/parent/dashboard', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   const p = profileFor(u.id);
   const solved = db.prepare('SELECT COUNT(*) c FROM learning_help_logs WHERE user_id=? AND solved=1').get(u.id).c;
   const chats = db.prepare('SELECT COUNT(*) c FROM chat_messages WHERE user_id=?').get(u.id).c;
@@ -3089,6 +3176,7 @@ app.get('/api/parent/dashboard', (req,res)=>{
 app.post('/api/parent/friend-chat', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   const enabled = (req.body && req.body.enabled) ? 1 : 0;
   profileFor(u.id);
   db.prepare('UPDATE learner_profile SET friend_chat_enabled=? WHERE user_id=?').run(enabled, u.id);
@@ -3098,6 +3186,7 @@ app.post('/api/parent/friend-chat', (req,res)=>{
 app.post('/api/parent/reset', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   db.prepare('UPDATE users SET parent_ok=0 WHERE id=?').run(u.id);
   res.json({ok:true});
 });
@@ -3111,6 +3200,7 @@ app.post('/api/parent/reset', (req,res)=>{
 app.post('/api/parent/cheer', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   const text = String((req.body && req.body.text) || '').trim();
   if(!text) return res.status(400).json({error:'한 마디를 적어 볼래요?'});
   if(!isSafeText(text, 80)) return res.status(400).json({error:'아이에게 보내기 어려운 내용이에요'});
@@ -3128,6 +3218,7 @@ app.post('/api/parent/cheer', (req,res)=>{
 app.post('/api/parent/playtime', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   const delta = Number((req.body && req.body.delta));
   if(delta !== -10 && delta !== 0 && delta !== 10)
     return res.status(400).json({error:'delta 는 -10, 0, 10 중 하나예요'});
@@ -3142,6 +3233,7 @@ app.post('/api/parent/playtime', (req,res)=>{
 app.post('/api/parent/optin', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   const b = req.body || {};
   const email = String(b.email || '').trim().slice(0, 120);
   const optin = Number(b.optin) ? 1 : 0;
@@ -3636,6 +3728,13 @@ app.get('/api/shop/exchange-info', (req,res)=>{
 //   게임 자체는 클라이언트에서 돌고, 여기는 '성적 검증 + 보상 지급'만 한다.
 //   하루 1회만 인정. quest_logs 에 섞지 않고 game_logs 를 쓰므로
 //   '과제 완료 수' 통계가 게임 기록으로 오염되지 않는다.
+// ★ 2026-11-28 B10: 오늘 기록이 저장된 게임 종류(카드의 «오늘 기록 저장됨» 표시용)
+app.get('/api/game/today', (req,res)=>{
+  const u = authUser(req);
+  if (!u) return res.status(401).json({error:'로그인이 필요해요'});
+  const kinds = db.prepare('SELECT DISTINCT kind FROM game_logs WHERE user_id=? AND day=?').all(u.id, today()).map(r => r.kind);
+  res.json({ ok:true, day: today(), kinds });
+});
 app.post('/api/game/result', (req,res)=>{
   const u = authUser(req);
   if (!u) return res.status(401).json({error:'로그인이 필요해요'});
@@ -3663,10 +3762,10 @@ app.post('/api/game/result', (req,res)=>{
 });
 // ★ 2026-11-28: 새 미니게임 정의. max = 서버가 받아들이는 최고 점수, unlock = 도감 카드를 여는 점수, card = 해금되는 지식 카드 주제
 const MINI_GAMES = {
-  roomi:    { label:'루미 훈련소',   max:60,  unlock:30,  card:'조건문' },
-  balance:  { label:'균형 공방',     max:90,  unlock:45,  card:'약분·통분' },
-  estimate: { label:'어림 항해',     max:180, unlock:90,  card:'소수' },
-  reverse:  { label:'거꾸로 질문소', max:300, unlock:120, card:'산술 연산' },
+  roomi:    { label:'루미 훈련소',   max:90,  unlock:40,  card:'조건문' },
+  balance:  { label:'균형 공방',     max:150, unlock:60,  card:'약분·통분' },
+  estimate: { label:'어림 항해',     max:240, unlock:90,  card:'소수' },
+  reverse:  { label:'거꾸로 질문소', max:400, unlock:120, card:'산술 연산' },
 };
 const MINI_GAME_KINDS = Object.keys(MINI_GAMES);
 function grantMiniGame(u, kind, body, res){
@@ -3675,7 +3774,8 @@ function grantMiniGame(u, kind, body, res){
   if (!Number.isInteger(score) || score < 0 || score > g.max)
     return res.status(400).json({error:'기록이 이상해요! 다시 도전해 봐'});
   db.prepare('INSERT INTO game_logs(user_id,day,kind,score,reward) VALUES(?,?,?,?,0)').run(u.id, today(), kind, score);
-  const growth = addExp(u.id, 5 + Math.floor(score / 10));
+  const xp = 5 + Math.floor(score / 10);
+  const growth = addExp(u.id, xp);
   let codexUnlocked = null;
   if (score >= g.unlock){
     const card = db.prepare('SELECT id, topic FROM knowledge_cards WHERE topic=?').get(g.card);
@@ -3684,7 +3784,7 @@ function grantMiniGame(u, kind, body, res){
       if (ins.changes) codexUnlocked = card.topic;
     }
   }
-  res.json({ ok:true, reward:0, label:g.label, score, growth, codexUnlocked,
+  res.json({ ok:true, reward:0, label:g.label, score, xp, growth, codexUnlocked,
     balance: db.prepare('SELECT cell_balance FROM users WHERE id=?').get(u.id).cell_balance });
 }
 // 게임 보상 공통 처리(로그를 먼저 남겨 중복 지급 방지)
@@ -6015,11 +6115,12 @@ ${memText ? `[루미가 기억하는 것]\n${memText}\n` : ''}[출력] JSON만: 
     : null;
   // ★ v1.50 «L3 다음은 설명» — 힌트를 다 받은 뒤 바로 끝내면 아이는 «옮겨 적기» 로 끝낼 수 있다.
   //   마지막 단계에서만 «네 말로 설명해 줘» 를 제안하고, 그 답은 /api/chat/explain 이 받는다.
-  const explain = (mode === 'learn' && Number(hintLevel) >= 3)
+  const explain = (mode === 'learn' && Number(hintLevel) >= 2)
     ? { // ★ 6-1 점검: 카드가 없을 때 «주제» 를 개념명으로 쓰면 «멈춘 기계의 노래» 가 기억에 남는다.
         //   ★ 2026-11-27 (v1.81) 버그 5: 카드 → 세션 개념 순으로 실제 개념을 넘긴다(빈 값이면 등불이 «방금 배운 것» 으로 남았다).
         concept: solvedConceptOf(focusCard, sess),
-        prompt: '방금 이해한 걸 네 말로 설명해 줄래? 루미가 들을게.' }
+        soft: Number(hintLevel) < 3,
+        prompt: Number(hintLevel) < 3 ? '지금 이해한 만큼만 네 말로 말해 줄래? 틀려도 괜찮아.' : '방금 이해한 걸 네 말로 설명해 줄래? 루미가 들을게.' }
     : null;
   res.json({ ok:true, mode, reply, hintLevel, followUp, summary, explain, session: sessionInfo,
              wrapUp: (mode === 'learn' && sessionInfo && sessionInfo.turns >= 6)
@@ -6095,28 +6196,44 @@ async function upgradeTeachVerdict(uid, concept, text, card){
     throw e;
   }
 }
-// 예약 + 재시도. 같은 키는 한 번에 하나만 돈다.
-function scheduleUpgrade(uid, concept, text, card){
-  const key = uid + '|' + concept + '|' + text.slice(0, 160);
-  if(UPGRADE_INFLIGHT.has(key)) return false;
-  UPGRADE_INFLIGHT.add(key);
-  const attemptOnce = (attempt) => {
-    upgradeTeachVerdict(uid, concept, text, card).then((r) => {
-      if(r === 'undecided' && attempt < UPGRADE_MAX_ATTEMPTS){
-        setTimeout(() => attemptOnce(attempt + 1), upgradeBackoffMs(attempt));
-        return;
-      }
-      UPGRADE_INFLIGHT.delete(key);
-      if(r === 'undecided') console.log('[teach-upgrade] 재시도 한도 도달 — 미검증으로 둔다', uid);
-    }).catch((e) => {
-      if(attempt < UPGRADE_MAX_ATTEMPTS){ setTimeout(() => attemptOnce(attempt + 1), upgradeBackoffMs(attempt)); return; }
-      UPGRADE_INFLIGHT.delete(key);
-      console.log('[teach-upgrade] 실패(한도 도달):', e && e.message);
-    });
-  };
-  attemptOnce(1);
+try{ db.exec('CREATE TABLE IF NOT EXISTS teach_upgrades(user_id INTEGER NOT NULL, concept TEXT NOT NULL, text TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 1, next_at INTEGER NOT NULL, PRIMARY KEY(user_id, concept, text))'); }catch(e){ console.log('⚠️ teach_upgrades:', e.message); }
+// 예약: DB 큐에 넣고 바로 한 번 돌린다. 판정이 나지 않으면 작업기가 간격을 두고 다시 돌린다.
+function scheduleUpgrade(uid, concept, text){
+  try{
+    db.prepare('INSERT OR IGNORE INTO teach_upgrades(user_id,concept,text,attempt,next_at) VALUES(?,?,?,1,?)')
+      .run(uid, concept, String(text).slice(0, 300), Date.now());
+  }catch(e){ return false; }
+  setImmediate(upgradeWorkerTick);
   return true;
 }
+function processUpgradeRow(row){
+  const key = row.user_id + '|' + row.concept + '|' + row.text.slice(0, 160);
+  if(UPGRADE_INFLIGHT.has(key)) return;
+  UPGRADE_INFLIGHT.add(key);
+  const card = teachCardFor(row.concept);
+  const later = () => {   // 판정이 아직 안 나면 간격을 늘려 다시 예약, 한도에 닿으면 미검증으로 둔다
+    if(row.attempt < UPGRADE_MAX_ATTEMPTS){
+      try{ db.prepare('UPDATE teach_upgrades SET attempt=attempt+1, next_at=? WHERE user_id=? AND concept=? AND text=?')
+        .run(Date.now() + upgradeBackoffMs(row.attempt), row.user_id, row.concept, row.text); }catch(e){}
+    }else{
+      logInfo('[teach-upgrade] 재시도 한도 도달 — 미검증으로 둔다', row.user_id);
+      try{ db.prepare('DELETE FROM teach_upgrades WHERE user_id=? AND concept=? AND text=?').run(row.user_id, row.concept, row.text); }catch(e){}
+    }
+  };
+  upgradeTeachVerdict(row.user_id, row.concept, row.text, card).then((r) => {
+    if(r === 'undecided') return later();
+    try{ db.prepare('DELETE FROM teach_upgrades WHERE user_id=? AND concept=? AND text=?').run(row.user_id, row.concept, row.text); }catch(e){}
+  }).catch((e) => {
+    console.log('[teach-upgrade] 실패:', e && e.message);
+    later();
+  }).finally(() => { UPGRADE_INFLIGHT.delete(key); });
+}
+function upgradeWorkerTick(){
+  let due = [];
+  try{ due = db.prepare('SELECT user_id, concept, text, attempt FROM teach_upgrades WHERE next_at <= ? ORDER BY next_at LIMIT 20').all(Date.now()); }catch(e){ return; }
+  due.forEach(processUpgradeRow);
+}
+setInterval(upgradeWorkerTick, Number(process.env.TEACH_UPGRADE_TICK_MS || 3000)).unref();
 const EXPLAIN_DEFAULT_CONCEPT = '방금 배운 것';
 app.post('/api/chat/explain', async (req,res)=>{
   const u = authUser(req);
@@ -6134,6 +6251,10 @@ app.post('/api/chat/explain', async (req,res)=>{
   // ★ 2026-11-27 (v1.83): 설명 검증의 모델 호출도 llm_logs 에 남긴다(v1.82 리팩터링에서 빠졌던 계량 복구).
   const verdict = await LR.checkTeachBack(text, concept, card, { aliases: CARD_ALIASES, parseChatJSON, timeoutMs: TEACH_VERIFY_TIMEOUT_MS, callLLM: teachLLMFor(u.id) });
   const reply = sanitizeLine(verdict.reply, 180);
+  // ★ 2026-11-28 정합성: 설명 저장의 쓰기는 모두 한 트랜잭션이다. 하나라도 실패하면 전부 되돌리고 다시 해 달라고 한다.
+  let txOut;
+  try{
+  txOut = withTx(() => {
   saveChatTurn(u.id, text, reply, 'explain', { topic: concept, hintLevel: 3, solved: false });
   // 설명까지 왔으면 이번 대화의 목표는 «달성» 단계로 본다.
   try{
@@ -6155,12 +6276,27 @@ app.post('/api/chat/explain', async (req,res)=>{
       confidence: plan.confidence, source: plan.source });
   }
   // ★ 버그 5: 검증된 설명만 마스터리 'lesson' 가점(시간 초과로 보류된 설명은 가점 없음).
+  // ★ 2026-11-28 (v1.88): 개념당 하루 1회만 가점. 같은 날 여러 번 설명해도 실력이 갑자기 오르지 않는다.
+  //   last_day 는 다른 이벤트(wrong/review 등)도 갱신하므로 전용 카운터가 필요 — user_memories 의
+  //   'explain:credit' 키에 날짜를 저장해 개념별로 하루 한 번만 통과시킨다.
   const credited = verdict.ok === true && verdict.source !== 'timeout';
-  if(credited && concept !== EXPLAIN_DEFAULT_CONCEPT) bumpMastery(u.id, concept, 'lesson');
-  // ★ 시간 초과: 응답은 바로 보내고, 판정은 뒤에서 LLM 으로 한 번 더 시도(성공 시에만 업그레이드).
-  if(verdict.source === 'timeout' && card && concept !== EXPLAIN_DEFAULT_CONCEPT){
-    setImmediate(() => { scheduleUpgrade(u.id, concept, text, card); });
+  let creditKeyWritten = false;
+  if(credited && concept !== EXPLAIN_DEFAULT_CONCEPT){
+    const ck = 'explain_credit:' + concept;
+    const day = today();
+    const already = db.prepare(`SELECT value FROM user_memories
+      WHERE user_id=? AND kind='explain_credit' AND key=?`).get(u.id, ck);
+    if(!already || already.value !== day){
+      bumpMastery(u.id, concept, 'lesson');
+      db.prepare(`INSERT INTO user_memories(user_id,kind,key,value,source,created_at,updated_at)
+        VALUES(?,?,?,?,?,datetime('now','+9 hours'),datetime('now','+9 hours'))
+        ON CONFLICT(user_id,kind,key) DO UPDATE SET value=excluded.value, updated_at=datetime('now','+9 hours')`)
+        .run(u.id, 'explain_credit', ck, day, 'explain');
+      creditKeyWritten = true;
+    }
   }
+  // ★ 시간 초과: 응답은 바로 보내고, 판정은 뒤에서 LLM 으로 한 번 더 시도(성공 시에만 업그레이드).
+  const needUpgrade = verdict.source === 'timeout' && !!card && concept !== EXPLAIN_DEFAULT_CONCEPT;
   const lampRes = lightLamp(u.id, concept);   // ★ v1.71: teach-back 이 끝나면 기억 등불을 밝힌다(lit_day=오늘, 안개 리셋)
   db.prepare('UPDATE users SET understanding = understanding + 1 WHERE id=?').run(u.id);
   const coTaught = coTeacherOf(u.id, concept);   // ★ v1.71: 친구도 가르친 개념이면 닉네임만(내용 비공개)
@@ -6175,8 +6311,17 @@ app.post('/api/chat/explain', async (req,res)=>{
     hits: Number.isFinite(verdict.hits) ? verdict.hits : null,
     saved: savedNow,
     stored: savedNow ? plan.source : null,
-    credited
+    credited: creditKeyWritten
   };
+  return { lampRes, coTaught, verdictInfo, needUpgrade };
+  });
+  }catch(e){
+    logInfo('[explain] 저장을 되돌렸어요:', e && e.message);
+    console.log('⚠️ [explain] 저장 실패 — 되돌렸어요:', e && e.message);
+    return res.status(500).json({error:'설명을 저장하지 못했어요. 다시 해 볼래요?'});
+  }
+  const { lampRes, coTaught, verdictInfo, needUpgrade } = txOut;
+  if(needUpgrade) scheduleUpgrade(u.id, concept, text, card);
   res.json({ ok:true, reply, concept, saved:true, left: Math.max(0, EXPLAIN_DAILY-used-1),
     verdict: verdictInfo,
     ...(coTaught ? { coTaught } : {}),
@@ -6198,7 +6343,13 @@ app.post('/api/chat/explain', async (req,res)=>{
 // ============================================================
 const TEACH_DAILY_LIMIT = 3;
 // LLM 출력은 재계산할 수 없으므로 «출제 당시의 정답» 을 메모리에만 둔다(서버 재시작이면 자연 만료).
-const pendingTeach = new Map();   // user_id → { day, a, b, correctChoice, concept }
+try{ db.exec('CREATE TABLE IF NOT EXISTS teach_pending(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL)'); }catch(e){}
+// 출제 기록: user_id → { day, a, b, correctChoice, concept } (DB 에 JSON 으로 둔다 — 재시작에도 살아 있다)
+const pendingTeach = {
+  get(uid){ const r = db.prepare('SELECT data FROM teach_pending WHERE user_id=?').get(uid); try{ return r ? JSON.parse(r.data) : null; }catch(e){ return null; } },
+  set(uid, v){ db.prepare('INSERT INTO teach_pending(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data').run(uid, JSON.stringify(v)); },
+  delete(uid){ db.prepare('DELETE FROM teach_pending WHERE user_id=?').run(uid); }
+};
 
 // 한글 받침 판정 — «(이)라는» 조사 붙이기용
 // ★ 2026-11-27 (v1.81) 조사 맞춤 — 단어의 받침 유무로 짝 조사를 고른다.
@@ -6710,9 +6861,10 @@ ${c.memText}
     topic: c.focusCard ? c.focusCard.topic : null
   });
 
-  const explain = (mode === 'learn' && c.wantLevel >= 3)
+  const explain = (mode === 'learn' && c.wantLevel >= 2)
     ? { concept: solvedConceptOf(c.focusCard, c.sess),   // ★ v1.81 버그 5: 실제 개념을 넘긴다
-        prompt: '방금 이해한 걸 네 말로 설명해 줄래? 루미가 들을게.' }
+        soft: c.wantLevel < 3,   // ★ 2026-11-28 B9: L2 는 부드러운 제안
+        prompt: c.wantLevel < 3 ? '지금 이해한 만큼만 네 말로 말해 줄래? 틀려도 괜찮아.' : '방금 이해한 걸 네 말로 설명해 줄래? 루미가 들을게.' }
     : null;
   // ★ v1.78: L3 인데 «다독임» 만 나오면 실제 «다음 한 단계» 로 덮어쓴다.
   //   (스트리밍은 생성 중 교체가 불가능하므로 done 이벤트의 reply 로 덮어쓴다 — 프론트가 이 값으로 갱신)
@@ -7521,6 +7673,7 @@ app.get('/api/growth/timeline', (req,res)=>{
 app.get('/api/parent/weekly', (req,res)=>{
   const u = authUser(req);
   if(!u) return res.status(401).json({error:'로그인이 필요해요'});
+  if(!parentOk(req, u)) return res.status(403).json({error:'보호자 확인이 필요해요', needParent:true});
   const wk = weekStartKST(), end = weekEndOf(wk);
   const studyDays = safeCount('SELECT COUNT(DISTINCT day) c FROM learning_help_logs WHERE user_id=? AND day>=? AND day<?', [u.id,wk,end]);
   const solved  = safeCount('SELECT COUNT(*) c FROM learning_help_logs WHERE user_id=? AND day>=? AND day<? AND solved=1', [u.id,wk,end]);
@@ -7923,8 +8076,8 @@ const MAIL_SMTP_USER = String(process.env.MAIL_SMTP_USER || '');
 const MAIL_SMTP_PASS = String(process.env.MAIL_SMTP_PASS || '');
 const MAIL_FROM = String(process.env.MAIL_FROM || MAIL_SMTP_USER);
 const MAIL_READY = !!(nodemailer && MAIL_SMTP_HOST && MAIL_SMTP_USER && MAIL_SMTP_PASS && MAIL_FROM);
-if(!MAIL_READY) console.log('ℹ️ [mail] 루미의 편지 꺼짐 — nodemailer 미설치 또는 MAIL_SMTP_HOST/USER/PASS 환경변수 없음');
-else console.log(`✉️ [mail] 루미의 편지 준비됨 — ${MAIL_SMTP_HOST}:${MAIL_SMTP_PORT}`);
+if(!MAIL_READY) logInfo('ℹ️ [mail] 루미의 편지 꺼짐 — nodemailer 미설치 또는 MAIL_SMTP_HOST/USER/PASS 환경변수 없음');
+else logInfo(`✉️ [mail] 루미의 편지 준비됨 — ${MAIL_SMTP_HOST}:${MAIL_SMTP_PORT}`);
 
 // 이메일 마스킹 — «lm*****@163.com» 처럼 앞 2글자 + 도메인만 남긴다(대시보드 표시용).
 function maskEmail(e){
@@ -7993,7 +8146,7 @@ async function rumiLetterRun(){
       }
     }
     bumpDailyCounter(0, day, 'mailrun');   // 하루 1회 실행 완료 표시(실패가 있어도 재시도는 내일)
-    if(checked || sent) console.log(`✉️ [mail] 루미의 편지: 대상 ${checked}명 중 ${sent}통 발송`);
+    if(checked || sent) logInfo(`✉️ [mail] 루미의 편지: 대상 ${checked}명 중 ${sent}통 발송`);
   }catch(e){
     console.log('⚠️ [mail] 루미의 편지 실행 오류:', e.message);
   }

@@ -819,6 +819,8 @@ async function api(path, body, timeoutMs, method){
   if(method) o.method = method;
   const tk = localStorage.getItem(SK.token); // 세션 토큰 — uid 위조 방지
   if(tk) o.headers['X-Token'] = tk;
+  // ★ 2026-11-28 보안: 보호자 확인을 통과한 탭에서만 보호자 세션 토큰을 붙인다(서버가 맞는 계정·만료를 확인한다)
+  const pt = sessionStorage.getItem('roomi_parent_tok'); if(pt) o.headers['X-Parent'] = pt;
   const ac = new AbortController(); o.signal = ac.signal;
   // ★ v1.43: 1차 LLM(EXAONE)은 추론 때문에 20초 이상 걸릴 수 있다.
   //   프론트가 먼저 끊으면 «모델은 답했는데 아이 화면엔 실패» 가 되므로 여유를 둔다.
@@ -830,7 +832,14 @@ async function api(path, body, timeoutMs, method){
     try{ j = JSON.parse(txt); }
     catch{ // HTML이 온다 = 서버가 없는 페이지(미리보기 창)에서 실행한 경우
       throw new Error('서버에 연결할 수 없어요. 미리보기 창이 아니라 실제 주소(localhost:3000 또는 온라인 주소)에서 열어주세요'); }
-    if(!r.ok) throw new Error(j.error||'오류');
+    if(!r.ok){
+      // ★ 2026-11-28 (v1.88): 아이에게는 서버 원문/기술 용어를 그대로 보여 주지 않는다.
+      //   서버가 보낸 한국어 안내문은 그대로 쓰고, 그 밖(영문·HTTP 코드·스택)은 루미 말투로 감싼다.
+      const raw = String(j.error || '').trim();
+      const kid = /[가-힣]/.test(raw) && !/(Error|Exception|at |undefined|null|SQLITE|ECONN)/i.test(raw)
+        ? raw : '잠깐, 일이 잘못됐나 봐. 조금 있다가 다시 해 볼래?';
+      const err = new Error(kid); err.data = j; err.status = r.status; err.raw = raw; throw err;
+    }
     return j;
   }catch(e){
     if(e.name==='AbortError') throw new Error('서버 응답이 늦어요. 잠시 후 다시 시도해주세요');
@@ -920,7 +929,7 @@ async function submitRecolor(){
     maybeAct1();              // ★ 2026-11-21 (v1.74) B1 삼막 1막: «색칠 완료» 직후 인도
   }catch(e){
     if(btn) btn.textContent = '저장! ';   // 실패 시에만 문구 복구
-    alert(e.message);
+    toast(e.message);
   }finally{ if(btn) btn.disabled = false; }
 }
 // 탭 전환을 코드에서도 쓸 수 있게 한 곳에 모은다(버튼 클릭과 동일 동작)
@@ -931,7 +940,7 @@ function goNav(name){
   if(name==='shop') loadShop();
   // ★ v1.46: 앱 시작 시 토큰이 갱신되므로, 초기화 시점에 진행도를 부르면 401 이 난다.
   //   «게임 화면에 들어올 때» 지연 로딩해야 현재 토큰으로 조회된다.
-  if(name==='games'){ loadCampaign(); sortLoadProgress(); }
+  if(name==='games'){ loadCampaign(); sortLoadProgress(); if(window.refreshGameBadges) refreshGameBadges(); }
   if(name==='board'){ loadBoard(); loadChatAnalysis(); }
   if(name==='workshop') loadWorkshop();
   if(name==='mail') loadMailbox();
@@ -949,12 +958,12 @@ async function regeneratePersonality(){
     bubble(` 새 성격: ${r.personality}`);
     loadWorkshop();
     if(state.robot) renderMyroom();
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message); }
   finally{ b.disabled = false; }
 }
 async function askRobot(){
   const q = $('#ws-q').value.trim();
-  if(q.length <2) return alert('무엇이 궁금한지 한 줄로 적어줄래?');
+  if(q.length <2) return toast('무엇이 궁금한지 한 줄로 적어줄래?');
   const b = $('#ws-ask-btn');
   b.disabled = true; b.textContent = '생각하는 중…';
   const ans = $('#ws-answer');
@@ -987,7 +996,7 @@ $('#mail-claim-all').addEventListener('click', async ()=>{
     setBalance(r.balance);
     bubble(` ${r.count}통에서 ${r.cell}셀${r.items.length?' + '+r.items.join(', '):''} 받았어요!`);
     loadMailbox();
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message); }
 });
 
 // ----- 우편함 (P0-4) -----
@@ -1032,7 +1041,7 @@ async function loadMailbox(){
       setBalance(r.balance);
       bubble(` ${r.cell?`+${r.cell}셀 `:''}${r.item?`[${r.item}] `:''}받았어요!`);
       loadMailbox();
-    }catch(e){ alert(e.message); b.disabled = false; }
+    }catch(e){ toast(e.message); b.disabled = false; }
   }));
 }
 async function refreshMailBadge(){
@@ -1067,7 +1076,7 @@ async function loadClassCard(){
     </div>`;
   $('#class-go').addEventListener('click', async ()=>{
     const code = $('#class-code').value.trim();
-    if(!code) return alert('선생님이 알려준 코드를 넣어주세요');
+    if(!code) return toast('선생님이 알려준 코드를 넣어주세요');
     const b = $('#class-go');
     b.disabled = true; b.textContent = '확인 중…';
     try{
@@ -1077,7 +1086,7 @@ async function loadClassCard(){
       setTimeout(()=> bubble(` 수업 출석 완료! +${r.reward}셀`), 300);
       loadClassCard();
       if(state.user) state.user.cell_balance = r.balance;
-    }catch(e){ alert(e.message); b.disabled = false; b.textContent = `출석 (+100셀)`; }
+    }catch(e){ toast(e.message); b.disabled = false; b.textContent = `출석 (+100셀)`; }
   });
 }
 
@@ -1107,7 +1116,7 @@ $('#consent-go').addEventListener('click', ()=>{
 $('#btn-start').addEventListener('click', async ()=>{
   if(!checkConsent()) return;   // ★ V16 미동요 시 진입 차단
   const nick = $('#nickname').value.trim();
-  if(!nick) return alert('닉네임을 입력해주세요!');
+  if(!nick) return toast('닉네임을 입력해주세요!');
   try{
     const j = await api('/api/user',{nickname:nick});
     state.user = j.user; state.quests = j.quests;
@@ -1126,8 +1135,18 @@ $('#btn-start').addEventListener('click', async ()=>{
     }
     startPlayTimer();
     await enter();
-  }catch(e){ alert(e.message); }
+  }catch(e){
+    if(e.data && e.data.needPin){ showPinLogin(nick, e.data.error); return; }
+    toast(e.message);
+  }
 });
+// ★ 2026-11-28 보안: PIN 계정 안내 — 시작 화면의 «PIN 으로 들어가기» 칸을 열고 닉네임을 채운다
+function showPinLogin(nick, text){
+  const row = $('#continue-row'); if(row) row.classList.remove('hidden');
+  const cn = $('#cont-nick'); if(cn) cn.value = nick;
+  const m = $('#cont-msg'); if(m){ m.textContent = text || 'PIN 4자리를 넣으면 들어갈 수 있어요.'; m.classList.add('bad'); m.classList.remove('good'); }
+  const p = $('#cont-pin'); if(p) p.focus();
+}
 async function enter(){
   setBalance(state.user.cell_balance);
   // ★ V3: 예전에 이 api 호출이 실패하면(서버 일시 오류 등) enter() 가 그대로 reject 되어
@@ -1211,10 +1230,13 @@ async function verifyParent(){
     return;
   }
   try{
-    if(isPin) await api('/api/parent/verify-pin', { pin: raw });
-    else await api('/api/parent/verify', { a:_gate.a, b:_gate.b, token:_gate.token, answer:Number(raw) });
+    const vr = isPin ? await api('/api/parent/verify-pin', { pin: raw })
+                     : await api('/api/parent/verify', { a:_gate.a, b:_gate.b, token:_gate.token, answer:Number(raw) });
+    // ★ 2026-11-28 보안: 서버가 준 보호자 세션 토큰(20분)만 이 탭에 둔다
+    if(vr && vr.parentToken){ try{ sessionStorage.setItem('roomi_parent_tok', vr.parentToken); }catch(e){} }
     msg.textContent = ''; msg.style.color = '#2b8a3e';
     closeParentGate();
+    if(typeof window.__gateAfter === 'function'){ const f = window.__gateAfter; window.__gateAfter = null; try{ f(); }catch(e){} }
     bubble('부모 승인 완료! 오늘도 조금 더 놀자 ');
     // 잠금 해제 → 계속 진행
     if($('#overplay').classList.contains('hidden') === false) $('#overplay').classList.add('hidden');
@@ -1434,8 +1456,8 @@ $('#btn-done').addEventListener('click', async ()=>{
   // ★ V15 공작소 수정 모드: 새로 만들지 않고 색칠만 저장한다
   if(state.recolor) return submitRecolor();
   const name = $('#bot-name').value.trim();
-  if(!name) return alert('로봇 이름을 지어주세요!');
-  if(Object.keys(state.palette).length===0) return alert('색칠을 한 번 해보세요!');
+  if(!name) return toast('로봇 이름을 지어주세요!');
+  if(Object.keys(state.palette).length===0) return toast('색칠을 한 번 해보세요!');
   const btn = $('#btn-done');
   btn.disabled = true; btn.textContent = ' AI가 성격을 만드는 중...';
   try{
@@ -1459,7 +1481,7 @@ $('#btn-done').addEventListener('click', async ()=>{
     if(j.growth) state.growth = { ...state.growth, ...j.growth, partBonus: state.growth.partBonus||0 };
     // 부품이 방금 지급되었으니 보너스를 다시 계산한다(0 이면 정상 — 아직 부품이 없을 수도)
     try{ state.growth = await api('/api/growth/me'); }catch(e){}
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message); }
   btn.disabled = false; btn.textContent = '완성! ';
 });
 $('#modal-ok').addEventListener('click', async ()=>{
@@ -3770,7 +3792,7 @@ function renderQuests(){
 async function submitAiMission(){
   const btn = $('#ai-submit'); if(btn.disabled) return;
   const answer = ($('#ai-answer')?$('#ai-answer').value:'').trim();
-  if(!answer) return alert('로봇에게 이야기를 적어주세요!');
+  if(!answer) return toast('로봇에게 이야기를 적어주세요!');
   btn.disabled = true; btn.textContent = ' 로봇이 듣는 중...';
   try{
     const r = await api('/api/quest/answer',{answer});
@@ -3779,7 +3801,7 @@ async function submitAiMission(){
     // ★ 서버 ai 플래그가 참일 때만 «AI 생성» 크레딧을 붙인다(규칙 폴백 문장 제외).
     bubble(r.reaction, !!r.ai);
     setTimeout(()=>bubble(r.bonus? ` +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : ` +${r.reward}셀 획득!`), 4500);
-  }catch(e){ alert(e.message); btn.disabled=false; btn.textContent='답하기  +30'; }
+  }catch(e){ toast(e.message); btn.disabled=false; btn.textContent='답하기  +30'; }
 }
 // ★ P1-8 이중 클릭 방지: 요청 중 버튼을 잠가 LLM 을 두 번 소모하지 않게 한다
 $$('.interact-row .btn, .room-dock [data-act]').forEach(b=>b.addEventListener('click', async ()=>{
@@ -3809,7 +3831,7 @@ $$('.interact-row .btn, .room-dock [data-act]').forEach(b=>b.addEventListener('c
       }
       setTimeout(()=>bubble(r.bonus? ` +${r.baseReward}셀 (부품 +${r.bonus}) = +${r.reward}셀!` : ` +${r.reward}셀 획득!`), 500);
     }
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message); }
   finally{ b.disabled = false; }
 }));
 
@@ -3967,7 +3989,35 @@ $$('.modal').forEach(m=>{
   if(m.id === 'preview-modal' || m.id === 'modal' || m.id === 'overplay') return;   // 기존 모달은 별도 처리
   m.addEventListener('click', e=>{ if(e.target === m) closeGame(m.id); });
 });
-document.addEventListener("keydown", e=>{ if(e.key==="Escape"){ closeGame("game-puzzle"); closeGame("game-tower"); closeGame("game-repair"); closeGame("game-sort"); } });
+// ★ 2026-11-28 B12: Esc 는 «맨 위에 있는 것» 하나만 닫는다(발표 이야기 → 보호자 PIN → 대화창 → 열린 창). 잠금 화면은 닫지 않는다.
+function closeTopmost(){
+  if(window.PresentHooks && PresentHooks.closeStory && PresentHooks.closeStory()) return;
+  const gate = $('#parent-gate'); if(gate && !gate.classList.contains('hidden')){ closeParentGate(); return; }
+  const open = [...document.querySelectorAll('.modal:not(.hidden)')].filter(m => !['overplay','modal','preview-modal'].includes(m.id));
+  if(open.length){ closeGame(open[open.length - 1].id); return; }
+  const chat = $('#chat-panel'); if(chat && !chat.classList.contains('hidden')){ chatClose(); }
+}
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeTopmost(); });
+// ★ 2026-11-28 접근성: 창이 열릴 때의 초점을 기억해 두었다가, 닫히면 그 자리로 돌려준다.
+(function focusReturn(){
+  const opener = new WeakMap();
+  const obs = new MutationObserver(muts => muts.forEach(m => {
+    const el = m.target;
+    if(!el.classList || !el.classList.contains('modal')) return;
+    const open = !el.classList.contains('hidden');
+    if(open && !opener.has(el)){
+      opener.set(el, document.activeElement);
+      // 창이 열리면 초점을 창 안의 첫 버튼(보통 ✕)으로 옮긴다 — 키보드 사용자가 창 안에서 시작하게
+      setTimeout(() => { if(el.classList.contains('hidden')) return; const f = el.querySelector('.modal-card button'); if(f && !f.disabled) { try{ f.focus({ preventScroll:true }); }catch(e){} } }, 0);
+      return;
+    }
+    if(!open && opener.has(el)){
+      const was = opener.get(el); opener.delete(el);
+      if(was && was.focus && document.contains(was)){ try{ was.focus({ preventScroll:true }); }catch(e){} }
+    }
+  }));
+  document.querySelectorAll('.modal').forEach(m => obs.observe(m, { attributes:true, attributeFilter:['class'] }));
+})();
 // ---------- 상점 ----------
 const ITEM_KIND = { part:'로봇 부품', decor:'방 장식', skin:'색칠 스킨', shard:'부품 조각' };
 async function loadShop(){
@@ -4026,7 +4076,7 @@ async function loadShop(){
     const old = b.textContent;
     b.textContent = '구매 중…';
     try{ await buyItem(b.dataset.buy); }
-    catch(e){ alert(e.message); }
+    catch(e){ toast(e.message); }
     finally{ b.disabled = false; b.textContent = old; }
   }));
   $$('#shop-list [data-preview]').forEach(b=>b.addEventListener('click', ()=>{
@@ -4185,7 +4235,7 @@ $('#preview-buy').addEventListener('click', async ()=>{
   if($('#preview-buy').disabled) return;
   try{ await buyItem($('#preview-buy').dataset.buy);
     $('#preview-buy').textContent='보유 중 '; $('#preview-buy').disabled=true;
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message); }
 });
 
 // ---------- 리포트 ----------
@@ -4448,7 +4498,7 @@ function renderOwned(){
       if(bjs.ready && state.robot) rebuildRobot(state.robot);
       renderOwned();
       setBalance(r.balance);
-    }catch(e){ alert(e.message); b.disabled = false; }
+    }catch(e){ toast(e.message); b.disabled = false; }
   }));
   const ex = $('#btn-exchange');
   if(ex) ex.addEventListener('click', async ()=>{
@@ -4466,7 +4516,7 @@ function renderOwned(){
       if(bjs.ready && state.robot) rebuildRobot(state.robot);
       renderOwned();
       setBalance(r.balance);
-    }catch(e){ alert(e.message); ex.disabled=false; ex.textContent='다시 시도'; }
+    }catch(e){ toast(e.message); ex.disabled=false; ex.textContent='다시 시도'; }
   });
 }
 // 부품 조각 교환 목표 목록(가격 비례 필요 개수)을 서버에서 가져온다
@@ -4515,7 +4565,8 @@ $('#btn-demo').addEventListener('click', async ()=>{
     //   (재접속률 86% → 17%), /api/admin/stats 가 쓰레기 데이터로 가득 찼다.
     //   seed 가 '데모_루미' 를 멱등하게 재사용하므로 여기도 같은 이름만 쓴다.
     const DEMO_NICK = '데모_루미';
-    const j = await api('/api/user', { nickname: DEMO_NICK });
+    // 시드를 부를 준비 계정으로 로그인한다(데모 이름은 시드만 만든다 — 서버가 데모 이름의 일반 가입을 막는다)
+    const j = await api('/api/user', { nickname: '발표자_준비' });
     state.user = j.user; state.quests = j.quests;
     if(j.user.token) localStorage.setItem(SK.token, j.user.token);
     localStorage.setItem(SK.uid, j.user.id);
@@ -4533,7 +4584,7 @@ $('#btn-demo').addEventListener('click', async ()=>{
     startPlayTimer();
     await enter();
     setTimeout(()=> bubble('지난 7일 기록을 불러왔어. 오늘은 뭐부터 할까?'), 1400);
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message); }
   finally{ b.disabled = false; b.textContent = ' 데모 계정으로 바로 보기'; }
 });
 
@@ -4541,6 +4592,7 @@ $('#btn-demo').addEventListener('click', async ()=>{
 //   scripts/demo.sh 와 같은 순서로 실제 API 를 부른다: 계정 → 등불 → 설명 2번 → 보호자 대시보드 → PIN.
 //   결과는 서버가 준 값만 보여 준다(화면 문구를 지어내지 않는다). 글자는 textContent 로만 넣는다.
 const DEMO_TOUR_NICK = '데모_루미';
+const DEMO_BOOT_NICK = '발표자_준비';   // 시드를 부르기 위한 준비 계정(데모 이름은 서버 시드만 만든다)
 const DEMO_TOUR_PIN = '1357';
 $('#btn-demo-tour').addEventListener('click', runDemoTour);
 $('#demo-tour-close').addEventListener('click', ()=> $('#demo-tour').classList.add('hidden'));
@@ -4551,6 +4603,7 @@ async function runDemoTour(){
   const learnBtn = $('#demo-tour-learn');
   list.textContent = ''; enterBtn.classList.add('hidden'); if(reportBtn) reportBtn.classList.add('hidden');
   if(learnBtn) learnBtn.classList.add('hidden');
+  ['#demo-tour-story', '#demo-tour-reset'].forEach(sel => { const x = $(sel); if(x) x.classList.add('hidden'); });
   panel.classList.remove('hidden'); btn.disabled = true;
 
   // 한 단계 = 목록 항목 하나. 실패하면 그 자리에 실패 문구를 남기고 뒤 단계는 멈춘다(앞 단계에 의존하므로).
@@ -4571,7 +4624,7 @@ async function runDemoTour(){
 
   try{
     const seed = await step('1. 데모 계정 만들기 (7일치 기록, Lv.5, 스트릭 6)', async ()=>{
-      const j = await api('/api/user', { nickname: DEMO_TOUR_NICK });
+      const j = await api('/api/user', { nickname: DEMO_BOOT_NICK });
       if(j.user.token) localStorage.setItem(SK.token, j.user.token);
       const s = await api('/api/demo/seed', {});
       localStorage.setItem(SK.token, s.token);
@@ -4596,13 +4649,16 @@ async function runDemoTour(){
     });
 
     await step('5. 보호자 대시보드 (가르친 것 · 등불 · 주간 요약)', async ()=>{
+      await api('/api/account/pin', { pin: DEMO_TOUR_PIN, currentPin: DEMO_TOUR_PIN });
+      const v = await api('/api/parent/verify-pin', { pin: DEMO_TOUR_PIN });
+      if(v.parentToken){ try{ sessionStorage.setItem('roomi_parent_tok', v.parentToken); }catch(_){} }
       const d = await api('/api/parent/dashboard');
       const taught = (d.taughtThisWeek || []).map(t => t.topic).join(', ') || '(없음)';
       return { text: `가르친 것: ${taught} · 등불 ${d.lamps.total}개 · 이번 주 ${d.weekly.studyDays}일 공부 · 추천: ${d.weekly.suggestion}`, data: d };
     });
 
     await step('6. 보호자 PIN 게이트 (틀린 PIN 거절 → 맞는 PIN 통과)', async ()=>{
-      await api('/api/account/pin', { pin: DEMO_TOUR_PIN });
+      await api('/api/account/pin', { pin: DEMO_TOUR_PIN, currentPin: DEMO_TOUR_PIN });
       let wrongMsg;
       try{ await api('/api/parent/verify-pin', { pin: '0000' }); wrongMsg = '통과되어 버렸어요(확인 필요)'; }
       catch(e){ wrongMsg = e.message; }
@@ -4621,6 +4677,27 @@ async function runDemoTour(){
         await chatOpen();
       };
     }
+    // ★ 2026-11-28 A1/A3: 발표 이야기 모드(일곱 장면) · 리허설 초기화(데모 계정을 처음 상태로 되돌린 뒤 새로 고침)
+    const storyBtn = $('#demo-tour-story'), resetBtn = $('#demo-tour-reset');
+    if(storyBtn){
+      storyBtn.classList.remove('hidden');
+      storyBtn.onclick = async ()=>{
+        setPresenter(true);
+        try{ localStorage.setItem('roomi_onboard', '1'); }catch(e){}
+        await enterBtn.onclick();
+        if(window.PresentHooks) PresentHooks.startStory();
+      };
+    }
+    if(resetBtn && seed && seed.nickname === '데모_루미'){
+      resetBtn.classList.remove('hidden');
+      resetBtn.onclick = async ()=>{
+        try{
+          const s = await api('/api/demo/seed', {});
+          localStorage.setItem(SK.token, s.token); localStorage.setItem(SK.uid, s.uid); localStorage.setItem(SK.nick, s.nickname);
+        }catch(e){ toast(e.message); return; }
+        location.reload();
+      };
+    }
     // ★ v1.85: «오늘의 성과 보기» — 방에 들어가기 전에 성장 리포트로 바로 보낸다.
     if(reportBtn){
       reportBtn.classList.remove('hidden');
@@ -4634,7 +4711,7 @@ async function runDemoTour(){
           startPlayTimer();
           await enter();
           goNav('board');
-        }catch(e){ alert(e.message); }
+        }catch(e){ toast(e.message); }
       };
     }
     enterBtn.onclick = async ()=>{
@@ -4646,7 +4723,7 @@ async function runDemoTour(){
         if(u2.user.token) localStorage.setItem(SK.token, u2.user.token);
         startPlayTimer();
         await enter();
-      }catch(e){ alert(e.message); }
+      }catch(e){ toast(e.message); }
     };
   }catch(e){
     // 실패 단계는 목록에 이미 표시되었다. 패널은 닫을 수 있게 남긴다.
@@ -4660,7 +4737,7 @@ async function runDemoTour(){
 // 아이가 자기 로봇을 부모님·친구에게 보여줄 수 있게 한다(서버 불필요).
 $('#btn-share').addEventListener('click', ()=>{
   const cv = $('#room3d');
-  if(!bjs.ready || !cv || !bjs.scene){ alert('3D 로봇이 다 만들어지면 자랑할 수 있어요!'); return; }
+  if(!bjs.ready || !cv || !bjs.scene){ toast('3D 로봇이 다 만들어지면 자랑할 수 있어요!'); return; }
   try{
     bjs.scene.render();                                  // 방금 그린 프레임 보장
     const url = cv.toDataURL('image/png');                // preserveDrawingBuffer:true 라 가능
@@ -4673,7 +4750,7 @@ $('#btn-share').addEventListener('click', ()=>{
     $('#share-desc').textContent = `${r.personality || ''} · ${(state.parts || []).length}개 부품`;
     $('#share-modal').classList.remove('hidden');
     SFX.correct();
-  }catch(e){ console.error('[share]', e); alert('자랑 카드를 만들지 못했어요 '); }
+  }catch(e){ console.error('[share]', e); toast('자랑 카드를 만들지 못했어요 '); }
 });
 $('#share-close').addEventListener('click', ()=> $('#share-modal').classList.add('hidden'));
 $('#share-modal').addEventListener('click', e=>{ if(e.target.id==='share-modal') $('#share-modal').classList.add('hidden'); });
@@ -4736,7 +4813,8 @@ $('#ob-skip').addEventListener('click', closeOnboard);
 (function maybeShowOnboard(){
   let seen = false;
   try{ seen = localStorage.getItem('roomi_onboard') === '1'; }catch(e){}
-  if(!seen){ renderOnboard(); $('#onboard').classList.remove('hidden'); }
+  // ★ 2026-11-28 B7: 첫 실행 안내는 화면을 가리지 않는 카드로 띄운다(건너뛰기·닫기 가능).
+  if(!seen){ renderOnboard(); $('#onboard').classList.add('ob-card'); $('#onboard').classList.remove('hidden'); }
 })();
 
 // ---------- 자동 로그인 ----------
@@ -5459,6 +5537,7 @@ function setPresenter(on){
   const panel = $('#chat-panel');
   if(on && panel && !panel.classList.contains('hidden')) chatModeSet('learn');   // 켜면 같이 공부로 바로 들어간다
   renderChatChips();
+  if(window.PresentHooks) PresentHooks.presenterChanged();
 }
 // 같이 공부 단계 줄: 서버가 준 session.stage(L1·L2·L3·confirm)와 설명 완료(teachback)를 다섯 칸으로 보여 준다.
 const TRACK_STEPS = ['되묻기', '비유', '다음 한 단계', '내 말로 설명', '등불 켜기'];
@@ -5493,6 +5572,20 @@ function judgeText(lvl, r){
   if(r && r.frustration) parts.push('좌절 감지 → 쉬어가기 제안');
   return '루미의 판단: ' + parts.join(' · ');
 }
+// ★ 2026-11-28 A4: 설명 응답이 늦을 때 안내. 발표 보기에서는 «예시» 답을 따로 고를 수 있다(실제 판정이 아님을 표시).
+function showSlowNote(ex){
+  const log = $('#chat-log'); if(!log || document.querySelector('.slow-note')) return;
+  const d = document.createElement('div'); d.className = 'slow-note';
+  d.innerHTML = '<span>루미가 생각하는 중이에요… 응답이 조금 늦어요. 최대 35초까지 기다려요.</span>';
+  if(presenterOn()){
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn ghost small';
+    b.textContent = '준비된 예시 보기 (예시 · 실제 판정 아님)';
+    b.onclick = ()=>{ d.remove(); chatAdd('assistant', `(예시 답변) «${ex.concept || '이 개념'}» 을 네 말로 잘 말했구나. 만약 분모가 달라지면 어떻게 될까?`, true); };
+    d.appendChild(b);
+  }
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+function clearSlowNote(){ document.querySelectorAll('.slow-note').forEach(n => n.remove()); }
 // 설명 검증 결과 카드(발표 보기 전용): 판정 방식·항목·핵심어·저장 여부를 보여 준다.
 const VERDICT_SRC = { llm:'AI 판정', rule:'키워드 규칙(백업)', nocard:'카드 없음 · 저장만', gate:'연산 게이트(카드와 모순)', timeout:'시간 초과 · 나중에 다시 판정' };
 const CHECK_KO = { operation:'연산', condition:'조건', result:'결과' };
@@ -5526,7 +5619,7 @@ function chatAdd(role, text, hint){
   d.appendChild(span);
   if(role !== 'user'){
     const sp = document.createElement('button');
-    sp.className = 'msg-speak'; sp.title = '읽어주기'; sp.textContent = '🔊';
+    sp.className = 'msg-speak'; sp.title = '읽어주기'; sp.setAttribute('aria-label', '답변 읽어주기'); sp.textContent = '🔊';
     sp.onclick = ()=>speak(text);
     d.appendChild(sp);
   }
@@ -5646,8 +5739,11 @@ async function chatStreamOnce(text, solved){
       meta.appendChild(more);
     }
     // 개념명이 비어도(카드 미매칭) 버튼은 보여 준다 — 화면이 «방금 배운 것» 으로 부른다.
-    if(lvl >= 3 && r.explain){
-      const ex = document.createElement('button'); ex.className = 'msg-more explain'; ex.textContent = '내 말로 설명하기';
+    if(lvl >= 2 && r.explain){
+      // ★ 2026-11-28 B9: L2 에서는 부드러운 문구로 먼저 설명을 권한다(다 몰라도 되는 자리).
+      const ex = document.createElement('button'); ex.className = 'msg-more explain';
+      ex.textContent = lvl >= 3 ? '내 말로 설명하기' : '지금 이해한 만큼 말해 보기';
+      ex.title = lvl >= 3 ? '' : '아직 다 몰라도 괜찮아요. 아는 만큼만 말해 줘요';
       ex.onclick = ()=>startExplain(r.explain);
       meta.appendChild(ex);
       // ★ 2026-11-20 (v1.70): «루미가 틀려볼게» — 루미가 일부러 틀린 말을 하고 아이가 찾아내는 도전 놀이.
@@ -5655,7 +5751,7 @@ async function chatStreamOnce(text, solved){
       //   도전 카드의 재료가 될 «방금 배운 개념» 이 필요하기 때문.
       const tc = document.createElement('button'); tc.className = 'msg-more'; tc.textContent = '루미가 틀려볼게';
       tc.onclick = ()=>openTeachChallenge();
-      meta.appendChild(tc);
+      if(lvl >= 3) meta.appendChild(tc);
     }
     const quiz = document.createElement('button'); quiz.className = 'msg-more'; quiz.textContent = '문제로 확인';
     quiz.onclick = ()=>openPuzzle();
@@ -5830,14 +5926,20 @@ async function sendExplain(){
   chatAdd('user', text);
   chatTyping(true);
   $('#chat-send').disabled = true;
+  let slowT = null;
   try{
+    // ★ 2026-11-28 A4: 8초가 지나도 답이 없으면 «늦어요» 안내 — 기다리는 중이라는 사실은 숨기지 않는다.
+    slowT = setTimeout(()=>showSlowNote(ex), 8000);
     const r = await api('/api/chat/explain', { concept: ex.concept, text }, 35000);
+    clearTimeout(slowT); clearSlowNote();
     chatTyping(false);
     chatAdd('assistant', r.reply, true);
     // ★ 2026-11-28 단계 표시줄: 설명까지 끝났으니 다섯 칸을 모두 채운다.
     state.tutorStage = 'teachback'; renderLearnTrack();
     // ★ 2026-11-28 발표 보기: 설명 검증 결과 카드(판정 방식·항목·저장 여부).
     if(presenterOn() && r.verdict) renderExplainCard(r.verdict, ex.concept);
+    // ★ 2026-11-28 A5: 설명 → 등불 → 보호자 요약 연쇄 카드(발표 보기에서만)
+    if(presenterOn() && window.PresentHooks) PresentHooks.explained(ex.concept, r);
     // ★ 2026-11-21 (v1.71) «함께 가르친 친구» — explain 응답에 coTaught 가 오면 루미가 축하 한 줄을 덧붙인다.
     //   chatAdd 는 내부에서 textContent 로 넣으므로 닉네임이 HTML 로 새지 않는다.
     if(r && r.coTaught){
@@ -5853,6 +5955,7 @@ async function sendExplain(){
     // ★ v1.84 등대 의뢰 중이었다면 설명이 끝난 지금 완료를 청한다(판정은 서버가 오늘 기록으로 한다)
     if(state.quest && state.quest.key === 'light') tryClaimQuest({ kind:'teach' });
   }catch(e){
+    clearTimeout(slowT); clearSlowNote();
     chatTyping(false);
     chatAdd('assistant', e.message || '설명을 받지 못했어. 다시 해 볼까?');
   }finally{
@@ -6501,6 +6604,8 @@ function applySettings(){
   loadVoiceOptions();
 }
 async function openParentDashboard(){
+  // ★ 2026-11-28 보안: 보호자 확인 토큰이 없으면 먼저 확인 창을 띄운다
+  if(!sessionStorage.getItem('roomi_parent_tok')){ window.__gateAfter = () => openParentDashboard(); openParentGate(); return; }
   $('#parent-dashboard').classList.remove('hidden');
   const box = $('#pd-body');
   box.innerHTML = '<div class="pd-stat pd-wide"><span>불러오는 중…</span></div>';
@@ -6629,7 +6734,11 @@ async function openParentDashboard(){
     });
     $('#pd-memory')?.addEventListener('click', loadMemories);
     loadWeeklyLetter();
-  }catch(e){ box.innerHTML = `<div class="pd-stat pd-wide"><span>${e.message}</span></div>`; }
+  }catch(e){
+    // 보호자 확인 시간이 지났으면(20분) 다시 확인받는다
+    if(e.data && e.data.needParent){ try{ sessionStorage.removeItem('roomi_parent_tok'); }catch(_){} window.__gateAfter = () => openParentDashboard(); openParentGate(); return; }
+    box.innerHTML = `<div class="pd-stat pd-wide"><span>${esc(e.message)}</span></div>`;
+  }
 }
 
 // ---------- ★ v1.44 정비단 본부 : «멈춘 마을을 다시 켜기» ----------
@@ -8969,7 +9078,15 @@ async function celebrateFirstLamp(){
       await api('/api/account/pin', { pin });
       if($('#set-pin')) $('#set-pin').value = '';
       msg(pinMsg, 'PIN 을 만들었어요! 다른 기기 로그인 화면에서 닉네임 + PIN 으로 들어올 수 있어요.', true);
-    }catch(e){ msg(pinMsg, e.message || 'PIN 을 저장하지 못했어요.', false); }
+    }catch(e){
+      if(e.data && e.data.needCurrent){
+        msg(pinMsg, '기존 PIN 을 바꾸려면 보호자 확인이 먼저예요.', false);
+        window.__gateAfter = () => { const b2 = $('#set-pin-save'); if(b2) b2.click(); };
+        openParentGate();
+        return;
+      }
+      msg(pinMsg, e.message || 'PIN 을 저장하지 못했어요.', false);
+    }
     finally{ if(btn) btn.disabled = false; }
   });
   $('#set-pin')?.addEventListener('keydown', (e)=>{ if(e.key === 'Enter'){ e.preventDefault(); const b = $('#set-pin-save'); if(b) b.click(); } });
